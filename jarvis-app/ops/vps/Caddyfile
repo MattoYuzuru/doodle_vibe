@@ -1,0 +1,8 @@
+# Doodle: Mini App и API по HTTPS. Временный адрес sslip.io (имя = IP сервера), сертификат Let's Encrypt выпускает Caddy сам.
+# Установка (под root): cp Caddyfile /etc/caddy/Caddyfile && systemctl reload caddy
+# Тот же адрес — в jarvis-app/current-url.txt на сервере (по нему бот строит ссылки и кнопку меню).
+# Свой домен: заменить имя ниже (A-запись домена → IP сервера), перезагрузить Caddy и поправить current-url.txt.
+72-56-249-191.sslip.io {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8787
+}
