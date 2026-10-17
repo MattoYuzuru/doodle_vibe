@@ -17,8 +17,10 @@ Environment=NODE_ENV=production
 # Только локально: снаружи сервер откроет обратный прокси с HTTPS (Caddy), когда дойдём до домена.
 Environment=HOST=127.0.0.1
 Environment=PORT=8787
-# Постоянный адрес Mini App (тот же, что в Caddyfile): по нему tunnel-url.mjs держит кнопку меню бота и current-url.txt.
-Environment=APP_URL=https://72-56-249-191.sslip.io
+# Постоянный адрес Mini App: по нему tunnel-url.mjs держит кнопку меню бота и current-url.txt. Пока НЕ задан: прямой
+# адрес sslip.io не открывается у студентов с VPN, кнопка ведёт на туннель Cloudflare (doodle-tunnel.service, адрес из
+# tunnel.log). Вернуть, когда будет свой домен за Cloudflare: Environment=APP_URL=https://<домен>
+#Environment=APP_URL=https://72-56-249-191.sslip.io
 # Туннель календаря ngrok — Windows-ПК; на VPS постоянный адрес даст домен.
 Environment=CAL_TUNNEL=0
 # Сторож агента лаб (настройки Claude Code агента) — его здесь нет.

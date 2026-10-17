@@ -1,0 +1,26 @@
+# Быстрый туннель Cloudflare для Mini App на VPS (17 окт 2026).
+# Зачем: у студентов Telegram работает через VPN, а соединения из многих VPN до российского сервера режутся — прямой
+# адрес (Caddy, sslip.io) у них не открывается. Туннель сервер сам держит наружу к Cloudflare, а Cloudflare виден и из
+# VPN, и из России. Адрес trycloudflare.com меняется только при перезапуске туннеля: его пишет tunnel.log, а
+# tunnel-url.mjs сам переставляет кнопку меню у всех и пишет current-url.txt (поэтому APP_URL в doodle.service не задан).
+# Постоянный адрес — когда будет свой домен (именованный туннель Cloudflare).
+# Установка (под root): cp doodle-tunnel.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now doodle-tunnel
+[Unit]
+Description=Doodle Mini App tunnel (Cloudflare quick tunnel)
+After=network-online.target doodle.service
+Wants=network-online.target
+
+[Service]
+User=doodle
+WorkingDirectory=/home/doodle/moodle-work/jarvis-app
+# Старые адреса из прошлого запуска не нужны: tunnel-url.mjs берёт последний адрес из файла. «+» — от root: файл
+# для StandardOutput systemd создаёт сам от root, пользователю doodle его не очистить.
+ExecStartPre=+/usr/bin/truncate -s 0 /home/doodle/moodle-work/jarvis-app/tunnel.log
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --protocol http2 --url http://127.0.0.1:8787
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/doodle/moodle-work/jarvis-app/tunnel.log
+StandardError=append:/home/doodle/moodle-work/jarvis-app/tunnel.log
+
+[Install]
+WantedBy=multi-user.target
