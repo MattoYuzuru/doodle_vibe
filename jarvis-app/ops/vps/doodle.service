@@ -1,0 +1,31 @@
+# Служба основного сервера Doodle на Linux VPS (бот, Mini App, Moodle, журнал, расписание).
+# Установка (под root): cp doodle.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now doodle
+# Журнал: journalctl -u doodle -f  (и jarvis-app/server.log).
+# Лаб на этом сервере нет — их выполняет отдельный исполнитель, поэтому Windows-части выключены переменными ниже.
+[Unit]
+Description=Doodle server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=doodle
+WorkingDirectory=/home/doodle/moodle-work/jarvis-app
+ExecStart=/usr/bin/node server.mjs
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+# Только локально: снаружи сервер откроет обратный прокси с HTTPS (Caddy), когда дойдём до домена.
+Environment=HOST=127.0.0.1
+Environment=PORT=8787
+# Туннель календаря ngrok — Windows-ПК; на VPS постоянный адрес даст домен.
+Environment=CAL_TUNNEL=0
+# Сторож агента лаб (настройки Claude Code агента) — его здесь нет.
+Environment=GUARD_WATCH=0
+# Обход VPN через route print — на VPS VPN нет, ходим обычным маршрутом.
+Environment=MOODLE_DIRECT=0
+Environment=PYTHON=/usr/bin/python3
+StandardOutput=append:/home/doodle/moodle-work/jarvis-app/server.log
+StandardError=append:/home/doodle/moodle-work/jarvis-app/server.log
+
+[Install]
+WantedBy=multi-user.target
