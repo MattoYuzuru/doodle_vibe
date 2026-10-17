@@ -364,5 +364,20 @@ html.lite [data-tab-page][aria-hidden="true"] {
 @keyframes owl-bob { 50% { transform: translateY(-0.5px); } }
 .owl [data-prop="spark"], .owl [data-prop="zzz"] { animation: owl-blink 0.6s steps(1) infinite; }
 @keyframes owl-blink { 50% { opacity: 0.35; } }
-html.lite .owl *, html.lite .owl { animation: none !important; }
-@media (prefers-reduced-motion: reduce) { .owl * { animation: none !important; } }
+/* Праздник за сданное: прыжки и крылья дольше обычного. */
+.owl-a-party .owl-rig { animation: owl-hop 0.4s steps(1) 6; }
+.owl-a-party .owl-wing-l { animation: owl-flap-l 0.15s steps(1) 16; }
+.owl-a-party .owl-wing-r { animation: owl-flap-r 0.15s steps(1) 16; }
+/* Зажатие совы — быстрое меню: без выделения текста, системного меню iOS и прокрутки под пальцем. */
+.owl-hold { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+/* «Щекотно»: сова хохочет и качается, крылья машут, перья разлетаются; текст подпрыгивает от смеха. */
+.owl-a-tickle .owl-rig { animation: owl-giggle 0.22s steps(1) infinite; }
+@keyframes owl-giggle { 0% { transform: rotate(-7deg) translateY(-1px); } 50% { transform: rotate(7deg); } }
+.owl-a-tickle .owl-wing-l { animation: owl-flap-l 0.12s steps(1) infinite; }
+.owl-a-tickle .owl-wing-r { animation: owl-flap-r 0.12s steps(1) infinite; }
+.owl [data-prop="feather"] { animation: owl-fall 0.8s steps(4) infinite; }
+@keyframes owl-fall { 0% { transform: translateY(-2px); opacity: 1; } 100% { transform: translateY(3px); opacity: 0; } }
+.owl-say-tickle { animation: owl-laugh 0.3s steps(1) infinite; }
+@keyframes owl-laugh { 50% { transform: translateY(-1px); } }
+html.lite .owl *, html.lite .owl, html.lite .owl-say-tickle { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .owl *, .owl-say-tickle { animation: none !important; } }

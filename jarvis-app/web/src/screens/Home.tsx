@@ -12,6 +12,7 @@ import { Tile, TileTitle } from "../components/Tile";
 import { Avatar, EmptyState, Skeleton } from "../components/ui";
 import { useNav } from "../hooks/useNav";
 import { useNow } from "../hooks/useNow";
+import { useScheme } from "../hooks/useScheme";
 import { DAY, dayKey, effectiveDue, formatLongDate, keyToUtc, mskParts, todayKey } from "../lib/dates";
 import { useAuth } from "../store/auth";
 import { useSchedule } from "../store/schedule";
@@ -47,12 +48,13 @@ export function HomeScreen() {
 
   // Цвет свечения фона (вариант glow1) — по срочности ближайшего дедлайна.
   const heroUrgency = hero ? urgencyOf(hero, now) : "calm";
+  const scheme = useScheme();
   useEffect(() => {
-    const dark = document.documentElement.dataset.scheme === "dark";
+    const dark = scheme === "dark";
     const a = dark ? 0.3 : 0.16;
     const c = heroUrgency === "urgent" || heroUrgency === "overdue" ? `rgb(255 77 61 / ${a})` : heroUrgency === "soon" ? `rgb(245 165 36 / ${a})` : `rgb(47 123 246 / ${a})`;
     document.documentElement.style.setProperty("--bg-glow", c);
-  }, [heroUrgency]);
+  }, [heroUrgency, scheme]);
 
   // Пары на сегодня из расписания группы (подгруппа — из профиля); прошедшие определяем по московскому времени.
   const schedStatus = useSchedule((s) => s.status);

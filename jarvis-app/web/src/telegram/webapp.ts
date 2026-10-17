@@ -58,7 +58,7 @@ function pageHex(): string | null {
   return m && m.length >= 3 ? "#" + m.slice(0, 3).map((v) => Number(v).toString(16).padStart(2, "0")).join("") : null;
 }
 
-/** По умолчанию тема светлая — независимо от темы Telegram и системы. Тёмная — только по ?scheme=dark. */
+/** По умолчанию тема светлая — независимо от темы Telegram и системы. Тёмная — по выбору в меню совы (запоминается) или ?scheme=dark. */
 function applyScheme(scheme: "light" | "dark" = "light") {
   document.documentElement.dataset.scheme = scheme;
   if (inTelegram) {
@@ -78,9 +78,18 @@ export function initTelegram() {
     // Иначе жест «потянуть вниз» закрывает приложение и мешает pull-to-refresh.
     try { tg.disableVerticalSwipes?.(); } catch { /* старый клиент */ }
   }
-  // ?scheme=light|dark — для проверки дизайна вне Telegram.
+  // ?scheme=light|dark — для проверки дизайна вне Telegram; иначе — выбор пользователя из меню совы.
   const forced = new URLSearchParams(location.search).get("scheme");
-  applyScheme(forced === "dark" ? "dark" : "light");
+  applyScheme((forced ?? savedScheme()) === "dark" ? "dark" : "light");
+}
+
+const SCHEME_KEY = "doodle-scheme";
+function savedScheme() { try { return localStorage.getItem(SCHEME_KEY); } catch { return null; } }
+/** Смена темы на лету (меню совы): атрибут на <html>, цвета шапки Telegram, запоминание; подписчики useScheme перерисуются. */
+export function setScheme(scheme: "light" | "dark") {
+  applyScheme(scheme);
+  try { localStorage.setItem(SCHEME_KEY, scheme); } catch { /* приватный режим */ }
+  window.dispatchEvent(new Event("schemechange"));
 }
 
 export const haptic = {
