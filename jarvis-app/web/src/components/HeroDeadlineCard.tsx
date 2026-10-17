@@ -5,7 +5,7 @@ import type { Deadline, Subject } from "../store/types";
 import { kindOf } from "../theme/kinds";
 import { spring, stagger } from "../theme/motion";
 import { RollingNumber } from "./RollingNumber";
-import { SubjectDot } from "./ui";
+import { subjectIcon } from "../lib/subjectIcon";
 
 const LABEL = { overdue: "Просрочено", urgent: "Меньше суток", soon: "Скоро срок", calm: "Ближайший дедлайн", done: "Сдано" } as const;
 
@@ -15,6 +15,10 @@ export function HeroDeadlineCard({ deadline, subject, now, onOpen }: {
 }) {
   const u = urgencyOf(deadline, now);
   const overdue = effectiveDue(deadline.due) <= now;
+  const kind = kindOf(deadline.kind).label;
+  // Плашка типа не повторяет название: «Контрольная» рядом с «Контрольная работа № 1» — лишнее (18 окт 2026).
+  const kindInTitle = deadline.title.toLowerCase().includes(kind.toLowerCase().slice(0, 6));
+  const SubjectIcon = subjectIcon(subject?.name, subject?.short);
 
   return (
     // Нажатие — CSS :active с задержкой входа, как у Tile (проверка 15 окт): whileTap сжимал карточку на каждом
@@ -27,36 +31,29 @@ export function HeroDeadlineCard({ deadline, subject, now, onOpen }: {
       className="relative col-span-2 block w-full overflow-hidden rounded-[22px] p-4 text-left text-white shadow-lg shadow-black/20 transition-[scale] duration-150 ease-out active:scale-[0.975] active:delay-75"
       style={{ background: heroGradient[u] }}
     >
-      {/* кольца, как в варианте B, медленно «дышат»; блик пробегает по карточке при появлении.
-          Кольца — CSS-анимация (index.css: hero-ring-a/b), а не framer (проверка 15 окт): scale framer считал в JS
-          на каждом кадре и перерисовывал карточку даже на другой вкладке; transform в @keyframes ведёт композитор,
-          а на скрытой вкладке, в облегчённом режиме и при «уменьшить движение» кольца стоят. */}
-      <span aria-hidden className="hero-ring-a pointer-events-none absolute -top-24 -right-16 size-56 rounded-full border border-white/15" />
-      <span aria-hidden className="hero-ring-b pointer-events-none absolute -top-16 -right-8 size-40 rounded-full border border-white/15" />
+      {/* Едва заметная иконка дисциплины вместо колец (18 окт 2026): акцент — на сроке и названии, иконка — фон. */}
+      <SubjectIcon aria-hidden className="pointer-events-none absolute top-4 right-4 text-white opacity-[0.14]" size={72} strokeWidth={1.75} />
       <m.span aria-hidden className="pointer-events-none absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-white/20 to-transparent"
         initial={{ x: "-120%" }} animate={{ x: "280%" }} transition={{ duration: 0.9, delay: 0.25, ease: "easeOut" }} />
 
       <div className="relative flex items-center justify-between gap-2 text-s font-medium text-white/80">
         <span>{LABEL[u]}</span>
-        <span className="rounded-full bg-white/20 px-2 py-0.5 font-semibold text-white">{kindOf(deadline.kind).label}</span>
+        {!kindInTitle && <span className="relative mr-20 rounded-full bg-white/20 px-2 py-0.5 font-semibold text-white">{kind}</span>}
       </div>
 
-      <div className="font-display relative mt-3 text-l font-bold tabular">
+      <div className="font-display relative mt-2 text-[40px] leading-[44px] font-extrabold tracking-[-0.02em] tabular">
         {(overdue ? elapsedParts(deadline.due, now) : leftParts(deadline.due, now)).map(([n, unit]) => (
           <span key={unit} className="mr-2">
-            <RollingNumber value={n} /><span className="ml-0.5 text-m font-semibold text-white/70">{unit}</span>
+            <RollingNumber value={n} /><span className="ml-0.5 text-[18px] font-bold tracking-normal text-white/70">{unit}</span>
           </span>
         ))}
-        {overdue && <span className="text-m font-semibold text-white/70">назад</span>}
+        {overdue && <span className="text-[18px] font-bold tracking-normal text-white/70">назад</span>}
       </div>
 
-      <p className="relative mt-1 line-clamp-2 text-m font-semibold">{deadline.title}</p>
+      <p className="relative mt-1 line-clamp-2 text-[19px] leading-[24px] font-bold">{deadline.title}</p>
 
       <div className="relative mt-4 flex items-center justify-between gap-3 text-s text-white/80">
-        <span className="flex min-w-0 items-center gap-2">
-          <SubjectDot color={subject?.color} className="ring-2 ring-white/40" />
-          <span className="truncate">{subject?.short ?? "Без предмета"} · {kindOf(deadline.kind).label}</span>
-        </span>
+        <span className="min-w-0 truncate">{subject?.short ?? "Без предмета"}</span>
         <span className="shrink-0 tabular">{formatDue(deadline.due)}</span>
       </div>
     </m.button>

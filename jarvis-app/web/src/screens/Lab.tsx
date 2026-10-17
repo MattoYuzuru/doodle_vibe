@@ -357,7 +357,7 @@ export function LabScreen({ id }: { id: string }) {
                 {/* wrap-anywhere: длинная ссылка или имя файла без пробелов переносится в пузыре, а не уводит экран вбок (проверка 15 окт). */}
                 <div className={`max-w-[88%] rounded-[18px] px-3.5 py-2.5 text-m leading-[22px] whitespace-pre-wrap wrap-anywhere ${
                   msg.role === "user" ? "rounded-br-md bg-accent text-on-accent" : msg.role === "system" ? "glass text-hint text-s" : "glass-tile rounded-bl-md"}`}>
-                  {msg.role === "assistant" && <span className="mb-1 flex items-center gap-1 text-[11px] font-bold uppercase tracking-[0.06em] text-hint"><Bot size={12} strokeWidth={2.5} />Doodle · {time(msg.at)}</span>}
+                  {msg.role === "assistant" && <span className="mb-1 flex items-center gap-1 text-[12px] font-bold text-hint"><Bot size={12} strokeWidth={2.5} />Doodle · {time(msg.at)}</span>}
                   {msg.kind === "brief" && <span className="mb-1.5 flex items-center gap-1.5 text-s font-bold text-accent"><BookOpen size={15} strokeWidth={2.5} />Кратко о работе</span>}
                   {/* Готовый отчёт приходит прямо в переписку: файл открывается из сообщения. У прежних версий кнопки нет. */}
                   {msg.kind === "report" && msg.report && (
@@ -383,7 +383,7 @@ export function LabScreen({ id }: { id: string }) {
               этап и процент. Видна там, куда смотрит студент, а не только наверху экрана. */}
           {status === "running" && job && (
             <div className="glass-tile w-[88%] rounded-[18px] rounded-bl-md px-3.5 py-3" aria-live="polite">
-              <span className="mb-1.5 flex items-center gap-1 text-[11px] font-bold uppercase tracking-[0.06em] text-hint">
+              <span className="mb-1.5 flex items-center gap-1 text-[12px] font-bold text-hint">
                 <Bot size={12} strokeWidth={2.5} />Doodle · {job.queued ? "в очереди" : job.revising ? "исправляет отчёт" : "работает"}
               </span>
               <div className="flex items-baseline justify-between gap-3">
@@ -402,7 +402,7 @@ export function LabScreen({ id }: { id: string }) {
           {/* Агент готовит «Кратко о работе»: состояние лабы прежнее, поэтому своя небольшая карточка в переписке. */}
           {briefing && status !== "running" && (
             <div className="glass-tile w-[88%] rounded-[18px] rounded-bl-md px-3.5 py-3" aria-live="polite">
-              <span className="mb-1.5 flex items-center gap-1 text-[11px] font-bold uppercase tracking-[0.06em] text-hint"><Bot size={12} strokeWidth={2.5} />Doodle · {job?.queued ? "в очереди" : "готовит объяснение"}</span>
+              <span className="mb-1.5 flex items-center gap-1 text-[12px] font-bold text-hint"><Bot size={12} strokeWidth={2.5} />Doodle · {job?.queued ? "в очереди" : "готовит объяснение"}</span>
               <span className="text-s font-semibold leading-[18px]">Пишу коротко, в чём суть работы и что спросят на защите. Обычно это минута-две.</span>
               <div className="mt-2.5 flex items-center gap-1.5" aria-label="Агент печатает">
                 {[0, 1, 2].map((i) => <m.span key={i} className="size-1.5 rounded-full bg-hint" animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.1, delay: i * 0.18 }} />)}

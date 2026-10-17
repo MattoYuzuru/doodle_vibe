@@ -37,6 +37,12 @@ export function Tile({ children, index = 0, span = 1, className = "", onClick, s
   );
 }
 
+/** Заголовок раздела/плитки. С 18 окт 2026 — обычными словами, а не мелким капслоком: так быстрее читается. */
 export function TileLabel({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <p className={`text-[12px] font-bold uppercase tracking-[0.06em] text-hint ${className}`}>{children}</p>;
+  return <p className={`text-[15px] leading-[20px] font-bold text-text ${className}`}>{children}</p>;
+}
+
+/** Заголовок плитки на Главной обычными словами, вместо мелкого капслока TileLabel (18 окт 2026). */
+export function TileTitle({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <p className={`text-m font-bold text-text ${className}`}>{children}</p>;
 }

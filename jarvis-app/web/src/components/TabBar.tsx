@@ -1,5 +1,5 @@
 import { m, useMotionValue, useSpring, useTransform } from "framer-motion";
-import { CalendarDays, Flag, GraduationCap, House } from "lucide-react";
+import { CalendarDays, GraduationCap, House, ListChecks } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLiquidGlass } from "../hooks/useLiquidGlass";
 import { useNav, type Tab } from "../hooks/useNav";
@@ -11,14 +11,14 @@ import { haptic } from "../telegram/webapp";
 
 export const TABS: { id: Tab; label: string; Icon: typeof House }[] = [
   { id: "home", label: "Главная", Icon: House },
-  { id: "deadlines", label: "Дедлайны", Icon: Flag },
+  { id: "deadlines", label: "Дедлайны", Icon: ListChecks },
   { id: "plan", label: "План", Icon: CalendarDays },
   { id: "journal", label: "Журнал", Icon: GraduationCap },
 ];
 export const tabIndex = (t: Tab) => TABS.findIndex((x) => x.id === t);
 
 /** Высота панели с отступом от низа — для отступов контента и кнопки «+». */
-export const TABBAR_H = 72;
+export const TABBAR_H = 80; // панель с подписями под иконками (18 окт 2026)
 
 // Критически затухающая пружина: линза и лента приходят на место без перелёта и дрожания.
 const lensSpring = spring(420, 42, 1);
@@ -142,7 +142,8 @@ export function TabBar() {
           <m.div
             aria-hidden
             className="glass-lens pointer-events-none"
-            style={{ inset: "6px auto 6px 6px", width: cell, x: xs, scaleX: stretch, scaleY: squash }}
+            // Мягкая синяя подсветка активной вкладки вместо серой линзы (18 окт 2026).
+            style={{ inset: "6px auto 6px 6px", width: cell, x: xs, scaleX: stretch, scaleY: squash, background: "color-mix(in srgb, var(--c-accent) 16%, transparent)" }}
           />
           {TABS.map(({ id, label, Icon }, i) => {
             const active = shownIdx === i;
@@ -153,11 +154,13 @@ export function TabBar() {
                 aria-label={label}
                 aria-current={tab === id ? "page" : undefined}
                 tabIndex={keyboard ? -1 : undefined}
-                className={`relative z-10 grid min-h-[48px] place-items-center rounded-full transition-colors duration-200 ${active ? "text-accent" : "text-hint"}`}
+                className={`relative z-10 flex min-h-[56px] flex-col items-center justify-center gap-0.5 rounded-full transition-colors duration-200 ${active ? "text-accent" : "text-hint"}`}
               >
-                <m.span animate={{ scale: active ? (dragging ? 1.2 : 1.12) : 1 }} transition={lensSpring}>
-                  <Icon size={24} strokeWidth={active ? 2.25 : 1.75} />
+                <m.span animate={{ scale: active ? (dragging ? 1.12 : 1.05) : 1 }} transition={lensSpring}>
+                  <Icon size={22} strokeWidth={active ? 2.25 : 1.85} />
                 </m.span>
+                {/* Подпись под иконкой: разделы понятны без угадывания (18 окт 2026). */}
+                <span className="text-[11px] leading-[14px] font-bold">{label}</span>
               </button>
             );
           })}

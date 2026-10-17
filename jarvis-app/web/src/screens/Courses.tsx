@@ -68,7 +68,7 @@ export function CoursesScreen() {
         <p className="mt-0.5 text-s font-semibold text-hint">{data ? `Сейчас ${data.semester} · актуальных ${active.length} из ${data.courses.length}` : "Загружаю…"}</p>
       </div>
       {/* Курс прошлого семестра, в котором появилась новая работа: не включаем сами (это может быть раздел «Должникам»), а спрашиваем. */}
-      {pending.length > 0 && <p className="px-1 pt-1 text-[12px] font-bold uppercase tracking-[0.06em] text-yellow">Уточните · {pending.length}</p>}
+      {pending.length > 0 && <p className="px-1 pt-1 text-s font-bold text-yellow">Уточните · {pending.length}</p>}
       {pending.map((c, i) => (
         <Tile key={c.id} index={i} className="!min-h-0 py-3" enter="fade">
           <p className="text-m font-semibold leading-[20px]">{c.name} <span className="font-medium text-hint">· {c.reason}</span></p>
@@ -83,7 +83,7 @@ export function CoursesScreen() {
         </Tile>
       ))}
       {active.map((c, i) => row(c, pending.length + i))}
-      {rest.length > 0 && <p className="px-1 pt-2 text-[12px] font-bold uppercase tracking-[0.06em] text-hint">Неактуальные · {rest.length}</p>}
+      {rest.length > 0 && <p className="px-1 pt-2 text-s font-bold text-hint">Неактуальные · {rest.length}</p>}
       {rest.map((c, i) => row(c, pending.length + active.length + i))}
       <p className="px-2 text-s text-hint">Актуальность определяется по семестру в названии курса и датам в Moodle; если что-то не так — переключите вручную.</p>
     </div>

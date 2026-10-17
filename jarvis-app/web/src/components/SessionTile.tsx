@@ -1,11 +1,11 @@
-import { CalendarClock, ChevronRight, GraduationCap, TriangleAlert } from "lucide-react";
+import { CalendarClock, ChevronRight, TriangleAlert } from "lucide-react";
 import { useEffect } from "react";
 import { useNav } from "../hooks/useNav";
 import { plural } from "../lib/journal";
 import { rangeText, whenText } from "../lib/session";
 import { useSession } from "../store/session";
 import { haptic } from "../telegram/webapp";
-import { Tile, TileLabel } from "./Tile";
+import { Tile, TileTitle } from "./Tile";
 
 /** Сколько живёт копия на телефоне, прежде чем Главная попросит свежую. */
 const STALE_MS = 30 * 60e3;
@@ -34,7 +34,7 @@ export function SessionTile({ index }: { index: number }) {
   return (
     <Tile span={2} index={index} onClick={() => { haptic.tap(); setJournalView("session"); setTab("journal"); }} className="!min-h-0 py-3">
       <div className="flex items-center justify-between gap-2">
-        <TileLabel className="flex min-w-0 items-center gap-1.5"><GraduationCap size={13} strokeWidth={2.5} /><span className="truncate">Сессия · {whenText(up)}</span></TileLabel>
+        <TileTitle className="min-w-0 truncate">Сессия · {whenText(up)}</TileTitle>
         <ChevronRight size={16} className="shrink-0 text-hint" />
       </div>
       <p className="mt-1.5 text-m font-bold">{up.label[0].toUpperCase()}{up.label.slice(1)}: {rangeText(up.from, up.to)}</p>

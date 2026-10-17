@@ -1,5 +1,5 @@
 import { AnimatePresence, m } from "framer-motion";
-import { ChevronDown, Flag } from "lucide-react";
+import { ChevronDown, Flag, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { DeadlineRow } from "../components/DeadlineRow";
@@ -77,12 +77,18 @@ export function DeadlinesScreen() {
 
   return (
     <div className="flex flex-col gap-3">
-      <m.header className="px-1" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+      <m.header className="flex items-start justify-between gap-3 px-1" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+        {/* «Добавить» — здесь, вместо плавающего «+» (18 окт 2026): на его месте теперь сова Дуся. */}
+        <div className="min-w-0">
         <h1 className="font-display text-l font-extrabold tracking-[-0.03em]">Дедлайны</h1>
         <p className="mt-0.5 text-s font-semibold text-hint">
           {openAll.length ? `${openAll.length} ${plural(openAll.length, "активный", "активных", "активных")} · ${doneAll.length} сдано`
             : pending ? "Загружаю из Moodle…" : failed ? "Дедлайны не загрузились" : "Все сроки закрыты"}
         </p>
+        </div>
+        <button onClick={() => push({ name: "deadline-form" })} className="mt-1 flex min-h-10 shrink-0 items-center gap-1 rounded-full bg-accent/15 px-3.5 text-s font-bold text-accent">
+          <Plus size={16} strokeWidth={2.5} />Добавить
+        </button>
       </m.header>
 
       <Segmented<Mode> id="deadlines" value={mode} options={MODES} onChange={setMode} />

@@ -71,6 +71,15 @@ export function formatLeft(due: number, now = Date.now()) {
   return s >= 0 ? text : `просрочено ${d > 0 ? `${d} д` : h > 0 ? `${h} ч` : `${Math.max(m, 1)} мин`}`;
 }
 
+/** Остаток словами для плашек в списках (18 окт 2026): «через 40 мин», «через 19 ч», «через 2 дня», «через 8 дней». */
+export function formatLeftWords(due: number, now = Date.now()) {
+  const s = effectiveDue(due) - now;
+  if (s <= 0) return "просрочено";
+  const pl = (n: number, a: string, b: string, c: string) => { const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? b : c; };
+  const d = Math.floor(s / DAY), h = Math.floor(s / HOUR), m = Math.max(1, Math.floor(s / 60e3));
+  return d >= 2 ? `через ${d} ${pl(d, "день", "дня", "дней")}` : h >= 1 ? `через ${h} ч` : `через ${m} мин`;
+}
+
 /** Короткий остаток для плиток: «8 д», «19 ч», «40 мин», «просрочено». */
 export function formatLeftShort(due: number, now = Date.now()) {
   const s = effectiveDue(due) - now;

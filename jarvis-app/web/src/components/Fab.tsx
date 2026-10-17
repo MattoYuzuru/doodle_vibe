@@ -14,6 +14,9 @@ export function Fab() {
   const compact = useUi((s) => s.compact);
   const keyboard = useUi((s) => s.keyboard);
   const glassRef = useLiquidGlass<HTMLButtonElement>({ radius: Infinity, band: 12, strength: 22 });
+  // На Главной «+» нет (18 окт 2026): внизу и так сова и вкладки, а добавлять удобнее во «Дедлайнах» и «Плане».
+  const onHome = useNav((s) => s.tab === "home" && !s.stack.length);
+  if (onHome) return null;
 
   // Нажатие — CSS :active вместо whileTap (проверка 15 окт), как у плиток: сжатие идёт на композиторе, а не пружиной
   // framer в главном потоке. Пока открыта клавиатура, «+» уезжает вниз и не закрывает поле ввода.

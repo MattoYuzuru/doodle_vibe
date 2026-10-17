@@ -1,5 +1,5 @@
 import { m } from "framer-motion";
-import { CalendarDays, ChevronRight, CircleHelp, Flag, Smartphone } from "lucide-react";
+import { ChevronRight, CircleHelp, Flag, Smartphone } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ActiveLabs } from "../components/ActiveLabs";
@@ -8,11 +8,11 @@ import { JournalTile } from "../components/JournalTile";
 import { SessionTile } from "../components/SessionTile";
 import { LessonRow, matchSubject } from "../components/LessonRow";
 import { MoodleDown, MoodleFailed, when } from "../components/MoodleDown";
-import { Tile, TileLabel } from "../components/Tile";
+import { Tile, TileTitle } from "../components/Tile";
 import { Avatar, EmptyState, Skeleton } from "../components/ui";
 import { useNav } from "../hooks/useNav";
 import { useNow } from "../hooks/useNow";
-import { DAY, effectiveDue, formatLongDate, mskParts, todayKey } from "../lib/dates";
+import { DAY, dayKey, effectiveDue, formatLongDate, keyToUtc, mskParts, todayKey } from "../lib/dates";
 import { useAuth } from "../store/auth";
 import { useSchedule } from "../store/schedule";
 import { subjectOf, useAppStore, useFirstLoad } from "../store/useAppStore";
@@ -50,7 +50,7 @@ export function HomeScreen() {
   useEffect(() => {
     const dark = document.documentElement.dataset.scheme === "dark";
     const a = dark ? 0.3 : 0.16;
-    const c = heroUrgency === "urgent" || heroUrgency === "overdue" ? `rgb(255 77 61 / ${a})` : heroUrgency === "soon" ? `rgb(245 165 36 / ${a})` : `rgb(61 92 240 / ${a})`;
+    const c = heroUrgency === "urgent" || heroUrgency === "overdue" ? `rgb(255 77 61 / ${a})` : heroUrgency === "soon" ? `rgb(245 165 36 / ${a})` : `rgb(47 123 246 / ${a})`;
     document.documentElement.style.setProperty("--bg-glow", c);
   }, [heroUrgency]);
 
@@ -61,6 +61,20 @@ export function HomeScreen() {
   const schedNeedGroup = !!sched?.needGroup || (!!sched && !sched.group);
   // forDay читает стор сам; зависимости — то, от чего зависит ответ (расписание, подгруппа, день).
   const lessons = useMemo(() => useSchedule.getState().forDay(today), [sched, subgroup, today]);
+  // Сегодня пар нет — подсказываем ближайшую (до двух недель вперёд), а не пустую строку (18 окт 2026).
+  const nextLesson = useMemo(() => {
+    if (lessons.length) return null;
+    for (let i = 1; i <= 14; i++) {
+      const key = dayKey(Date.now() + i * DAY);
+      const l = useSchedule.getState().forDay(key)[0];
+      if (l) {
+        const wd = new Date(keyToUtc(key)).toLocaleDateString("ru-RU", { weekday: "long", timeZone: "UTC" });
+        const on: Record<string, string> = { "понедельник": "в понедельник", "вторник": "во вторник", "среда": "в среду", "четверг": "в четверг", "пятница": "в пятницу", "суббота": "в субботу", "воскресенье": "в воскресенье" };
+        return `${i === 1 ? "завтра" : on[wd] ?? wd}, ${l.start}`;
+      }
+    }
+    return null;
+  }, [sched, subgroup, today, lessons.length]);
   const nowP = mskParts(now);
   const nowHM = `${String(nowP.hh).padStart(2, "0")}:${String(nowP.mm).padStart(2, "0")}`;
 
@@ -134,8 +148,8 @@ export function HomeScreen() {
           {/* Каждая пара — кнопка (экран курса), поэтому сама плитка не кнопка; в план ведёт ссылка в заголовке. */}
           <Tile span={2} index={1} className="min-h-0 pb-2">
             <div className="flex items-center justify-between gap-2">
-              <TileLabel className="flex items-center gap-1.5"><CalendarDays size={13} strokeWidth={2.5} />Расписание · сегодня{lessons.length > 0 && <span className="text-hint/70">{lessons.length}</span>}</TileLabel>
-              <button onClick={() => { haptic.select(); setTab("plan"); }} className="-my-1 -mr-1 flex min-h-8 items-center gap-0.5 px-1 text-[12px] font-bold text-accent">План<ChevronRight size={14} strokeWidth={2.5} /></button>
+              <TileTitle className="flex items-center gap-1.5">Расписание на сегодня{lessons.length > 0 && <span className="text-hint">{lessons.length}</span>}</TileTitle>
+              <button onClick={() => { haptic.select(); setTab("plan"); }} className="-my-1 -mr-1 flex min-h-8 items-center gap-0.5 px-1 text-s font-bold text-accent">Весь план<ChevronRight size={14} strokeWidth={2.5} /></button>
             </div>
             {lessons.length > 0 ? (
               <div className="mt-1">
@@ -152,6 +166,7 @@ export function HomeScreen() {
                 {schedNeedGroup ? "Выберите группу в профиле — и здесь появятся пары"
                   : schedStatus === "error" || (schedStatus === "idle" && authErr) ? "Расписание недоступно"
                   : schedStatus === "loading" || schedStatus === "idle" ? "Загружаю расписание…" : "Сегодня пар нет"}
+                {schedStatus === "ok" && !schedNeedGroup && nextLesson && <span className="block font-medium">Ближайшая — {nextLesson}</span>}
               </p>
             )}
           </Tile>

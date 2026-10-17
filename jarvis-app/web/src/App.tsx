@@ -2,7 +2,7 @@ import { lite } from "./lib/perf";
 import { AnimatePresence, MotionConfig, m, useDragControls, useIsPresent, useMotionValue, useTransform } from "framer-motion";
 import { ChevronLeft } from "lucide-react";
 import { Component, Suspense, lazy, memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Fab } from "./components/Fab";
+import { OwlAssistant } from "./components/OwlAssistant";
 import { RefreshIndicator } from "./components/RefreshIndicator";
 import { TABBAR_H, TABS, TabBar } from "./components/TabBar";
 import { Toast } from "./components/Toast";
@@ -506,7 +506,7 @@ export function App() {
         <TabTrack />
       </main>
       <RefreshIndicator />
-      <Fab />
+      <OwlAssistant />
       <TabBar />
       <Toast />
       <AnimatePresence custom={exitDir}>

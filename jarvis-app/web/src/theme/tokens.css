@@ -37,10 +37,11 @@
 }
 
 :root[data-scheme="dark"] {
-  --c-page: #000000;
-  --c-card: #1c1c1e;
-  --c-text: #ffffff;
-  --c-hint: #8e8e93;
+  /* Ночная тема Doodle: приглушённый тёмно-синий вместо чёрного (18 окт 2026). */
+  --c-page: #111a2e;
+  --c-card: #1b2742;
+  --c-text: #eef2f8;
+  --c-hint: #8f9bb5;
   --c-accent: #2f7bf6;
   --c-on-accent: #ffffff;
   --c-separator: rgb(255 255 255 / 0.08);
@@ -49,23 +50,23 @@
   --c-yellow: #ffd60a;
   --c-green: #30d158;
 
-  --c-blur: rgb(20 20 22 / 0.96);
-  --c-scrim: rgb(0 0 0 / 0.56);
+  --c-blur: rgb(17 26 46 / 0.96);
+  --c-scrim: rgb(4 8 20 / 0.6);
 
   /* Liquid Glass */
-  --glass-bg: rgb(40 40 46 / 0.46);
-  --glass-sheet: rgb(30 30 34 / 0.74);
-  --glass-lens: rgb(255 255 255 / 0.13);
-  --glass-rim: rgb(255 255 255 / 0.42);
-  --glass-shadow: 0 10px 32px rgb(0 0 0 / 0.45), 0 1px 2px rgb(0 0 0 / 0.3);
-  --tile-bg: rgb(26 26 30 / 0.74);
-  --glow-1: rgb(61 92 240 / 0.34);
-  --glow-2: rgb(157 92 255 / 0.24);
+  --glass-bg: rgb(27 39 66 / 0.62);
+  --glass-sheet: rgb(27 39 66 / 0.84);
+  --glass-lens: rgb(255 255 255 / 0.12);
+  --glass-rim: rgb(255 255 255 / 0.3);
+  --glass-shadow: 0 10px 32px rgb(0 0 0 / 0.4), 0 1px 2px rgb(0 0 0 / 0.25);
+  --tile-bg: rgb(27 39 66 / 0.94);
+  --glow-1: rgb(47 123 246 / 0.22);
+  --glow-2: rgb(47 123 246 / 0.12);
 
   /* Фон страницы (варианты в index.css) */
-  --bg-top: #16161c;
-  --bg-line: rgb(255 255 255 / 0.07);
-  --bg-glow: rgb(61 92 240 / 0.3);
+  --bg-top: #18243f;
+  --bg-line: rgb(255 255 255 / 0.06);
+  --bg-glow: rgb(47 123 246 / 0.22);
   --bg-grain: rgb(255 255 255 / 0.5);
 }
 

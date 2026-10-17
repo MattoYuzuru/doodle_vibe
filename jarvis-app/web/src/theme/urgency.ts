@@ -28,7 +28,8 @@ export const badgeClass: Record<Urgency, string> = {
 
 /** Градиент большой карточки ближайшего дедлайна. */
 export const heroGradient: Record<Urgency, string> = {
-  calm: "radial-gradient(130% 150% at 100% 0%, #7b9bff 0%, #3d5cf0 32%, #2b2fa8 68%, #191a5a 100%)",
+  // Спокойный синий фирменного цвета вместо сине-фиолетового (18 окт 2026).
+  calm: "linear-gradient(135deg, #4a8dff 0%, #2f7bf6 45%, #2463d8 100%)",
   soon: "radial-gradient(130% 150% at 100% 0%, #ffd46b 0%, #f5a524 34%, #c86b12 70%, #6e3508 100%)",
   urgent: "radial-gradient(130% 150% at 100% 0%, #ff9a8a 0%, #ff4d3d 34%, #c4221a 70%, #5e0d0a 100%)",
   overdue: "radial-gradient(130% 150% at 100% 0%, #ff9a8a 0%, #ff4d3d 34%, #c4221a 70%, #5e0d0a 100%)",

@@ -1,7 +1,7 @@
 import { m } from "framer-motion";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { formatLeft } from "../lib/dates";
+import { formatLeftWords } from "../lib/dates";
 import { badgeClass, urgencyOf } from "../theme/urgency";
 import type { Deadline } from "../store/types";
 
@@ -15,7 +15,7 @@ export function SubjectDot({ color, className = "" }: { color?: string; classNam
 export function UrgencyBadge({ deadline, now }: { deadline: Pick<Deadline, "due" | "status" | "grade" | "gradeMax">; now: number }) {
   const u = urgencyOf(deadline, now);
   const text = u === "done" ? (deadline.grade != null ? `${fmtGrade(deadline.grade)}${deadline.gradeMax ? ` / ${fmtGrade(deadline.gradeMax)}` : ""}` : "сдано")
-    : u === "overdue" ? "просрочено" : formatLeft(deadline.due, now);
+    : u === "overdue" ? "просрочено" : formatLeftWords(deadline.due, now);
   return <span className={`tabular inline-flex h-6 items-center rounded-full px-2 text-s font-semibold whitespace-nowrap ${badgeClass[u]}`}>{text}</span>;
 }
 

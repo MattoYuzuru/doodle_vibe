@@ -328,3 +328,41 @@ html.lite [data-tab-page][aria-hidden="true"] {
 @utility font-display {
   font-family: var(--font-display);
 }
+
+/* ---------- Сова Дуся (components/OwlAssistant.tsx, 18 окт 2026) ----------
+   Пиксельный спрайт: движение по кадрам steps(), как у спрайта в игре. Глаза и значки — слои, видимый выбирают
+   атрибут data-eyes и классы owl-p-*. В облегчённом режиме и при «уменьшить движение» сова стоит. */
+.owl svg g { transform-box: fill-box; }
+.owl [data-eye], .owl [data-prop] { display: none; }
+.owl svg[data-eyes="open"] [data-eye="open"], .owl svg[data-eyes="up"] [data-eye="up"], .owl svg[data-eyes="closed"] [data-eye="closed"],
+.owl svg[data-eyes="half"] [data-eye="half"], .owl svg[data-eyes="happy"] [data-eye="happy"], .owl svg[data-eyes="wide"] [data-eye="wide"],
+.owl svg[data-eyes="stern"] [data-eye="stern"] { display: inline; }
+.owl.owl-p-excl [data-prop="excl"], .owl.owl-p-sweat [data-prop="sweat"], .owl.owl-p-zzz [data-prop="zzz"], .owl.owl-p-idea [data-prop="idea"],
+.owl.owl-p-q [data-prop="q"], .owl.owl-p-spark [data-prop="spark"], .owl.owl-p-clock [data-prop="clock"] { display: inline; }
+.owl .owl-rig { transform-origin: 50% 100%; animation: owl-idle 1.6s steps(1) infinite; }
+.owl .owl-wing-l { transform-origin: 100% 0%; } .owl .owl-wing-r { transform-origin: 0% 0%; } .owl .owl-tufts { transform-origin: 50% 100%; }
+@keyframes owl-idle { 50% { transform: translateY(-0.5px); } }
+.owl-a-think .owl-rig { animation: owl-think 1.4s steps(1) forwards; }
+@keyframes owl-think { 20%, 80% { transform: rotate(-6deg); } }
+.owl-a-panic .owl-rig { animation: owl-shake 0.12s steps(1) 12; }
+@keyframes owl-shake { 0% { transform: translateX(-0.6px); } 50% { transform: translateX(0.6px); } }
+.owl-a-panic .owl-wing-l, .owl-a-happy .owl-wing-l { animation: owl-flap-l 0.18s steps(1) 10; }
+.owl-a-panic .owl-wing-r, .owl-a-happy .owl-wing-r { animation: owl-flap-r 0.18s steps(1) 10; }
+@keyframes owl-flap-l { 50% { transform: rotate(35deg) translateY(-1px); } }
+@keyframes owl-flap-r { 50% { transform: rotate(-35deg) translateY(-1px); } }
+.owl-a-stern .owl-rig { animation: owl-nope 0.9s steps(1) 2; }
+@keyframes owl-nope { 25% { transform: translateX(-0.6px); } 75% { transform: translateX(0.6px); } }
+.owl-a-stern .owl-wing-r { animation: owl-tap 0.3s steps(1) 6; }
+@keyframes owl-tap { 50% { transform: rotate(-25deg); } }
+.owl-a-sleepy .owl-rig { animation: owl-doze 3s steps(1) forwards; }
+@keyframes owl-doze { 30% { transform: translateY(0.5px) rotate(4deg); } 60% { transform: translateY(1px) rotate(7deg); } 75% { transform: translateY(-1.5px); } }
+.owl-a-happy .owl-rig, .owl-a-alert .owl-rig { animation: owl-hop 0.5s steps(1) 3; }
+@keyframes owl-hop { 0% { transform: scale(1.05, 0.95); } 25% { transform: translateY(-2px) scale(0.96, 1.04); } 50% { transform: translateY(-3px); } 75% { transform: translateY(-1px); } }
+.owl-a-alert .owl-tufts { animation: owl-perk 0.3s steps(1) 4; }
+@keyframes owl-perk { 50% { transform: translateY(-1px); } }
+.owl [data-prop="excl"], .owl [data-prop="idea"], .owl [data-prop="q"], .owl [data-prop="clock"] { animation: owl-bob 0.5s steps(1) infinite; }
+@keyframes owl-bob { 50% { transform: translateY(-0.5px); } }
+.owl [data-prop="spark"], .owl [data-prop="zzz"] { animation: owl-blink 0.6s steps(1) infinite; }
+@keyframes owl-blink { 50% { opacity: 0.35; } }
+html.lite .owl *, html.lite .owl { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .owl * { animation: none !important; } }

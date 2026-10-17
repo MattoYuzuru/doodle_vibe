@@ -206,7 +206,7 @@ export function PlanScreen() {
                 {lessons.length > 0 && (
                   <div className="mt-1 px-4">
                     <div className="flex items-center justify-between">
-                      <span className="text-[12px] font-bold uppercase tracking-[0.06em] text-hint">Пары · {active.length}</span>
+                      <span className="text-s font-bold text-hint">Пары · {active.length}</span>
                       <div className="flex gap-1">
                         {(["1", "2"] as const).map((s) => (
                           <button key={s} onClick={() => { haptic.select(); setSubgroup(s); }} aria-pressed={subgroup === s}

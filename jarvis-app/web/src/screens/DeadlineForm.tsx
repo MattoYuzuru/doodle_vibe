@@ -23,7 +23,7 @@ const toMs = (date: string, time: string) => {
 };
 const fromMs = (ms: number) => { const p = mskParts(ms); return { date: `${p.y}-${pad(p.m)}-${pad(p.d)}`, time: `${pad(p.hh)}:${pad(p.mm)}` }; };
 
-const Label = ({ children }: { children: React.ReactNode }) => <span className="px-1 text-[12px] font-bold uppercase tracking-[0.06em] text-hint">{children}</span>;
+const Label = ({ children }: { children: React.ReactNode }) => <span className="px-1 text-s font-bold text-hint">{children}</span>;
 
 /** Форма дедлайна: название, тип, предмет (с созданием и цветом), дата и время, напоминание, заметка. */
 export function DeadlineFormScreen({ id }: { id?: string }) {

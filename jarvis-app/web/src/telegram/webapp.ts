@@ -63,7 +63,7 @@ function applyScheme(scheme: "light" | "dark" = "light") {
   document.documentElement.dataset.scheme = scheme;
   if (inTelegram) {
     try {
-      const hex = pageHex() ?? (scheme === "dark" ? "#000000" : "#ffffff");
+      const hex = pageHex() ?? (scheme === "dark" ? "#111a2e" : "#ffffff");
       tg!.setHeaderColor(hex);
       tg!.setBackgroundColor(hex);
       tg!.setBottomBarColor?.(hex);

@@ -60,11 +60,11 @@ export function TaskFormScreen({ id, date }: { id?: string; date?: string }) {
       />
       <div className="grid grid-cols-2 gap-2.5">
         <label className="flex flex-col gap-1">
-          <span className="px-1 text-[12px] font-bold uppercase tracking-[0.06em] text-hint">День</span>
+          <span className="px-1 text-s font-bold text-hint">День</span>
           <input type="date" value={day} onChange={(e) => setDay(e.target.value)} className={fieldClass} />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="px-1 text-[12px] font-bold uppercase tracking-[0.06em] text-hint">Время</span>
+          <span className="px-1 text-s font-bold text-hint">Время</span>
           <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={fieldClass} />
         </label>
       </div>
