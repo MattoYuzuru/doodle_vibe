@@ -42,6 +42,23 @@ const BAD_DATA = 3;                                         // столько р
 const MIN = 60e3;
 // Сколько запрос может ждать своей очереди (Moodle отвечает медленно, все места заняты): дольше — отказ без похода в сеть.
 const WAIT_USER = num(process.env.MOODLE_QUEUE_WAIT_MS, 45e3), WAIT_BG = num(process.env.MOODLE_QUEUE_WAIT_BG_MS, 120e3);
+/*
+ * Порядок в очереди фона (17 окт 2026, нагрузка на VPS: при 300 людях «Новый материал» не дошёл за 5 минут). Очередь была
+ * общей «кто раньше пришёл»: проверки тестов и материалов (один запрос на человека, ради уведомлений «в ту же минуту»)
+ * стояли за тысячами плановых перечитываний дедлайнов, объявлений и журнала. Теперь срочные (URGENT) идут первыми, а
+ * плановый запрос, прождавший BG_AGE_MS, проходит через раз со срочными — ни те, ни другие не голодают (при длинном
+ * хвосте давно ждут все плановые, и без чередования очередь снова стала бы «кто раньше»). Темп (GAP_BG) не меняется.
+ */
+const URGENT = new Set(["quick", "quiz-open", "materials"]);
+const BG_AGE_MS = num(process.env.MOODLE_BG_AGE_MS, 30e3);
+/** Какой фоновый запрос пустить следующим (индекс в h.qBg); h.agedLast — прошлым пропущен давно ждущий плановый. */
+function nextBg(h, now) {
+  const q = h.qBg, i = q.findIndex((w) => URGENT.has(w.turn.name));
+  const aged = !URGENT.has(q[0].turn.name) && now - q[0].at >= BG_AGE_MS;
+  const pick = i < 0 || (aged && !h.agedLast) ? 0 : i;
+  h.agedLast = pick === 0 && aged;
+  return pick;
+}
 const STEPS = { block: [15, 30, 60, 120, 360], data: [15, 30, 60, 120], net: [5, 10, 20, 30] }; // минуты паузы по нарастающей
 const NET_ALERT_MS = num(process.env.MOODLE_NET_ALERT_MS, 60 * MIN); // не отвечает дольше — сообщить владельцу
 
@@ -271,7 +288,7 @@ function pump(host) {
     let w = null;
     if (h.active < CONC_ALL && !wait) {
       if (h.qUser.length) w = h.qUser.shift();
-      else if (h.qBg.length && h.activeBg < CONC_BG && now - h.lastBgStart >= GAP_BG) w = h.qBg.shift();
+      else if (h.qBg.length && h.activeBg < CONC_BG && now - h.lastBgStart >= GAP_BG) w = h.qBg.splice(nextBg(h, now), 1)[0];
     }
     if (!w) break;
     h.active++; h.lastStart = now;
@@ -306,7 +323,7 @@ export function enter(url, what = "page", api = false) {
   if (turn.bg) { const p = paused(host); if (p) throw new PausedError(p.reason, p.until); }
   const h = hostState(host);
   return new Promise((resolve, reject) => {
-    const q = turn.bg ? h.qBg : h.qUser, w = { turn, resolve, reject, timer: null };
+    const q = turn.bg ? h.qBg : h.qUser, w = { turn, resolve, reject, timer: null, at: Date.now() };
     const limit = turn.bg ? WAIT_BG : WAIT_USER;
     // Не дождался очереди — выходит из неё сразу (место и секундную паузу фона не занимает) и получает отказ.
     if (limit > 0) w.timer = setTimeout(() => { const i = q.indexOf(w); if (i >= 0) { q.splice(i, 1); reject(new QueueError()); } }, limit);

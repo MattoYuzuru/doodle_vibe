@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIR = mkdtempSync(join(tmpdir(), "pace-test-"));
 Object.assign(process.env, { MOODLE_PACE_DIR: DIR, MOODLE_USER_GAP_MS: "20", MOODLE_BG_GAP_MS: "120", MOODLE_NET_FAILS: "3", MOODLE_NET_SPAN_MS: "400", MOODLE_NET_ALERT_MS: "0",
-  MOODLE_NET_STALE_MS: "1500", MOODLE_NET_BURST_GAP_MS: "600", MOODLE_QUEUE_WAIT_MS: "300", MOODLE_QUEUE_WAIT_BG_MS: "3000" });
+  MOODLE_NET_STALE_MS: "1500", MOODLE_NET_BURST_GAP_MS: "600", MOODLE_QUEUE_WAIT_MS: "300", MOODLE_QUEUE_WAIT_BG_MS: "3000", MOODLE_BG_AGE_MS: "400" });
 const pace = await import(pathToFileURL(join(HERE, "..", "..", "moodle-pace.mjs")).href);
 
 let fails = 0;
@@ -35,6 +35,15 @@ const go = async (url, { ms = 10, status = 200, error = null, api = true, what =
   const gaps = b.slice(1).map((x, i) => x - b[i]);
   check("очередь: фоновые запросы идут с паузой не меньше заданной, запрос человека не ждёт конца фоновой очереди", gaps.every((g) => g >= 110) && u < b[b.length - 1] && u < 150, `фон ${b.join(", ")} мс; человек ${u} мс`);
   check("очередь: внутри pace.background запрос помечен фоновым, снаружи — нет", pace.background("x", () => pace.isBackground()) === true && pace.isBackground() === false);
+}
+{ // Очередь фона (17 окт 2026): срочные (тесты, материалы) — раньше плановых; давно ждущий плановый — через раз со срочными.
+  pace._reset();
+  const order = [];
+  const run = (name, n) => pace.background(name, () => Promise.all(Array.from({ length: n }, (_, k) => go(M, { ms: 5 }).then(() => order.push(`${name[0]}${k + 1}`)))));
+  await Promise.all([run("notify", 4), run("materials", 6)]);
+  const at = (x) => order.indexOf(x);
+  check("очередь фона: срочные идут раньше плановых, вставших в очередь до них", at("m1") < at("n2") && at("m3") < at("n2"), order.join(" "));
+  check("очередь фона: плановый, ждущий дольше срока, проходит через раз со срочными (не голодает)", at("n2") < at("m6") && at("n3") < at("m6") && !order.slice(order.indexOf("n2")).join(" ").includes("n3 n4"), order.join(" "));
 }
 { // Отказ веб-сервиса: фон встаёт на паузу, человек проходит, владельцу одно сообщение.
   pace._reset(); alerts.length = 0;

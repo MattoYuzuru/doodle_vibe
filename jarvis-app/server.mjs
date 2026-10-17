@@ -132,7 +132,6 @@ const isNight = () => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const QUIET = process.env.MOODLE_PACE === "0"; // стенд: без пауз
-const betweenUsers = () => (QUIET ? 0 : 1500 + Math.random() * 3000);
 // Постоянный множитель интервала для пользователя (0,85…1,15): обходы разных людей не попадают в одну секунду.
 const spread = (tgId) => (QUIET ? 1 : 0.85 + (Number(tgId) % 31) / 100);
 // Давно не открывал приложение (больше недели) — опрашиваем реже. Пока отметки нет, считаем активным.
@@ -177,7 +176,8 @@ async function freshDeadlines(u) {
     return { d: have, read: false };
   }
   pace.stamp(key, 0, true); // на диск сразу: отметка должна пережить перезапуск (процесс сервера убивают)
-  await sleep(betweenUsers());
+  // Паузы 1,5–4,5 с между людьми здесь больше нет (17 окт 2026, нагрузка на VPS): запросы и так идут через очередь фона
+  // (не больше двух в секунду), а пауза только растягивала обход — при 300 людях 11 минут при шаге 10.
   return { d, read: true };
 }
 /*
@@ -345,7 +345,13 @@ async function materialsTick() {
   if (restoredCopies && Date.now() - startedAt < MATERIALS_START_DELAY_MS) return;
   materialsBusy = true;
   try {
-    for (const u of await users.allLoggedIn()) {
+    // Порядок (17 окт 2026): перед каждым следующим человеком — сначала те, в чьих курсах проверка одногруппника только
+    // что нашла изменение, которого они ещё не видели (news.needsCheck). Раньше при 300 людях остальные студенты курса
+    // ждали своей очереди в обходе по всем — «Новый материал» опаздывал больше чем на 5 минут.
+    const rest = await users.allLoggedIn(), courseIds = (u) => moodle.staleDeadlines(u.token)?.courses?.map((c) => c.id) || [];
+    while (rest.length) {
+      const i = Math.max(0, rest.findIndex((x) => !tokenBad(x) && news.needsCheck(x.tgId, courseIds(x))));
+      const u = rest.splice(i, 1)[0];
       const d = !tokenBad(u) && moodle.staleDeadlines(u.token);
       if (!d) continue; // список курсов ещё не прочитан — его прочитает общий обход
       try {

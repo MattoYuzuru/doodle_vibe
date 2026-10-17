@@ -42,6 +42,21 @@ function noteQuiet(courseId, from, to) {
 export function quietSince(courseIds, fromS, { freshS = 120, nowS = Math.floor(Date.now() / 1000) } = {}) {
   return courseIds.length > 0 && courseIds.every((id) => { const q = quietOf.get(Number(id)); return !!q && q.from <= fromS && nowS - q.to <= freshS; });
 }
+/*
+ * Курс изменился — сначала его студенты (17 окт 2026, нагрузка на VPS: при 300 людях «Новый материал» не дошёл за
+ * 5 минут). Изменение находит проверка одного человека, а остальные студенты курса ждали своей очереди в обходе по всем
+ * людям. Теперь найденное изменение запоминается (changedAt), и обход материалов (server.mjs materialsTick) следующими
+ * берёт тех, кто этот курс после изменения ещё не проверял (needsCheck), — без обычной паузы MATERIALS_EVERY.
+ * Только в памяти: после перезапуска обход идёт как обычно.
+ */
+const changedAt = new Map(); // courseId → когда (с) проверка нашла изменения
+const checkedAt = new Map(); // tgId → начало последней проверки материалов (с)
+const CHANGED_KEEP_S = 30 * 60;
+/** Есть ли в этих курсах изменение, найденное после последней проверки материалов этого человека. */
+export function needsCheck(tgId, courseIds) {
+  const mine = checkedAt.get(tgId) || 0, nowS = Math.floor(Date.now() / 1000);
+  return courseIds.some((id) => { const t = changedAt.get(Number(id)); return !!t && t > mine && nowS - t < CHANGED_KEEP_S; });
+}
 const FRESH_MS = 7 * 86400e3;   // о темах старше недели не пишем (защита от пачки при сбросе состояния)
 const MAX_PER_FORUM = 3;        // больше трёх новых тем разом — три последние и «ещё N»
 const MAX_ITEMS = 8;            // больше восьми новых материалов в курсе — первые восемь и «ещё N»
@@ -171,7 +186,8 @@ export async function checkMaterials(tgId, token, courses, { mute = false, skipC
   // Только прочитать (peekState, без записи): проверка идёт каждые ~50 с у каждого, и раньше каждый раз переписывала файл.
   const st0 = await notify.peekState(tgId);
   const snap = { at: st0.materials?.at || 0, courses: { ...(st0.materials?.courses || {}) } };
-  if (Date.now() - snap.at < MATERIALS_EVERY) return 0;
+  // В курсе человека найдено изменение, которого он ещё не видел, — проверяем сразу, не дожидаясь обычного срока.
+  if (Date.now() - snap.at < MATERIALS_EVERY && !needsCheck(tgId, courses.map((c) => c.id))) return 0;
   const nowS = Math.floor(Date.now() / 1000);
   const got = new Map(); // courseId → { sections, updated: Set<cmid с заменённым файлом> } | { same: true }
   // Запросы — пакетами (moodle.callMany, 15 окт 2026): «что изменилось» по всем курсам человека одним запросом, списки
@@ -199,6 +215,7 @@ export async function checkMaterials(tgId, token, courses, { mute = false, skipC
       const inst = (res[i].data?.instances || []).filter((x) => x.contextlevel === "module");
       if (!inst.length) { probes.set(c.id, { from: since.get(c.id), to: nowS }); noteQuiet(c.id, since.get(c.id), nowS); got.set(c.id, { same: true, at: nowS, own: true }); return; }
       probes.delete(c.id); quietOf.delete(c.id);
+      if ((changedAt.get(c.id) || 0) < nowS) changedAt.set(c.id, nowS);
       contents.push({ c, updated: new Set(inst.filter((x) => (x.updates || []).some((u) => u.name === "contentfiles")).map((x) => x.id)) });
     });
   }
@@ -208,6 +225,8 @@ export async function checkMaterials(tgId, token, courses, { mute = false, skipC
   }
   const out = [];
   const relay = mute && await notify.isRelaySource(tgId); // как у объявлений: выключено у человека, но нужно беседе
+  // Проверка дошла до ответов Moodle — изменения, найденные до её начала, этот человек увидел (needsCheck).
+  checkedAt.set(tgId, nowS);
   await notify.withState(tgId, (s) => {
     s.materials ??= { courses: {} };
     s.materials.courses ??= {};
