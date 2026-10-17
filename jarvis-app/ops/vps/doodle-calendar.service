@@ -1,0 +1,22 @@
+# Постоянный адрес подписки на календарь (ngrok, домен из jarvis-app/calendar-base.txt) — на VPS вместо cal-tunnel.mjs.
+# Подписки студентов уже ведут на этот домен, поэтому после переезда он должен смотреть на сервер; снаружи через него
+# открыт только /cal/ (calendar-policy.yml). В doodle.service для этого CAL_TUNNEL=0 («управляется снаружи»).
+# У бесплатного ngrok один агент на аккаунт: включать ТОЛЬКО после остановки сервера (и его ngrok) на ноутбуке.
+# Нужны: ngrok в /usr/local/bin, jarvis-app/ngrok.yml с ключом (переносится вместе с данными, в git его нет).
+# Установка (под root): cp doodle-calendar.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now doodle-calendar
+[Unit]
+Description=Doodle calendar tunnel (ngrok)
+After=network-online.target doodle.service
+Wants=network-online.target
+
+[Service]
+User=doodle
+WorkingDirectory=/home/doodle/moodle-work/jarvis-app
+ExecStart=/bin/sh -c 'exec /usr/local/bin/ngrok http 127.0.0.1:8787 --url "$(cat calendar-base.txt)" --config ngrok.yml --traffic-policy-file calendar-policy.yml --log stdout --log-format logfmt --log-level warn'
+Restart=always
+RestartSec=30
+StandardOutput=append:/home/doodle/moodle-work/jarvis-app/cal-tunnel.log
+StandardError=append:/home/doodle/moodle-work/jarvis-app/cal-tunnel.log
+
+[Install]
+WantedBy=multi-user.target

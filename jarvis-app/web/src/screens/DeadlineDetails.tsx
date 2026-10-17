@@ -16,7 +16,7 @@ import { useNow } from "../hooks/useNow";
 import { useMainButton } from "../hooks/useTelegramButtons";
 import { useUi } from "../hooks/useUi";
 import { effectiveDue, elapsedParts, leftParts, mskParts } from "../lib/dates";
-import { canOpenLab, labErrorText, labGate, onLabDenied } from "../lib/labGate";
+import { canOpenLab, LABS_OFF_TEXT, labErrorText, labGate, onLabDenied } from "../lib/labGate";
 import { subjectOf, useAppStore } from "../store/useAppStore";
 import { kindOf } from "../theme/kinds";
 import { spring } from "../theme/motion";
@@ -88,7 +88,9 @@ export function DeadlineDetailsScreen({ id }: { id: string }) {
     } catch (e) { haptic.warning(); onLabDenied((e as Error).message); toast(labErrorText((e as Error).message)); }
     finally { setFixing(false); }
   };
-  const labId = d && d.status !== "done" && labsOk ? assignIdOf(d.id) : null;
+  // Лабы выключены на сервере (переезд): «Сделать отчёт» и «Исправить» не предлагаем, начатую лабу открыть можно.
+  const labsOff = !!profile?.labsOff;
+  const labId = d && d.status !== "done" && labsOk && !labsOff ? assignIdOf(d.id) : null;
   const nativeButton = useMainButton(labId ? "Сделать отчёт" : d?.status === "done" ? "Вернуть в активные" : "Отметить сданным",
     () => { if (done.current) return; if (labId && d) push({ name: "lab", id: d.id }); else toggleDone(); }, !!found);
 
@@ -144,11 +146,12 @@ export function DeadlineDetailsScreen({ id }: { id: string }) {
       </m.section>
 
       {/* Отчёт с агентом — сразу под сроком (16 окт): пока не начат, карточка объясняет, что будет, и даёт кнопку; потом — ход работы. */}
-      {labsOk && canOpenLab(gate) && assignIdOf(d.id) && <LabProgressCard assignId={assignIdOf(d.id)!} offer={d.status !== "done"} trial={gate === "trial-offer"} onOpen={() => push({ name: "lab", id: d.id })} />}
+      {labsOk && canOpenLab(gate) && assignIdOf(d.id) && <LabProgressCard assignId={assignIdOf(d.id)!} offer={d.status !== "done" && !labsOff} trial={gate === "trial-offer"} onOpen={() => push({ name: "lab", id: d.id })} />}
+      {labsOk && labsOff && d.status !== "done" && <p className="px-1 text-s leading-[19px] text-hint">⏸ {LABS_OFF_TEXT}</p>}
 
       {/* Комментарий преподавателя из Moodle; кнопка исправления — с полным доступом или в своей пробной лабе (пробный она не занимает). */}
       <TeacherRemarks remarks={d.remarks ?? []} submission={d.submission} busy={fixing}
-        onFix={(fullLabs || gate === "trial-own") && assignIdOf(d.id) ? fixReport : undefined} onOpenLab={labsOk && assignIdOf(d.id) ? () => push({ name: "lab", id: d.id }) : undefined} />
+        onFix={(fullLabs || gate === "trial-own") && !labsOff && assignIdOf(d.id) ? fixReport : undefined} onOpenLab={labsOk && assignIdOf(d.id) ? () => push({ name: "lab", id: d.id }) : undefined} />
 
       <Tile index={1} className="min-h-0 py-1">
         <div className="flex min-h-12 items-center justify-between border-b border-separator"><TileLabel>Предмет</TileLabel><span className="text-m font-semibold">{s?.short ?? "—"}</span></div>

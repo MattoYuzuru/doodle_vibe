@@ -20,6 +20,7 @@ jarvis-app/local-owner.flag
 
 # --- данные пользователей и состояние сервера ---
 jarvis-app/users/
+jarvis-app/labs.off
 jarvis-app/jobs/
 jarvis-app/notify/
 jarvis-app/checks/

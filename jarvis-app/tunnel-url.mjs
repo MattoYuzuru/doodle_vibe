@@ -1,6 +1,7 @@
 // Следит за tunnel.log: когда быстрый туннель Cloudflare получает новый адрес, записывает его в current-url.txt,
 // САМ переписывает адрес мини-приложения у бота (Bot API setChatMenuButton — то же, что Menu Button в BotFather)
 // и коротко сообщает владельцу. Запускается вместе с сервером (server.mjs импортирует и вызывает watchTunnelUrl()).
+// На VPS туннеля нет: адрес задаёт переменная APP_URL (ops/vps/doodle.service), остальное работает так же.
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
@@ -17,6 +18,8 @@ const MENU_TEXT = "Doodle";
 const BOT_TOKEN = bots.hasBot; // есть ли токен основного бота (сам токен — только в bots.mjs)
 // Telegram хранит адрес со слэшем на конце — сравниваем без него.
 const norm = (u) => (u || "").replace(/[/]+$/, "");
+// Постоянный адрес (VPS со своим доменом, 17 окт 2026): задан — tunnel.log не читается, кнопки держатся на нём.
+const FIXED = norm(process.env.APP_URL || "");
 
 /** Сообщение владельцу: самим ботом; пока ботом пользуется и OpenClaw (до переезда) — запасной путь через него. */
 async function notify(text) {
@@ -107,12 +110,12 @@ export function watchTunnelUrl() {
     if (busy) return;
     busy = true;
     try {
-      const log = await readFile(LOG, "utf8").catch(() => "");
+      const log = FIXED ? "" : await readFile(LOG, "utf8").catch(() => "");
       // Адрес туннеля — только из рамки «Your quick Tunnel has been created» («|  https://….trycloudflare.com  |»).
       // Раньше брался любой адрес trycloudflare из лога, и при неудачном создании туннеля в приложение и в кнопку меню
       // бота попал служебный https://api.trycloudflare.com из текста ошибки (1 окт 2026).
       const urls = [...log.matchAll(/\|\s+(https:\/\/[a-z0-9-]+\.trycloudflare\.com)\s+\|/g)].map((m) => m[1]).filter((u) => !/\/\/api\./.test(u));
-      const url = urls[urls.length - 1];
+      const url = FIXED || urls[urls.length - 1];
       if (!url) return;
       if (url !== last) {
         const prev = await currentUrl();
@@ -122,7 +125,7 @@ export function watchTunnelUrl() {
         pending = new Set(await knownChats());
         defaultPending = true;
         changed = 0; warned = false;
-        announce = url !== prev ? "Новый адрес Doodle (после перезапуска туннеля)" : null;
+        announce = url === prev ? null : FIXED ? "Постоянный адрес Doodle" : "Новый адрес Doodle (после перезапуска туннеля)";
       }
       if (!BOT_TOKEN || (!pending.size && !defaultPending)) return;
       if (defaultPending) {

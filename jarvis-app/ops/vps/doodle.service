@@ -17,6 +17,8 @@ Environment=NODE_ENV=production
 # Только локально: снаружи сервер откроет обратный прокси с HTTPS (Caddy), когда дойдём до домена.
 Environment=HOST=127.0.0.1
 Environment=PORT=8787
+# Постоянный адрес Mini App (тот же, что в Caddyfile): по нему tunnel-url.mjs держит кнопку меню бота и current-url.txt.
+Environment=APP_URL=https://72-56-249-191.sslip.io
 # Туннель календаря ngrok — Windows-ПК; на VPS постоянный адрес даст домен.
 Environment=CAL_TUNNEL=0
 # Сторож агента лаб (настройки Claude Code агента) — его здесь нет.
@@ -24,6 +26,9 @@ Environment=GUARD_WATCH=0
 # Обход VPN через route print — на VPS VPN нет, ходим обычным маршрутом.
 Environment=MOODLE_DIRECT=0
 Environment=PYTHON=/usr/bin/python3
+# Агента лаб здесь нет: действия, которые его зовут, отвечают «Лабы временно недоступны» (server.mjs labsOff).
+# Убрать строку, когда сервер научится отдавать лабы исполнителю.
+Environment=LABS_OFF=1
 StandardOutput=append:/home/doodle/moodle-work/jarvis-app/server.log
 StandardError=append:/home/doodle/moodle-work/jarvis-app/server.log
 

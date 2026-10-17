@@ -272,8 +272,17 @@ async function me(tgId) {
   // Пробный отчёт (lab-trial.mjs) — здесь, а не в users.profile: профиль зовут и фоновые обходы, а этому нужны папки заданий.
   // Не прочиталось — null: «не предлагать», а не «доступен».
   const trialView = p.labsAllowed ? null : await labTrial.view(tgId).catch(() => null);
-  return { ...p, quota: o && o.limit != null ? { percent: o.percent, level: o.level } : null, labTrial: trialView };
+  return { ...p, quota: o && o.limit != null ? { percent: o.percent, level: o.level } : null, labTrial: trialView, ...(labsOff() ? { labsOff: true } : {}) };
 }
+/*
+ * Выключатель лаб (17 окт 2026, переезд на VPS): на сервере без агента (OpenClaw, Claude, LTspice) лаба упала бы с
+ * «Служба OpenClaw не отвечает». Файл labs.off рядом с сервером или LABS_OFF=1 — действия, которые зовут агента
+ * (начать, исправить, написать, «Кратко о работе», проверка отчёта, установка окружения), получают отказ labs_off,
+ * а приложение показывает «Лабы временно недоступны». Готовые отчёты по-прежнему открываются, подтверждаются,
+ * прикрепляются и отправляются в Moodle — агент для этого не нужен. Читается на каждом запросе: включается без перезапуска.
+ */
+const labsOff = () => process.env.LABS_OFF === "1" || existsSync(join(DIR, "labs.off"));
+const AGENT_ACTIONS = new Set(["start", "fix", "message", "explain"]);
 /** Число токенов для сообщений: «4,2 млн», «350 тыс.», «900». */
 const fmtTok = (x) => (x >= 999500 ? `${(x / 1e6).toFixed(1).replace(".", ",").replace(/,0$/, "")} млн` : x >= 1000 ? `${Math.round(x / 1000)} тыс.` : String(Math.round(x)));
 /** Лимит в сообщениях — без округления, тем же числом, что на экране владельца: «5 млн», «1,25 млн», «420 тыс.». */
@@ -801,6 +810,7 @@ ${who || "без имени"} · id ${tgId}
       if (path === "env-requests") {
         if (tgId !== users.OWNER_ID) return send(403, { error: "owner_only" });
         if (req.method === "POST") {
+          if (labsOff()) return send(403, { error: "labs_off" }); // одобренное ставит агент окружения
           const b = await readBody(req);
           await lab.decideEnv(Number(b.tgId), String(b.id || ""), Array.isArray(b.approve) ? b.approve.map(String) : []);
         }
@@ -1119,6 +1129,7 @@ ${who || "без имени"} · id ${tgId}
         // Лаба — своя у каждого пользователя по каждой работе (lab.mjs: ключ <tgId>-<id>): чужую переписку не увидеть и чужой отчёт не прикрепить.
         if (req.method === "GET") return send(200, (await lab.get(tgId, id)) ?? { id, status: "idle", messages: [], report: null, moodle: null, agent: null });
         if (req.method !== "POST") return send(405, { error: "method" });
+        if (AGENT_ACTIONS.has(action) && labsOff()) return send(403, { error: "labs_off" });
         // Скрепка в чате лабы: файл студента (снимок экрана, вывод программы) — тело запроса как есть, имя в X-File-Name.
         if (action === "upload") {
           try { return send(200, await lab.fromStudent(tgId, id, req.headers["x-file-name"], await readRaw(req))); }
@@ -1160,6 +1171,7 @@ ${who || "без имени"} · id ${tgId}
         if (!(await users.labsAllowed(tgId))) return send(403, { error: "labs_not_allowed" });
         if (req.method === "GET") return send(200, (await lab.checkState(tgId, ck[1])) ?? { id: ck[1], status: "idle" });
         if (req.method !== "POST") return send(405, { error: "method" });
+        if (labsOff()) return send(403, { error: "labs_off" });
         if (!token) return needLogin();
         try {
           const data = await readRaw(req);

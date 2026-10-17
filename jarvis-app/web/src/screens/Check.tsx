@@ -4,6 +4,8 @@ import { Tile, TileLabel } from "../components/Tile";
 import { toast } from "../components/Toast";
 import { EmptyState } from "../components/ui";
 import { useNav } from "../hooks/useNav";
+import { LABS_OFF_TEXT, labErrorText } from "../lib/labGate";
+import { useAuth } from "../store/auth";
 import { MAX_UPLOAD_BYTES, assignIdOf, checkApi, type CheckItem, type CheckState } from "../store/api";
 import { useAppStore } from "../store/useAppStore";
 import { haptic } from "../telegram/webapp";
@@ -34,6 +36,8 @@ export function CheckScreen({ id }: { id: string }) {
   const [sending, setSending] = useState(false);
   const [now, setNow] = useState(Date.now());
   const fileRef = useRef<HTMLInputElement>(null);
+  // Лабы выключены на сервере (переезд): проверку не запустить, прежний итог виден.
+  const labsOff = useAuth((s) => !!s.profile?.labsOff);
 
   // Загрузка — отдельной функцией: после ошибки первого запроса (сервер просыпается, туннель не ответил) экран больше не
   // заходит в тупик с одной красной строкой — есть «Повторить» (проверка 15 окт).
@@ -58,7 +62,7 @@ export function CheckScreen({ id }: { id: string }) {
     if (file.size > MAX_UPLOAD_BYTES) { haptic.warning(); toast("Файл больше 20 МБ — сожмите рисунки и попробуйте ещё раз"); return; }
     setSending(true);
     try { setSt(await checkApi.start(assignId, file)); setErr(""); setNow(Date.now()); haptic.success(); }
-    catch (e) { haptic.warning(); toast((e as Error).message); }
+    catch (e) { haptic.warning(); toast(labErrorText((e as Error).message)); }
     finally { setSending(false); }
   };
 
@@ -66,7 +70,7 @@ export function CheckScreen({ id }: { id: string }) {
   if (err === "labs_not_allowed") return <EmptyState icon={FileSearch} title="Нужен доступ к отчётам" text="Проверка отчёта доступна тем, кому владелец бота открыл отчёты с агентом." action="Назад" onAction={pop} />;
 
   const r = st?.status === "done" ? st.result : null;
-  const picker = (label: string, primary: boolean) => (
+  const picker = (label: string, primary: boolean) => labsOff ? null : (
     <button onClick={pick} disabled={sending} className={`flex min-h-12 items-center justify-center gap-2 rounded-2xl text-m font-bold disabled:opacity-60 ${primary ? "bg-accent text-on-accent" : "glass text-accent"}`}>
       {sending ? <LoaderCircle size={18} strokeWidth={2.5} className="animate-spin" /> : <FileUp size={18} strokeWidth={2.5} />} {sending ? "Отправляю файл…" : label}
     </button>
@@ -78,6 +82,7 @@ export function CheckScreen({ id }: { id: string }) {
         <h1 className="font-display text-l font-extrabold tracking-[-0.03em]">Проверка отчёта</h1>
         <p className="mt-0.5 text-s font-semibold text-hint">{d?.title ?? st?.title ?? "Задание из Moodle"}</p>
       </div>
+      {labsOff && <p className="glass rounded-2xl px-3.5 py-3 text-s leading-[19px]">⏸ {LABS_OFF_TEXT}</p>}
       <input ref={fileRef} type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; void upload(f); }} />
       {err && err !== "labs_not_allowed" && (

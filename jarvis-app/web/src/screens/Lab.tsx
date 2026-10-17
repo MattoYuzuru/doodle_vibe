@@ -10,7 +10,7 @@ import { EmptyState, ProgressBar, Skeleton } from "../components/ui";
 import { useNav } from "../hooks/useNav";
 import { usePolling } from "../hooks/usePolling";
 import { useMainButton } from "../hooks/useTelegramButtons";
-import { labErrorText, labGate, onLabDenied } from "../lib/labGate";
+import { LABS_OFF_TEXT, labErrorText, labGate, onLabDenied } from "../lib/labGate";
 import { assignIdOf, feedbackApi, labApi, type Feedback, type LabJob } from "../store/api";
 import { shortName, useAuth } from "../store/auth";
 import { subjectOf, useAppStore } from "../store/useAppStore";
@@ -182,6 +182,8 @@ export function LabScreen({ id }: { id: string }) {
   // trial: работа уже сдана (оценена) — проверочный запуск, агент об этом узнает из инструкции.
   // Пробный отчёт (lib/labGate.ts): он один — перед запуском спросить; после запуска профиль обновить (пробный занят).
   const gate = labGate(profile, assignId);
+  // Лабы выключены на сервере (переезд, агента нет): всё, что зовёт агента, скрыто; отчёт, «Всё хорошо» и Moodle — как обычно.
+  const off = !!profile?.labsOff;
   const start = async () => {
     if (!d || !assignId || busyRef.current) return;
     if (gate === "trial-offer" && !(await confirmDialog(`Начать пробный отчёт по «${d.title}»? Он один: после запуска другие работы будут закрыты, пока владелец не откроет доступ.`))) return;
@@ -271,7 +273,7 @@ export function LabScreen({ id }: { id: string }) {
   const status = job?.status ?? (loaded ? "idle" : null);
   // После отправки на проверку диалог закрыт: лишние ходы агента ничего не дадут.
   // «Ошибка» — агент не запустился (или не скачалось условие): писать некому, нужна кнопка «Запустить заново».
-  const canReply = status === "waiting" || status === "report" || status === "attached";
+  const canReply = !off && (status === "waiting" || status === "report" || status === "attached");
   // Поле убрали вместе с панелью, пока оно было в фокусе (ответил Enter — агент снова работает): React при удалении
   // узла onBlur не шлёт, и панель вернулась бы с touch-action: none — взмах снизу снова не листал бы переписку.
   useEffect(() => { if (!canReply) setFocused(false); }, [canReply]);
@@ -280,7 +282,7 @@ export function LabScreen({ id }: { id: string }) {
   const attachLabel = replacing && moodleSub?.status === "submitted" ? "Заменить файл в Moodle" : noDrafts ? "Сдать в Moodle" : replacing ? "Заменить файл в Moodle" : "Прикрепить черновик";
   // Если Moodle не даёт менять ответ, кнопки прикрепления нет вовсе — причина написана в карточке отчёта.
   // Прикрепление — только после того, как студент подтвердил отчёт («Всё хорошо»).
-  const mainLabel = status === null ? "" : status === "idle" ? "Сделать отчёт" : status === "error" ? "Запустить заново" : trial ? "" : status === "report" ? (canEdit && approved ? attachLabel : "") : status === "attached" ? "Отправить на проверку" : "";
+  const mainLabel = status === null || (off && (status === "idle" || status === "error")) ? "" : status === "idle" ? "Сделать отчёт" : status === "error" ? "Запустить заново" : trial ? "" : status === "report" ? (canEdit && approved ? attachLabel : "") : status === "attached" ? "Отправить на проверку" : "";
   // «Запустить заново» после неудачного исправления повторяет именно исправление, а не начинает лабу с нуля.
   const restart = job?.fix ? fix : start;
   const mainAction = status === "idle" ? start : status === "error" ? restart : trial ? () => {} : status === "report" ? attach : status === "attached" ? submit : () => {};
@@ -303,10 +305,12 @@ export function LabScreen({ id }: { id: string }) {
         </p>
       </div>
 
+      {off && <p className="glass rounded-2xl px-3.5 py-3 text-s leading-[19px]">⏸ {LABS_OFF_TEXT}</p>}
+
       {/* Замечания преподавателя из Moodle. Пока агент работает, кнопки нет; после исправления кнопка отправит новые
           замечания (те, что появились после него), а если новых нет — прежние ещё раз. */}
       {/* «Исправить» — только тем, кому сервер его разрешит: полный доступ или своя пробная лаба (не до начала пробного). */}
-      <TeacherRemarks remarks={remarks} submission={moodleSub} busy={busy} index={0} onFix={status === "running" || status === null || !(gate === "full" || gate === "trial-own") ? undefined : fix} />
+      <TeacherRemarks remarks={remarks} submission={moodleSub} busy={busy} index={0} onFix={off || status === "running" || status === null || !(gate === "full" || gate === "trial-own") ? undefined : fix} />
 
       {/* Наверху — итог хода (пока агент работает, прогресс показан карточкой в переписке). */}
       {job && status !== "idle" && status !== "running" && (
@@ -339,7 +343,7 @@ export function LabScreen({ id }: { id: string }) {
           </p>
           {gate === "trial-offer" && <p className="mt-3 text-s leading-[19px] text-hint">Это ваш пробный отчёт: один отчёт по одной работе. После запуска другие работы будут закрыты, пока владелец не откроет доступ.</p>}
           <p className="mt-3 text-s leading-[19px] text-hint">⚠️ Ранний доступ: агент может ошибаться — проверьте отчёт перед сдачей.</p>
-          {!nativeButton && <button onClick={start} disabled={busy} className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent text-m font-bold text-on-accent disabled:opacity-40"><Sparkles size={18} strokeWidth={2.5} /> Сделать отчёт</button>}
+          {!nativeButton && !off && <button onClick={start} disabled={busy} className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent text-m font-bold text-on-accent disabled:opacity-40"><Sparkles size={18} strokeWidth={2.5} /> Сделать отчёт</button>}
         </Tile>
       )}
 
@@ -430,7 +434,7 @@ export function LabScreen({ id }: { id: string }) {
               ) : (
                 <div className="flex gap-2">
                   <button onClick={approve} disabled={busy} className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-2xl bg-green text-m font-bold text-white disabled:opacity-40"><Check size={18} strokeWidth={3} /> Всё хорошо</button>
-                  <button onClick={askFix} disabled={busy} className="glass flex min-h-12 flex-1 items-center justify-center gap-2 rounded-2xl text-m font-bold text-accent disabled:opacity-40"><Pencil size={17} strokeWidth={2.5} /> Есть замечания</button>
+                  {!off && <button onClick={askFix} disabled={busy} className="glass flex min-h-12 flex-1 items-center justify-center gap-2 rounded-2xl text-m font-bold text-accent disabled:opacity-40"><Pencil size={17} strokeWidth={2.5} /> Есть замечания</button>}
                 </div>
               )}
             </>
@@ -452,13 +456,13 @@ export function LabScreen({ id }: { id: string }) {
           {status === "submitted" && <p className="flex items-center gap-2 px-1 text-m font-bold text-green"><Check size={18} strokeWidth={3} /> Работа отправлена на проверку</p>}
           {/* «Кратко о работе» — когда отчёт подтверждён, прикреплён или отправлен: суть работы, главные числа и вопросы к
               защите (просьба владельца, 4 окт 2026). Объяснение к этой версии отчёта уже есть — кнопка просто показывает его. */}
-          {!reviewing && !briefing && (
+          {!reviewing && !briefing && (!off || briefFresh) && (
             <button onClick={explain} disabled={busy} className="glass flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl text-m font-bold text-accent disabled:opacity-40"><BookOpen size={18} strokeWidth={2.5} /> {briefFresh ? "Показать «Кратко о работе»" : "Кратко о работе"}</button>
           )}
         </div>
       )}
 
-      {status === "error" && !nativeButton && (
+      {status === "error" && !nativeButton && !off && (
         <button onClick={restart} disabled={busy} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent text-m font-bold text-on-accent disabled:opacity-40"><Sparkles size={18} strokeWidth={2.5} /> Запустить заново</button>
       )}
       {err && status !== null && <p className="px-1 text-s font-semibold text-red">{err}</p>}

@@ -20,12 +20,16 @@ export function labGate(p: Profile | null | undefined, assignId: string | null |
 /** Можно ли открыть экран лабы по этой работе (полный доступ, своя пробная или пробный, который можно начать на ней). */
 export const canOpenLab = (g: LabGate) => g === "full" || g === "trial-own" || g === "trial-offer";
 
+/** Лабы выключены на сервере (profile.labsOff, отказ labs_off) — одна фраза для плашки и для отказа. */
+export const LABS_OFF_TEXT = "Отчёты с агентом временно недоступны: Doodle переезжает на новый сервер. Готовые отчёты можно открыть, прикрепить и отправить в Moodle, остальное в Doodle работает как обычно.";
+
 /** Коды отказа сервера (403) — человеческим текстом; остальные сообщения — как есть. */
 const LAB_ERRORS: Record<string, string> = {
   labs_not_allowed: "Отчёты с агентом вам пока не открыты. Запросите доступ в карточке работы.",
   trial_used: "Пробный отчёт уже использован на другой работе. Чтобы делать отчёты дальше, запросите доступ в карточке работы.",
   trial_start_first: "Сначала начните пробный отчёт кнопкой «Сделать отчёт».",
   trial_other_account: "Пробный отчёт привязан к другой учётной записи Moodle — войдите под ней.",
+  labs_off: LABS_OFF_TEXT,
 };
 export const labErrorText = (msg: string) => LAB_ERRORS[msg] ?? msg;
 
