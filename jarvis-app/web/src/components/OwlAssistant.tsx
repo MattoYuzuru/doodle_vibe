@@ -1,5 +1,5 @@
 import { AnimatePresence, m } from "framer-motion";
-import { Feather, Moon, Smartphone, Sparkles, Sun, UserRound, X } from "lucide-react";
+import { Feather, Moon, Smartphone, Sparkles, Sun, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useNav } from "../hooks/useNav";
@@ -153,7 +153,7 @@ function lines(c: Ctx): string[] {
       "Объясни тему мне. Если смог объяснить сове — точно понял.",
       "Повтори конспект 10 минут перед сном. Мозг доделает остальное, пока ты спишь.",
       "Закрой лишние вкладки. Я вижу, их там много.",
-      "Зажми меня подольше — откроется быстрое меню: тема, лёгкий режим, профиль.",
+      "Зажми меня подольше — откроется быстрое меню: тема и лёгкий режим.",
     ];
   }
 }
@@ -378,27 +378,34 @@ export function OwlAssistant() {
   const bottom = `calc(${TABBAR_H + 12}px + var(--safe-bottom))`;
 
   // Быстрое меню по зажатию совы: кнопки дугой слева-сверху. Можно, не отпуская палец, довести до кнопки и отпустить,
-  // а можно отпустить и нажать кнопку. Только то, чего нет во вкладках (дедлайн, план и журнал убраны по просьбе владельца):
-  // профиль, тема, облегчённый режим (с перезапуском) и ярлык на экран телефона — если Telegram умеет и ярлыка ещё нет.
+  // а можно отпустить и нажать кнопку. Только то, чего нет во вкладках (дедлайн, план, журнал и профиль убраны по просьбе
+  // владельца): тема, облегчённый режим (с перезапуском) и ярлык на экран телефона — если Telegram умеет и ярлыка ещё нет.
+  // Дуга небольшая, чтобы не тянуть палец далеко; вибрация — самая лёгкая (selectionChanged): открытие, наведение, выбор.
   const items = [
-    { key: "profile", label: "Профиль", Icon: UserRound, run: () => push({ name: "profile" }) },
     { key: "theme", label: dark ? "Светлая" : "Тёмная", Icon: dark ? Sun : Moon, run: () => setScheme(dark ? "light" : "dark") },
     { key: "lite", label: lite ? "Обычный режим" : "Лёгкий режим", Icon: lite ? Sparkles : Feather, run: () => setLite(!lite) },
     ...(homeScreen === "missed" || homeScreen === "unknown"
       ? [{ key: "home", label: "На экран", Icon: Smartphone, run: () => { addToHomeScreen(); setHomeScreen("added"); } }] : []),
   ];
-  const R = 140;
-  const spot = (i: number) => { const a = Math.PI - (i / (items.length - 1)) * (Math.PI / 2); return { x: R * Math.cos(a), y: -R * Math.sin(a) }; };
+  // Две кнопки — дуга 160°…105° радиусом 96: при 180°…90° подпись левой ложится на вкладки, а верхней — за край экрана.
+  // Три (на телефоне есть «На экран») — дуга шире и радиус 120, иначе соседние кнопки и подписи налезают друг на друга.
+  const three = items.length > 2;
+  const R = three ? 120 : 96;
+  const A0 = ((three ? 172 : 160) * Math.PI) / 180, A1 = ((three ? 98 : 105) * Math.PI) / 180;
+  const spot = (i: number) => {
+    const a = items.length > 1 ? A0 - (i / (items.length - 1)) * (A0 - A1) : (A0 + A1) / 2;
+    return { x: R * Math.cos(a), y: -R * Math.sin(a) };
+  };
   const closeMenu = () => { setMenu(false); setHover(null); hoverRef.current = null; };
-  const runItem = (i: number) => { haptic.tap(); closeMenu(); items[i].run(); };
+  const runItem = (i: number) => { haptic.select(); closeMenu(); items[i].run(); };
   const onDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* старый WebView */ }
     const timer = window.setTimeout(() => {
       if (!press.current) return;
       press.current.long = true;
-      haptic.success();
+      haptic.select();
       setOpen(false); setMenu(true); setHover(null); hoverRef.current = null;
-    }, 450);
+    }, 350); // короче — обычное нажатие начнёт открывать меню
     press.current = { x: e.clientX, y: e.clientY, long: false, timer };
   };
   const onMove = (e: React.PointerEvent<HTMLButtonElement>) => {
