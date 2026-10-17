@@ -23,8 +23,14 @@ const TTL = 10 * 60e3;           // одну ленту пересобираем
 const CAL_DATA_MS = 2 * 3600e3;  // дедлайны для ленты: уже прочитанные не старше этого — без нового чтения Moodle (см. collect)
 const DAY = 864e5;
 
-/** Постоянный адрес для подписки («https://….ngrok-free.dev») или "" — тогда подписки нет. */
-export const stableBase = () => readFile(BASE_FILE, "utf8").then((t) => t.replace(/^\uFEFF/, "").trim().replace(/[/]+$/, ""), () => "");
+/**
+ * Постоянный адрес для подписки («https://….ngrok-free.dev») или "" — тогда подписки нет.
+ * Переменная CAL_BASE (17 окт 2026, VPS) перекрывает calendar-base.txt: ngrok не пускает агентов с российских IP,
+ * и на сервере CAL_BASE пустая — приложение предлагает разовый файл, а не подписку на мёртвый адрес.
+ */
+export const stableBase = () => (process.env.CAL_BASE !== undefined
+  ? Promise.resolve(process.env.CAL_BASE.trim().replace(/[/]+$/, "")) : fileBase());
+const fileBase = () => readFile(BASE_FILE, "utf8").then((t) => t.replace(/^\uFEFF/, "").trim().replace(/[/]+$/, ""), () => "");
 
 // ---------- формат iCalendar ----------
 const esc = (s) => String(s ?? "").replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");

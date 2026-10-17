@@ -30,5 +30,13 @@ check("срок 00:00 — событие кончается в 23:59 накан�
 check("тест: «Тест до», перевод строки в названии экранирован, ссылка на Moodle на месте", unfolded.includes("SUMMARY:Тест до: Тест 1\\nвторая строка · Английский") && unfolded.includes("DTEND:20261007T153000Z") && unfolded.includes("URL:https://newlms.misis.ru/mod/quiz/view.php?id=9"));
 check("пары занимают время, сроки — нет (не мешают расписанию)", (unfolded.match(/TRANSP:OPAQUE/g) || []).length === 2 && (unfolded.match(/TRANSP:TRANSPARENT/g) || []).length === 2);
 check("событий четыре, у каждого есть метка, начало, конец и отметка времени", (unfolded.match(/BEGIN:VEVENT/g) || []).length === 4 && (unfolded.match(/DTSTAMP:20261004T100000Z/g) || []).length === 4 && (unfolded.match(/^UID:/gm) || []).length === 4);
+// Постоянный адрес подписки: CAL_BASE перекрывает calendar-base.txt (VPS: ngrok не работает — пусто, подписки нет).
+delete process.env.CAL_BASE;
+check("без CAL_BASE адрес берётся из calendar-base.txt", /^https:\/\/\S+[^/]$/.test(await cal.stableBase()), await cal.stableBase());
+process.env.CAL_BASE = "";
+check("CAL_BASE пустая — постоянного адреса нет (приложение предложит разовый файл)", (await cal.stableBase()) === "");
+process.env.CAL_BASE = " https://cal.example.org/ ";
+check("CAL_BASE задана — она и есть адрес (без пробелов и слэша на конце)", (await cal.stableBase()) === "https://cal.example.org");
+delete process.env.CAL_BASE;
 console.log(fails ? `ИТОГ: провалено ${fails}` : "ИТОГ: всё прошло");
 process.exit(fails ? 1 : 0);

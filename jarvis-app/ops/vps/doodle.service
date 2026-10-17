@@ -28,6 +28,9 @@ Environment=GUARD_WATCH=0
 # Обход VPN через route print — на VPS VPN нет, ходим обычным маршрутом.
 Environment=MOODLE_DIRECT=0
 Environment=PYTHON=/usr/bin/python3
+# Адрес подписки на календарь: пусто — постоянного адреса нет, приложение даёт разовый файл (ngrok с российских IP не
+# работает, calendar-base.txt ведёт на мёртвый домен). Появится домен — вписать: Environment=CAL_BASE=https://<домен>
+Environment=CAL_BASE=
 # Агента лаб здесь нет: действия, которые его зовут, отвечают «Лабы временно недоступны» (server.mjs labsOff).
 # Убрать строку, когда сервер научится отдавать лабы исполнителю.
 Environment=LABS_OFF=1
