@@ -1,5 +1,5 @@
 import { Bell, BookOpen, CalendarPlus, ChevronRight, Download, Gauge, GraduationCap, LogOut, MessageSquareText, ShieldCheck, Sparkles, Users } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GroupPicker } from "../components/GroupPicker";
 import { Tile, TileLabel } from "../components/Tile";
 import { toast } from "../components/Toast";
@@ -66,12 +66,26 @@ export function ProfileScreen() {
   const [pick, setPick] = useState(false);
   const { subgroup, setSubgroup } = useSchedule();
   const [variant, setVariantText] = useState(profile?.variant ?? "");
+  // Последнее отправленное значение: не шлём одно и то же дважды (уход с поля и закрытие экрана сразу за ним).
+  const sent = useRef(profile?.variant ?? "");
   const saveVariant = async () => {
     const v = variant.trim();
-    if (v === (profile?.variant ?? "")) return;
+    if (v === sent.current) return;
+    const prev = sent.current;
+    sent.current = v;
     try { await setVariant(v); haptic.success(); toast(v ? `Вариант ${v} сохранён` : "Вариант очищен"); }
-    catch (e) { haptic.warning(); toast((e as Error).message); }
+    catch (e) { sent.current = prev; haptic.warning(); toast((e as Error).message); }
   };
+  // Ушли с экрана, не покинув поле (сразу «Назад» Telegram; на Android первая системная «Назад» лишь прячет клавиатуру),
+  // — blur не приходит, и вариант терялся (проверка 15 окт). Сохраняем при закрытии экрана; тост общий — виден и после.
+  const typed = useRef(variant);
+  typed.current = variant;
+  useEffect(() => () => {
+    const v = typed.current.trim();
+    if (v === sent.current) return;
+    sent.current = v;
+    void useAuth.getState().setVariant(v).then(() => toast(v ? `Вариант ${v} сохранён` : "Вариант очищен")).catch(() => { /* экран закрыт (или это выход из Moodle) — молча; вариант можно ввести снова */ });
+  }, []);
 
   // Согласие делиться замечаниями преподавателя: выключение сразу убирает их из общей базы на сервере.
   const [sharing, setSharing] = useState(false);
@@ -141,7 +155,7 @@ export function ProfileScreen() {
           </div>
         </Tile>
       )}
-      {profile?.labsAllowed && (
+      {(profile?.labsAllowed || profile?.labTrial) && (
         <Tile index={2} className="!min-h-0 py-3">
           <div className="flex items-center justify-between gap-3">
             <TileLabel className="shrink-0">Вариант</TileLabel>

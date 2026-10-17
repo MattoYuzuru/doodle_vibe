@@ -1,6 +1,6 @@
 import { m } from "framer-motion";
 import { Check, ExternalLink, FileSearch, Flag, Pencil, Sparkles, Trash2, Undo2 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { apiBase, assignIdOf, labApi } from "../store/api";
 import { useAuth } from "../store/auth";
 import { LabProgressCard } from "../components/LabProgressCard";
@@ -16,6 +16,7 @@ import { useNow } from "../hooks/useNow";
 import { useMainButton } from "../hooks/useTelegramButtons";
 import { useUi } from "../hooks/useUi";
 import { effectiveDue, elapsedParts, leftParts, mskParts } from "../lib/dates";
+import { canOpenLab, labErrorText, labGate, onLabDenied } from "../lib/labGate";
 import { subjectOf, useAppStore } from "../store/useAppStore";
 import { kindOf } from "../theme/kinds";
 import { spring } from "../theme/motion";
@@ -40,21 +41,32 @@ function fmtMoment(ms: number) {
 /** Детали дедлайна: отсчёт, срок, предмет, напоминание; «Отметить сданным», изменить, удалить. */
 export function DeadlineDetailsScreen({ id }: { id: string }) {
   const { deadlines, subjects, updateDeadline, deleteDeadline } = useAppStore();
-  const { push, pop } = useNav();
+  const push = useNav((s) => s.push), pop = useNav((s) => s.pop);
   const now = useNow();
-  const d = deadlines.find((x) => x.id === id);
+  const found = deadlines.find((x) => x.id === id);
+  // Уезжающий экран (проверка 15 окт): после «Удалить» дедлайна в сторе уже нет, а экран ещё ~0,4 с уезжает — без снимка
+  // он на глазах превращался в «Дедлайн не найден». Снимок — только после своего удаления: если дедлайн пропал из Moodle,
+  // пока карточка открыта, честно показываем «не найден».
+  const last = useRef(found);
+  if (found) last.current = found;
+  const done = useRef(false); // карточку удалили и закрываем: повторные нажатия ничего не делают
+  const d = found ?? (done.current ? last.current : undefined);
   const close = () => { useUi.setState({ exitDir: 1 }); pop(); };
 
   const toggleDone = () => {
-    if (!d) return;
+    if (!d || done.current) return;
     const reopen = d.status === "done";
     updateDeadline(d.id, { status: reopen ? "open" : "done" });
     haptic.success();
     toast(reopen ? "Возвращено в активные" : "Отмечено сданным");
   };
-  // Лабы с агентом — только по белому списку (тратят подписку владельца). Для несданных заданий Moodle системная кнопка ведёт к отчёту.
-  const labsOk = useAuth((s) => s.profile?.labsAllowed ?? false);
+  // Лабы с агентом — по белому списку (тратят подписку владельца) или один пробный отчёт новому пользователю (lib/labGate.ts).
+  // Для несданных заданий Moodle системная кнопка ведёт к отчёту.
   const profile = useAuth((s) => s.profile);
+  const gate = labGate(profile, d ? assignIdOf(d.id) : null);
+  // Пробный начинается только на несданной работе Moodle; своя пробная и полный доступ — как раньше.
+  const labsOk = !!d && (gate === "full" || gate === "trial-own" || (gate === "trial-offer" && d.status !== "done" && d.source === "moodle"));
+  const fullLabs = gate === "full";
   const requestAccess = async () => {
     haptic.tap();
     try { await useAuth.getState().requestLabAccess(); toast("Запрос отправлен владельцу"); }
@@ -73,19 +85,22 @@ export function DeadlineDetailsScreen({ id }: { id: string }) {
       await labApi.fix(aid, { title: d.title, course: subjectOf(subjects, d.subjectId)?.name ?? "", due: d.due });
       haptic.success();
       push({ name: "lab", id: d.id });
-    } catch (e) { haptic.warning(); toast((e as Error).message); }
+    } catch (e) { haptic.warning(); onLabDenied((e as Error).message); toast(labErrorText((e as Error).message)); }
     finally { setFixing(false); }
   };
   const labId = d && d.status !== "done" && labsOk ? assignIdOf(d.id) : null;
   const nativeButton = useMainButton(labId ? "Сделать отчёт" : d?.status === "done" ? "Вернуть в активные" : "Отметить сданным",
-    () => (labId && d ? push({ name: "lab", id: d.id }) : toggleDone()), !!d);
+    () => { if (done.current) return; if (labId && d) push({ name: "lab", id: d.id }); else toggleDone(); }, !!found);
 
   if (!d) return <EmptyState icon={Flag} title="Дедлайн не найден" text="Возможно, он уже удалён." action="Назад" onAction={close} />;
   const s = subjectOf(subjects, d.subjectId), kind = kindOf(d.kind), u = urgencyOf(d, now);
   const overdue = effectiveDue(d.due) <= now;
   const remove = async () => {
+    if (done.current) return;
+    done.current = true; // пока открыт вопрос, второе нажатие не откроет второй
     haptic.warning();
     if (await confirmDialog(`Удалить «${d.title}»?`)) { deleteDeadline(d.id); toast("Удалено"); close(); }
+    else done.current = false;
   };
   // Через страницу-прокладку сервера (/go/moodle): открывает приложение Moodle, а если его нет — сайт.
   const openMoodle = () => {
@@ -128,9 +143,12 @@ export function DeadlineDetailsScreen({ id }: { id: string }) {
         <p className="mt-3 text-m font-semibold">{fmtFull(d.due)}</p>
       </m.section>
 
-      {/* Комментарий преподавателя из Moodle; кнопка исправления — только тем, кому открыты отчёты с агентом. */}
+      {/* Отчёт с агентом — сразу под сроком (16 окт): пока не начат, карточка объясняет, что будет, и даёт кнопку; потом — ход работы. */}
+      {labsOk && canOpenLab(gate) && assignIdOf(d.id) && <LabProgressCard assignId={assignIdOf(d.id)!} offer={d.status !== "done"} trial={gate === "trial-offer"} onOpen={() => push({ name: "lab", id: d.id })} />}
+
+      {/* Комментарий преподавателя из Moodle; кнопка исправления — с полным доступом или в своей пробной лабе (пробный она не занимает). */}
       <TeacherRemarks remarks={d.remarks ?? []} submission={d.submission} busy={fixing}
-        onFix={labsOk && assignIdOf(d.id) ? fixReport : undefined} onOpenLab={labsOk && assignIdOf(d.id) ? () => push({ name: "lab", id: d.id }) : undefined} />
+        onFix={(fullLabs || gate === "trial-own") && assignIdOf(d.id) ? fixReport : undefined} onOpenLab={labsOk && assignIdOf(d.id) ? () => push({ name: "lab", id: d.id }) : undefined} />
 
       <Tile index={1} className="min-h-0 py-1">
         <div className="flex min-h-12 items-center justify-between border-b border-separator"><TileLabel>Предмет</TileLabel><span className="text-m font-semibold">{s?.short ?? "—"}</span></div>
@@ -141,8 +159,10 @@ export function DeadlineDetailsScreen({ id }: { id: string }) {
         )}
         {d.opensAt && <div className={`flex min-h-12 items-center justify-between ${d.status !== "done" ? "border-b border-separator" : ""}`}><TileLabel>Открыт с</TileLabel><span className="text-m font-semibold">{fmtMoment(d.opensAt)}</span></div>}
         {d.status !== "done" && (
-          <div className="flex min-h-12 items-center justify-between gap-3"><TileLabel className="shrink-0">Напомнить за</TileLabel>
-            <div className="flex gap-1">
+          // Переносится (проверка 15 окт): на 320 px подпись и три кнопки не влезали, и плитка срезала «Нет». После переноса
+          // кнопки стоят справа (ml-auto), как в широкой раскладке.
+          <div className="flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-2 py-2"><TileLabel className="shrink-0">Напомнить за</TileLabel>
+            <div className="ml-auto flex gap-1">
               {(["day", "3h", "none"] as const).map((r) => (
                 <button key={r} onClick={() => { haptic.select(); updateDeadline(d.id, { reminder: r }); }} aria-pressed={d.reminder === r}
                   className={`min-h-9 rounded-full px-3 text-s font-bold whitespace-nowrap transition-colors ${d.reminder === r ? "bg-accent text-on-accent" : "bg-raised text-hint"}`}>{REMINDER[r]}</button>
@@ -154,21 +174,22 @@ export function DeadlineDetailsScreen({ id }: { id: string }) {
       {/* Свой PDF с телефона — сразу в ответ Moodle (у всех вошедших, агент не нужен). */}
       <SubmitOwnFile deadline={d} index={2} />
 
-      {labsOk && assignIdOf(d.id) && <LabProgressCard assignId={assignIdOf(d.id)!} onOpen={() => push({ name: "lab", id: d.id })} />}
-      {/* Отчёты по белому списку: без доступа — кнопка запроса владельцу (один раз). */}
+      {/* Отчёты по белому списку: без доступа (или после пробного) — кнопка запроса владельцу (один раз). */}
       {!labsOk && assignIdOf(d.id) && d.status !== "done" && d.source === "moodle" && (
-        <button onClick={requestAccess} disabled={!!profile?.labRequest} className="glass flex min-h-12 items-center justify-center gap-2 rounded-2xl text-m font-bold text-accent disabled:opacity-60">
-          <Sparkles size={18} strokeWidth={2.5} /> {profile?.labRequest ? "Запрос на отчёты отправлен" : "Запросить доступ к отчётам"}
-        </button>
+        <div className="flex flex-col gap-2">
+          {gate === "trial-used" && typeof profile?.labTrial === "object" && profile.labTrial && (
+            <p className="px-1 text-s text-hint">
+              {profile.labTrial.closed ? "Пробный отчёт закрыт владельцем." : profile.labTrial.otherAccount ? "Пробный отчёт привязан к другой учётной записи Moodle."
+                : `Пробный отчёт уже использован${profile.labTrial.title ? ` — «${profile.labTrial.title}»` : ""}.`} Чтобы делать отчёты дальше, запросите доступ.
+            </p>
+          )}
+          <button onClick={requestAccess} disabled={!!profile?.labRequest} className="glass flex min-h-12 items-center justify-center gap-2 rounded-2xl text-m font-bold text-accent disabled:opacity-60">
+            <Sparkles size={18} strokeWidth={2.5} /> {profile?.labRequest ? "Запрос на отчёты отправлен" : "Запросить доступ к отчётам"}
+          </button>
+        </div>
       )}
-      {/* Вне Telegram системной кнопки нет — рисуем свою; в Telegram «Сделать отчёт» — это главная кнопка внизу. */}
-      {labsOk && assignIdOf(d.id) && !nativeButton && d.status !== "done" && (
-        <button onClick={() => push({ name: "lab", id: d.id })} className="flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-accent text-m font-bold text-on-accent">
-          <Sparkles size={18} strokeWidth={2.5} /> Сделать отчёт
-        </button>
-      )}
-      {/* Свой отчёт — на проверку агенту до сдачи: оформление, требования задания, прежние замечания преподавателя. */}
-      {labsOk && assignIdOf(d.id) && (
+      {/* Свой отчёт — на проверку агенту до сдачи: оформление, требования задания, прежние замечания преподавателя. Только полный доступ. */}
+      {fullLabs && assignIdOf(d.id) && (
         <button onClick={() => { haptic.select(); push({ name: "check", id: d.id }); }} className="glass flex min-h-12 items-center justify-center gap-2 rounded-2xl text-m font-bold text-accent">
           <FileSearch size={18} strokeWidth={2.5} /> Проверить свой отчёт
         </button>

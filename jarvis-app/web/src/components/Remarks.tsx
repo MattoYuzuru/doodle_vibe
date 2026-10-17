@@ -22,7 +22,8 @@ function RemarkBody({ r, open, dim }: { r: Remark; open: boolean; dim?: boolean 
         {r.state && <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${STATE[r.state].cls}`}>{STATE[r.state].label}</span>}
         <span>{[r.author ?? "Отзыв к оценке", when(r.at)].filter(Boolean).join(" · ")}</span>
       </p>
-      <p className={`mt-1 whitespace-pre-line text-s leading-[19px] ${open ? "" : "line-clamp-6"}`}>{r.text}</p>
+      {/* wrap-anywhere: длинная ссылка в замечании переносится, а не уводит экран вбок (проверка 15 окт). */}
+      <p className={`mt-1 whitespace-pre-line wrap-anywhere text-s leading-[19px] ${open ? "" : "line-clamp-6"}`}>{r.text}</p>
     </div>
   );
 }

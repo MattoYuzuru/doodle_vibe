@@ -12,8 +12,10 @@ import { haptic } from "../telegram/webapp";
  * month и total — справочная оценка в долларах по ценам API.
  */
 interface UsageUser { tgId: number; month: number; total: number; monthTok: number; totalTok: number; calls: number; labs: number; monthLabs: number; last: string | null; limit: number | null; own: boolean; name: string | null; username: string | null; group: string | null; isOwner: boolean }
-interface UsageLab { tgId: number; id: string; tok: number; raw: number; usd: number; calls: number; kinds: Record<string, number>; kindsTok: Record<string, number>; last: string | null; title: string | null; course: string | null; name: string | null }
-interface UsageData { month: string; defaultLimit: number | null; users: UsageUser[]; labs: UsageLab[]; monthTotal: number; total: number; monthTok: number; totalTok: number; monthRaw: number; totalRaw: number; other: Record<"chat" | "service", { monthTok: number; totalTok: number }>; labsCount: number; avgLab: number | null; avgLabTok: number | null; limitsBroken?: boolean; source: "transcripts" | "reported" }
+interface UsageLab { tgId: number; id: string; tok: number; raw: number; usd: number; calls: number; kinds: Record<string, number>; kindsTok: Record<string, number>; last: string | null; title: string | null; course: string | null; name: string | null; trial?: boolean }
+/** Пробные отчёты новых пользователей (lab-trial.mjs, на Opus 5.5): сколько их, сколько стоили, предел на одну. */
+interface UsageTrials { count: number; tok: number; usd: number; monthTok: number; budgetMTok: number }
+interface UsageData { month: string; defaultLimit: number | null; users: UsageUser[]; labs: UsageLab[]; monthTotal: number; total: number; monthTok: number; totalTok: number; monthRaw: number; totalRaw: number; other: Record<"chat" | "service", { monthTok: number; totalTok: number }>; labsCount: number; avgLab: number | null; avgLabTok: number | null; limitsBroken?: boolean; source: "transcripts" | "reported"; trials?: UsageTrials }
 
 const usd = (x: number) => `$${x.toFixed(2).replace(".", ",")}`;
 /** Расход: «4,5 млн», «350 тыс.», «900» */
@@ -94,9 +96,11 @@ export function UsageScreen() {
 
           <Tile index={1} className="!min-h-0 py-3">
             <TileLabel>Общий лимит на пользователя в месяц</TileLabel>
-            <div className="mt-2 flex items-center gap-2">
+            {/* Строка переносится, у поля — не меньше 7rem (проверка 15 окт): на 320–360 px поле сжималось до нуля, и
+                набранного числа не было видно; теперь кнопки уходят на вторую строку. */}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               <input value={common} onChange={(e) => setCommon(e.target.value)} inputMode="decimal" placeholder="без лимита" aria-label="Общий лимит, миллионов токенов в месяц"
-                className="min-h-11 min-w-0 flex-1 rounded-xl bg-raised px-3 text-m font-semibold outline-none" />
+                className="min-h-11 min-w-[7rem] flex-1 rounded-xl bg-raised px-3 text-m font-semibold outline-none" />
               <span className="shrink-0 text-s font-bold text-hint">млн токенов</span>
               <button onClick={() => save(null, common)} disabled={busy} className="min-h-11 rounded-xl bg-accent px-4 text-m font-bold text-on-accent disabled:opacity-50">Сохранить</button>
             </div>
@@ -131,9 +135,9 @@ export function UsageScreen() {
                       <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-raised"><div className="h-full rounded-full" style={{ width: `${(u.limit === 0 ? 1 : share) * 100}%`, background: color }} /></div>
                     )}
                     {edit === u.tgId ? (
-                      <div className="mt-2.5 flex items-center gap-2">
+                      <div className="mt-2.5 flex flex-wrap items-center gap-2">
                         <input value={personal} onChange={(e) => setPersonal(e.target.value)} inputMode="decimal" autoFocus placeholder="как у всех" aria-label="Личный лимит, миллионов токенов в месяц"
-                          className="min-h-10 min-w-0 flex-1 rounded-xl bg-raised px-3 text-m font-semibold outline-none" />
+                          className="min-h-10 min-w-[7rem] flex-1 rounded-xl bg-raised px-3 text-m font-semibold outline-none" />
                         <span className="shrink-0 text-[12px] font-bold text-hint">млн токенов</span>
                         <button onClick={() => save(u.tgId, personal)} disabled={busy} className="min-h-10 rounded-xl bg-accent px-3 text-s font-bold text-on-accent disabled:opacity-50">Сохранить</button>
                         <button onClick={() => setEdit(null)} className="min-h-10 rounded-xl bg-raised px-3 text-s font-bold">Отмена</button>
@@ -164,13 +168,24 @@ export function UsageScreen() {
             </Tile>
           )}
 
+          {d.trials && d.trials.count > 0 && (
+            <Tile index={d.users.length + 3} className="!min-h-0 py-3">
+              <TileLabel>Пробные отчёты новых пользователей</TileLabel>
+              <div className="mt-1.5 flex items-baseline justify-between gap-3">
+                <span className="text-s font-semibold">{d.trials.count} {d.trials.count === 1 ? "отчёт" : d.trials.count < 5 ? "отчёта" : "отчётов"} · в среднем {tok(Math.round(d.trials.tok / d.trials.count))}</span>
+                <span className="shrink-0 text-s font-bold tabular">{tok(d.trials.monthTok)}<span className="pl-1.5 font-semibold text-hint">всего {tok(d.trials.tok)}</span></span>
+              </div>
+              <p className="mt-2 text-[12px] font-semibold text-hint">Идут на Opus 5.5 (его токены — с весом ×2). Предел на один пробный — {d.trials.budgetMTok} млн; меняется в lab-trial.json на ПК. Входят и в расход этих пользователей выше.</p>
+            </Tile>
+          )}
+
           {d.labs.length > 0 && <TileLabel className="px-1 pt-1">Работы за всё время — от тяжёлых к лёгким{d.labsCount > d.labs.length ? ` (первые ${d.labs.length})` : ""}</TileLabel>}
           {d.labs.length > 0 && (
             <Tile index={d.users.length + 3} className="!min-h-0 py-1">
               {d.labs.map((l, i) => (
                 <div key={`${l.tgId}:${l.id}`} className={`flex items-start justify-between gap-3 py-2.5 ${i ? "border-t border-separator" : ""}`}>
                   <div className="min-w-0">
-                    <p className="truncate text-m font-semibold">{l.title ?? `Задание ${l.id}`}</p>
+                    <p className="truncate text-m font-semibold">{l.trial && <span className="mr-1.5 rounded-full bg-accent/15 px-2 py-0.5 align-middle text-[12px] font-bold text-accent">пробный</span>}{l.title ?? `Задание ${l.id}`}</p>
                     <p className="truncate text-s text-hint">{[l.name ?? `id ${l.tgId}`, dayOf(l.last), `${l.calls} обращений к модели`].filter(Boolean).join(" · ")}</p>
                     {(Object.keys(l.kindsTok).length > 1 || !l.kindsTok.lab) && (
                       <p className="truncate text-[12px] font-semibold text-hint">{Object.entries(l.kindsTok).map(([k, v]) => `${KIND[k] ?? k} ${tok(v)}`).join(" · ")}</p>

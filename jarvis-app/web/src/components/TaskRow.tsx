@@ -1,6 +1,7 @@
 import { AnimatePresence, m } from "framer-motion";
 import { Check } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { lastScrollAt } from "../hooks/useUi";
 import { spring } from "../theme/motion";
 import { haptic } from "../telegram/webapp";
 import type { Task } from "../store/types";
@@ -69,13 +70,25 @@ export function TaskRow({ task, onToggle, onOpen }: { task: Task; onToggle(): vo
     if (!task.done) { haptic.success(); setBurst((b) => b + 1); } else haptic.tap();
     onToggle();
   };
-  const cancel = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
+  // Слушатель прокрутки на время удержания: снять его вместе с таймером.
+  const offScroll = useRef<(() => void) | null>(null);
+  const cancel = () => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    offScroll.current?.();
+    offScroll.current = null;
+  };
+  useEffect(() => () => cancel(), []);
   const onPointerDown = (e: React.PointerEvent) => {
     if (!onOpen) return;
     fired.current = false;
     origin.current = { x: e.clientX, y: e.clientY };
     cancel();
-    timer.current = window.setTimeout(() => { timer.current = null; fired.current = true; haptic.warning(); onOpen(); }, LONG_PRESS_MS);
+    // Касание, которым остановили инерцию, — не удержание (проверка 15 окт): резко пролистал «План», прижал палец, чтобы
+    // остановить, — и через 450 мс открывалось редактирование задачи. По той же причине удержание сбрасывает прокрутка.
+    if (performance.now() - lastScrollAt < 250) return;
+    timer.current = window.setTimeout(() => { cancel(); fired.current = true; haptic.warning(); onOpen(); }, LONG_PRESS_MS);
+    window.addEventListener("scroll", cancel, { passive: true, capture: true });
+    offScroll.current = () => window.removeEventListener("scroll", cancel, { capture: true });
   };
   const onPointerMove = (e: React.PointerEvent) => {
     if (timer.current && Math.hypot(e.clientX - origin.current.x, e.clientY - origin.current.y) > 10) cancel();
@@ -85,8 +98,10 @@ export function TaskRow({ task, onToggle, onOpen }: { task: Task; onToggle(): vo
     toggle();
   };
 
+  // Без layout (проверка 15 окт): перестановку строк анимирует обёртка в «Плане», а второй layout-узел на каждой
+  // перерисовке заставлял framer мерить документ — посреди прокрутки и «потянуть вниз».
   return (
-    <m.div layout="position" transition={spring(500, 38)} className="flex min-h-12 items-center gap-3 py-2">
+    <div className="flex min-h-12 items-center gap-3 py-2">
       <Checkbox checked={task.done} onToggle={toggle} label={task.text} burst={burst} />
       <button onClick={tap} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={cancel} onPointerCancel={cancel} onPointerLeave={cancel}
         onContextMenu={(e) => e.preventDefault()} style={{ WebkitTouchCallout: "none" }}
@@ -100,7 +115,7 @@ export function TaskRow({ task, onToggle, onOpen }: { task: Task; onToggle(): vo
         </span>
         {task.time && <span className="block text-s text-hint tabular">{task.time}</span>}
       </button>
-    </m.div>
+    </div>
   );
 }
 

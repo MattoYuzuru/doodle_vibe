@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../store/auth";
 import { api } from "../store/api";
 import { useSchedule } from "../store/schedule";
+import { useSession } from "../store/session";
 import { haptic } from "../telegram/webapp";
 import { fieldClass } from "../screens/TaskForm";
 import { Tile, TileLabel } from "./Tile";
@@ -12,7 +13,8 @@ import { Tile, TileLabel } from "./Tile";
  * если кандидатов несколько или автоопределение не сработало. Список групп — с «Дневача».
  */
 export function GroupPicker() {
-  const { profile, setGroup } = useAuth();
+  const profile = useAuth((s) => s.profile);
+  const setGroup = useAuth((s) => s.setGroup);
   const [candidates, setCandidates] = useState<string[]>(profile?.groupCandidates ?? []);
   const [all, setAll] = useState<string[]>([]);
   const [q, setQ] = useState("");
@@ -20,8 +22,10 @@ export function GroupPicker() {
 
   useEffect(() => {
     // Автоопределение: сервер смотрит группы пользователя в курсах Moodle и сопоставляет с «Дневачом».
+    // По группе строится и «Сессия» (учебный план) — перезагружаем и её (проверка 15 окт).
     api<{ group: string | null; candidates: string[] }>("api/group").then((r) => {
-      if (r.group) { void useAuth.getState().load(); void useSchedule.getState().load(true); }
+      // Сессию — после профиля: useSession.load берёт группу из профиля, а до его обновления там ещё прежняя (нет группы).
+      if (r.group) { void useAuth.getState().load().then(() => useSession.getState().load()); void useSchedule.getState().load(true); }
       setCandidates(r.candidates ?? []);
     }).catch(() => {});
     api<string[]>("api/groups").then(setAll).catch(() => {});
@@ -35,7 +39,7 @@ export function GroupPicker() {
 
   const choose = async (g: string) => {
     haptic.select(); setBusy(true);
-    try { await setGroup(g); await useSchedule.getState().load(true); } finally { setBusy(false); }
+    try { await setGroup(g); void useSession.getState().load(); await useSchedule.getState().load(true); } finally { setBusy(false); }
   };
 
   return (

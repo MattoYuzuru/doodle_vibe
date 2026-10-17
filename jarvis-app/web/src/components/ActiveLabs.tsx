@@ -2,6 +2,7 @@ import { ChevronRight, Sparkles, X } from "lucide-react";
 import { useState } from "react";
 import { usePolling } from "../hooks/usePolling";
 import { useNav } from "../hooks/useNav";
+import { labErrorText, onLabDenied } from "../lib/labGate";
 import { labApi, type LabSummary } from "../store/api";
 import { useAuth } from "../store/auth";
 import { confirmDialog, haptic } from "../telegram/webapp";
@@ -27,17 +28,22 @@ function labelOf(l: LabSummary): { text: string; cls: string; yours: boolean } {
  * студент не собирался): сама лаба и отчёт остаются в карточке работы, а новое действие по лабе вернёт плашку.
  */
 export function ActiveLabs({ index = 1 }: { index?: number }) {
-  const labsOk = useAuth((s) => s.profile?.labsAllowed ?? false);
+  // Полный доступ или начатый пробный отчёт (сервер отдаст только его лабу).
+  const labsOk = useAuth((s) => !!s.profile?.labsAllowed || (typeof s.profile?.labTrial === "object" && !!s.profile?.labTrial));
   const push = useNav((s) => s.push);
   const [labs, setLabs] = useState<LabSummary[]>([]);
   const running = labs.some((l) => l.status === "running");
-  usePolling(() => { labApi.list().then(setLabs).catch(() => { /* оставим прежнее */ }); }, running ? 5000 : 15000, labsOk);
+  // Ответ не изменился — состояние не трогаем (проверка 15 окт): иначе каждый опрос (раз в 5–15 с) перерисовывал
+  // плашку с прогрессом заново, в том числе посреди прокрутки.
+  usePolling(() => {
+    labApi.list().then((next) => setLabs((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next))).catch(() => { /* оставим прежнее */ });
+  }, running ? 5000 : 15000, labsOk);
 
   const dismiss = async (l: LabSummary) => {
     haptic.select();
     if (!(await confirmDialog(`Убрать «${l.title.length > 60 ? `${l.title.slice(0, 60)}…` : l.title}» с Главной? Переписка и отчёт сохранятся — они открываются из карточки работы. В Moodle ничего не изменится.`))) return;
     try { await labApi.dismiss(l.id); setLabs((all) => all.filter((x) => x.id !== l.id)); toast("Убрано с Главной"); }
-    catch (e) { haptic.warning(); toast((e as Error).message); }
+    catch (e) { haptic.warning(); onLabDenied((e as Error).message); toast(labErrorText((e as Error).message)); }
   };
 
   if (!labsOk || !labs.length) return null;

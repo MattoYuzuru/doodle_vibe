@@ -1,0 +1,14 @@
+{
+  "name": "misis-12",
+  "body": {"font": "Times New Roman", "size_pt": 12, "line_spacing": 1.5, "first_indent_cm": 1.25, "align": "justify"},
+  "headings": {
+    "numbering": "1 Название",
+    "h1": {"size_pt": 12, "bold": true, "caps": false, "align": "left", "indent": true, "new_page": false},
+    "h2": {"size_pt": 12, "bold": true, "caps": false, "align": "left", "indent": true, "new_page": false},
+    "h3": {"size_pt": 12, "bold": true, "caps": false, "align": "left", "indent": true, "new_page": false},
+    "structural": {"caps": false, "align": "center", "bold": true, "new_page": false}
+  },
+  "figure": {"word": "Рисунок", "sep": " – ", "align": "center", "size_pt": 11},
+  "table": {"word": "Таблица", "sep": " – ", "caption_align": "left", "size_pt": 12, "header_bold": false},
+  "_from": {}
+}

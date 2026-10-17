@@ -18,7 +18,10 @@ export function Segmented<T extends string>({ value, options, onChange, id }: {
             onClick={() => { if (!active) { haptic.select(); onChange(o.value); } }}
             className={`relative z-10 min-h-10 rounded-full text-s font-bold transition-colors duration-200 ${active ? "text-text" : "text-hint"}`}
           >
-            {active && <m.span layoutId={`seg-${id}`} className="glass-lens -z-10" transition={spring(520, 34)} />}
+            {/* layoutDependency (проверка 15 окт): без неё framer мерил линзу на каждой перерисовке экрана — сбрасывал
+                transform предков (лента вкладок сдвинута) и читал размеры посреди прокрутки. Переезд линзы при смене
+                пункта это не ломает: снимок уходящей линзы берётся при её размонтировании. */}
+            {active && <m.span layoutId={`seg-${id}`} layoutDependency={value} className="glass-lens -z-10" transition={spring(520, 34)} />}
             {o.label}
           </button>
         );

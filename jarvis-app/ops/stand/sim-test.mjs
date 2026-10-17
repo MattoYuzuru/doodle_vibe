@@ -31,13 +31,18 @@ for (const f of readdirSync(APP).filter((x) => x.endsWith(".mjs"))) {
   writeFileSync(join(SIM, f), src);
 }
 cpSync(join(APP, "lab-instruction.md"), join(SIM, "lab-instruction.md"));
+for (const f of ["lab-report-classic.md", "lab-report-kit.md"]) cpSync(join(APP, f), join(SIM, f)); // шаг «собери отчёт» — два способа
+cpSync(join(APP, "assets", "styles"), join(SIM, "assets", "styles"), { recursive: true });           // профили оформления для сборки программой
 for (const f of readdirSync(APP).filter((x) => x.endsWith("-instruction.md") && x !== "lab-instruction.md")) cpSync(join(APP, f), join(SIM, f));
 // Постоянный адрес календаря в стенде — условный; сам туннель ngrok стенд не запускает (CAL_TUNNEL=0).
 writeFileSync(join(SIM, "calendar-base.txt"), "https://cal.example.test");
 cpSync(join(APP, "schedule_xls.py"), join(SIM, "schedule_xls.py"));
+for (const f of ["curriculum_pdf.py", "session_xls.py", "sheet_xls.py"]) cpSync(join(APP, f), join(SIM, f)); // учебный план, расписание сессии, таблицы преподавателей («Сессия»)
 // Программа измерений оформления для «Проверки своего отчёта» (сервер зовёт её из своей папки assets).
 mkdirSync(join(SIM, "assets"), { recursive: true });
 cpSync(join(APP, "assets", "report_check.py"), join(SIM, "assets", "report_check.py"));
+cpSync(join(APP, "assets", "extract_text.py"), join(SIM, "assets", "extract_text.py")); // текст вложений для агента (п. 159)
+cpSync(join(APP, "assets", "welcome"), join(SIM, "assets", "welcome"), { recursive: true }); // ролик приветствия бота
 writeFileSync(join(SIM, "bot-token.txt"), BOT);
 writeFileSync(join(SIM, "current-url.txt"), "https://sim.example.test"); // адрес приложения для кнопок под сообщениями бота
 symlinkSync(join(APP, "node_modules"), join(SIM, "node_modules"), "junction");
@@ -52,8 +57,10 @@ cpSync(join(HERE, "sim-skill-stub.mjs"), join(HOME, ".openclaw", "skills", "mood
 
 // ---------- поддельные Moodle / Telegram / Дневач ----------
 const tgSent = []; // { chat_id, text }
+const tgEph = []; // editEphemeralMessageText и answerCallbackQuery: { method, ...тело запроса }
 const tgButtons = []; // { chat_id, text, url } — кнопки под сообщениями бота
 const tgDocs = []; // документы, отправленные ботом: { chat_id, name, caption }
+const tgUpdates = [], tgAnims = [], tgEdits = []; // сообщения, «написанные боту»; ролики приветствия; правки сообщений (карточки)
 let moodleCalls = 0, moodlePeak = 0, moodleNow = 0;
 const nowS = () => Math.floor(Date.now() / 1000);
 const userOf = (token) => { const m = /^tok-u(\d+)$/.exec(token || ""); return m ? Number(m[1]) : null; };
@@ -61,6 +68,10 @@ const userOf = (token) => { const m = /^tok-u(\d+)$/.exec(token || ""); return m
 const outage = new Map(); // номер пользователя → "network" | "maintenance": Moodle для него «не работает»
 const forumPosts = new Map(); // id курса → темы форума «Объявления» (добавляет тест)
 const extraMods = new Map();  // id курса → модули курса, появившиеся или изменённые по ходу теста: { id, name, modname, at, changed? }
+// Таблицы преподавателей (блок «таблицы курса»): другое название курса, файлы раздела «Ведомости» и кто их скачивал.
+const courseNames = new Map(); // id курса → название
+const courseFiles = new Map(); // id курса → [{ n, id, module, name, path, at }]
+const fileGets = [];           // { n, name, ok }
 const subs = new Map();
 const drafts = new Map(); // черновые области: itemid → { n, name }
 let uploads = 0;
@@ -83,17 +94,49 @@ function statusFor(n, aid) {
     plugins: [{ type: "comments", name: "Отзыв в виде комментария", editorfields: [{ name: "comments", text: st.comment ? `<p>${st.comment}</p>` : "" }] }, { type: "file", name: "Отзыв в виде файла", fileareas: [{ files: [] }] }] } : undefined;
   return { lastattempt: { submission, canedit: st.canedit, gradingstatus: st.graded ? "graded" : "notgraded" }, feedback };
 }
+// Тесты с временем открытия (для уведомления «Тест открыт»): id теста → время открытия, с; quizHeld — время пришло,
+// а преподаватель тест ещё не открыл (Moodle отвечает «недоступен»).
+const quizOpen = new Map(), quizHeld = new Set();
+const quizLocked = (id) => (quizOpen.get(id) ?? 0) > nowS() || quizHeld.has(id);
+// Пройденные тесты (у студента есть завершённая попытка; оценка при этом скрыта — best_grade «оценки нет») и тесты с
+// закрытием в прошлом: id теста → время закрытия, с.
+const quizDone = new Set(), quizClose = new Map();
+const quizClosed = (id) => (quizClose.get(id) ?? Infinity) < nowS();
+// Незавершённая попытка теста: id → "overdue" (просрочена, льготный период — ещё можно отправить) | "abandoned" (брошена,
+// попыток больше нет).
+const quizState = new Map();
 function ws(fn, p, n) {
-  const courses = [1, 2, 3].map((k) => ({ id: n * 10 + k, fullname: `Курс ${n}-${k}. Осень 2026`, hidden: false, lastaccess: nowS() - 3600, startdate: nowS() - 30 * 86400 }));
+  const courses = [1, 2, 3].map((k) => ({ id: n * 10 + k, fullname: courseNames.get(n * 10 + k) ?? `Курс ${n}-${k}. Осень 2026`, hidden: false, lastaccess: nowS() - 3600, startdate: nowS() - 30 * 86400 }));
   // Два курса прошлого семестра: 9 — старый без новых работ («молчит»), 8 — с новой работой в разделе «Должникам» (под вопросом).
   const old = { id: n * 10 + 9, fullname: `Старый курс ${n}. Весна 2026`, hidden: true, lastaccess: nowS() - 100 * 86400, startdate: nowS() - 200 * 86400 };
   const debt = { id: n * 10 + 8, fullname: `Архив ${n}. Весна 2026`, hidden: true, lastaccess: nowS() - 100 * 86400, startdate: nowS() - 200 * 86400 };
   const ids = Object.keys(p).filter((k) => k.startsWith("courseids[")).map((k) => Number(p[k]));
   switch (fn) {
+    // Пакетный вызов мобильного приложения: несколько функций одним запросом (moodle.callMany).
+    case "tool_mobile_call_external_functions": {
+      const responses = [];
+      for (let i = 0; p[`requests[${i}][function]`]; i++) {
+        let args = {}; try { args = JSON.parse(p[`requests[${i}][arguments]`] || "{}"); } catch { /* пустые аргументы */ }
+        const flat = {}, walk = (o, pre) => { for (const [k, v] of Object.entries(o)) { const key = pre ? `${pre}[${k}]` : k; if (v && typeof v === "object") walk(v, key); else flat[key] = v; } };
+        walk(args, "");
+        const r = ws(p[`requests[${i}][function]`], flat, n);
+        responses.push(r && r.exception ? { error: true, exception: JSON.stringify(r) } : { error: false, data: JSON.stringify(r) });
+      }
+      return { responses };
+    }
+    case "mod_quiz_get_quiz_access_information": return { canattempt: true, preventaccessreasons: quizLocked(Number(p.quizid)) ? ["В настоящее время этот тест недоступен"] : quizClosed(Number(p.quizid)) ? ["Этот тест закрыт"] : [] };
+    case "mod_quiz_get_user_attempts": {
+      const q = Number(p.quizid), st = quizDone.has(q) ? "finished" : quizState.get(q);
+      return { attempts: st ? [{ id: q * 10, quiz: q, state: st, timefinish: st === "finished" ? nowS() - 600 : 0, sumgrades: null }] : [] };
+    }
+    case "mod_quiz_get_attempt_access_information": return { isfinished: quizClosed(Number(p.quizid)) || quizState.get(Number(p.quizid)) === "abandoned", preventnewattemptreasons: quizState.has(Number(p.quizid)) ? ["Попыток больше нет"] : [] };
     case "core_webservice_get_site_info": return { userid: 1000 + n, fullname: `Студент ${n} Тестович`, username: `u${n}` };
     case "core_enrol_get_users_courses": return [...courses, old, debt];
     case "core_course_get_contents": return [{ name: "Общее", modules: (extraMods.get(Number(p.courseid)) || []).map((m) => ({ id: m.id, name: m.name, modname: m.modname, visible: 1, uservisible: true, url: `${FAKE}/mod/${m.modname}/view.php?id=${m.id}` })) },
-      { name: "Должникам", modules: [{ id: Number(p.courseid) * 1000 + 1 }] }];
+      { name: "Должникам", modules: [{ id: Number(p.courseid) * 1000 + 1 }] },
+      ...(courseFiles.has(Number(p.courseid)) ? [{ name: "Ведомости", modules: courseFiles.get(Number(p.courseid)).map((f) => ({ id: f.id, name: f.module, modname: "resource", visible: 1, uservisible: true, url: `${FAKE}/mod/resource/view.php?id=${f.id}`,
+        contents: [{ type: "file", filename: f.name, filepath: "/", filesize: readFileSync(f.path).length, timemodified: f.at, mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          fileurl: `${FAKE}/webservice/pluginfile.php/${f.n}/mod_resource/content/1/${encodeURIComponent(f.name)}?forcedownload=1` }] })) }] : [])];
     // Объявления и новые материалы (news.mjs): у первого курса каждого пользователя есть форум «Объявления»; темы и новые
     // модули тест добавляет сам (forumPosts, extraMods).
     case "mod_forum_get_forums_by_courses": return ids.filter((id) => id % 10 === 1).map((id) => ({ id: id * 10 + 5, course: id, type: "news", name: "Объявления", numdiscussions: (forumPosts.get(id) || []).length }));
@@ -105,9 +148,9 @@ function ws(fn, p, n) {
         ...[1, 2, 3, 4].map((k) => ({ id: id * 100 + k, cmid: id * 1000 + k, name: `ЛР${k} пользователя ${n}`, duedate: nowS() + k * 86400 * 3, grade: 5, allowsubmissionsfromdate: nowS() - 86400, timemodified: nowS() - 86400 })),
         // Общие для всех работы 777–779 (один и тот же id у разных студентов, как в настоящем курсе) — с условием и вложением.
         ...(id % 10 === 1 ? [777, 778, 779, 780, 781, 782, 783].map((sid) => ({ id: sid, cmid: id * 1000 + sid, name: `Общая ЛР${sid} пользователя ${n}`, duedate: nowS() + 6 * 86400, grade: 5, allowsubmissionsfromdate: nowS() - 86400, timemodified: nowS() - 86400,
-          intro: `<p>Условие для пользователя ${n}</p>`, introattachments: [{ filename: "metod.txt", fileurl: `${FAKE}/pluginfile/${n}/metod.txt` }], configs: [{ name: "maxfilesubmissions", value: "1" }, ...([777, 779, 781].includes(sid) ? [["enabled", "1"], ["maxfilesubmissions", sid === 777 ? "2" : "1"], ["maxsubmissionsizebytes", sid === 777 ? "2000" : "0"], ["filetypeslist", sid === 777 ? ".pdf" : ""]].map(([name, value]) => ({ plugin: "file", subtype: "assignsubmission", name, value })) : [])], submissiondrafts: sid === 779 ? 0 : 1 })) : []),
+          intro: `<p>Условие для пользователя ${n}</p>`, introattachments: [{ filename: "metod.txt", fileurl: `${FAKE}/pluginfile/${n}/metod.txt` }, ...(sid === 777 ? [{ filename: "lecture.html", fileurl: `${FAKE}/pluginfile/${n}/lecture.html` }] : [])], configs: [{ name: "maxfilesubmissions", value: "1" }, ...([777, 779, 781].includes(sid) ? [["enabled", "1"], ["maxfilesubmissions", sid === 777 ? "2" : "1"], ["maxsubmissionsizebytes", sid === 777 ? "2000" : "0"], ["filetypeslist", sid === 777 ? ".pdf" : ""]].map(([name, value]) => ({ plugin: "file", subtype: "assignsubmission", name, value })) : [])], submissiondrafts: sid === 779 ? 0 : 1 })) : []),
       ] })) };
-    case "mod_quiz_get_quizzes_by_courses": return { quizzes: ids.filter((id) => id % 10 === 1).map((id) => ({ id: id * 100 + 50, course: id, coursemodule: id * 1000 + 50, name: `Тест пользователя ${n}`, timeopen: nowS() - 3600, timeclose: nowS() + 5 * 86400, grade: 10, visible: 1 })) };
+    case "mod_quiz_get_quizzes_by_courses": return { quizzes: ids.filter((id) => id % 10 === 1).map((id) => ({ id: id * 100 + 50, course: id, coursemodule: id * 1000 + 50, name: `Тест пользователя ${n}`, timeopen: quizOpen.get(id * 100 + 50) ?? nowS() - 3600, timeclose: quizClose.get(id * 100 + 50) ?? nowS() + 5 * 86400, grade: 10, visible: 1, timelimit: 300, attempts: 1 })) };
     case "mod_assign_get_submission_status": {
       const aid = Number(p.assignid);
       if (aid >= 777 && aid <= 783) return statusFor(n, aid);
@@ -134,25 +177,60 @@ function ws(fn, p, n) {
     default: return { exception: "x", errorcode: "unknownfn", message: fn };
   }
 }
-const dnevuchPage = () => `<html><script>var groups=[{"number":"БИСТ-24-ПО-2"},{"number":"БИСТ-24-ПО-1"},{"number":"БПМ-23-1"}];\nlet scheduleData = ${JSON.stringify([[{ date: new Date().toISOString().slice(0, 10), time: "09:00 - 10:35", classes: [{ name: "Курс", lessonType: "Лекционные", teacher: "", place: "ауд. 1", subGroup: "" }] }]])};\n</script></html>`;
+// Группа ТЕСТ-26-1 — для бесед (chats.mjs): её расписание задаёт тест (chatSched.days); в официальных файлах МИСИС её нет.
+const chatSched = { days: [] };
+const dnevuchPage = (group) => `<html><script>var groups=[{"number":"БИСТ-24-ПО-2"},{"number":"БИСТ-24-ПО-1"},{"number":"БПМ-23-1"},{"number":"ТЕСТ-26-1"}];\nlet scheduleData = ${group === "ТЕСТ-26-1" ? JSON.stringify([chatSched.days]) : JSON.stringify([[{ date: new Date().toISOString().slice(0, 10), time: "09:00 - 10:35", classes: [{ name: "Курс", lessonType: "Лекционные", teacher: "", place: "ауд. 1", subGroup: "" }] }]])};\n</script></html>`;
+// Беседы: админы — в chatAdmins; беседа из chatMigrate «стала супергруппой» — отправка в неё отвечает ошибкой с новым номером.
+const chatAdmins = new Set(), chatMigrate = new Map();
+let sessionFile = null; // «Сессия»: имя файла расписания экзаменов, когда тест его «опубликовал» на поддельной странице сессии
 const fake = createServer((req, res) => {
   let body = ""; req.on("data", (d) => (body += d));
   req.on("end", async () => {
     const url = new URL(req.url, FAKE);
     const json = (o, code = 200) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
-    if (url.pathname.startsWith("/tg/")) { try { const j = JSON.parse(body || "{}"); if (url.pathname.endsWith("/sendMessage")) { tgSent.push({ chat_id: j.chat_id, text: j.text }); for (const b of j.reply_markup?.inline_keyboard?.flat() || []) tgButtons.push({ chat_id: j.chat_id, text: b.text, url: b.web_app?.url || b.url }); } } catch { /* */ }
+    // Приём сообщений бота (welcome.mjs): сервер забирает очередь tgUpdates; ролик приветствия и правки карточек — в tgAnims и tgEdits.
+    if (url.pathname.endsWith("/getUpdates")) return json({ ok: true, result: tgUpdates.splice(0) });
+    if (url.pathname.endsWith("/getChatMember")) { const j = JSON.parse(body || "{}"); return json({ ok: true, result: { status: chatAdmins.has(j.user_id) ? "administrator" : "member" } }); }
+    if (url.pathname.endsWith("/sendMessage")) { let j = {}; try { j = JSON.parse(body || "{}"); } catch { /* */ } if (chatMigrate.has(j.chat_id)) return json({ ok: false, error_code: 400, description: "Bad Request: group chat was upgraded to a supergroup chat", parameters: { migrate_to_chat_id: chatMigrate.get(j.chat_id) } }); }
+    if (url.pathname.endsWith("/getMe")) return json({ ok: true, result: { id: 1, is_bot: true, username: "DoodleSimBot", first_name: "Doodle" } });
+    if (url.pathname.endsWith("/sendAnimation")) { // ролик приходит формой (файл) или JSON (номер уже загруженного файла)
+      let j = null; try { j = JSON.parse(body); } catch { /* форма */ }
+      const f = (n) => new RegExp(`name="${n}"\r\n\r\n([\\s\\S]*?)\r\n--`).exec(body)?.[1];
+      let kb = []; try { kb = ((j ? j.reply_markup : JSON.parse(f("reply_markup") || "{}"))?.inline_keyboard || []).flat(); } catch { /* без кнопок */ }
+      tgAnims.push({ chat_id: Number(j ? j.chat_id : f("chat_id")), caption: String((j ? j.caption : f("caption")) || ""), buttons: kb.map((b) => b.text) });
+      return json({ ok: true, result: {} });
+    }
+    // Правка личного ответа в беседе (вкладки, «Обновить») и ответ на нажатие — запоминаем для проверки бесед.
+    if (url.pathname.endsWith("/editEphemeralMessageText") || url.pathname.endsWith("/answerCallbackQuery")) { try { tgEph.push({ method: url.pathname.split("/").pop(), ...JSON.parse(body || "{}") }); } catch { /* */ } return json({ ok: true, result: true }); }
+    if (url.pathname.endsWith("/editMessageText")) { try { const j = JSON.parse(body || "{}"); tgEdits.push({ chat_id: j.chat_id, text: j.text, message_id: j.message_id, buttons: (j.reply_markup?.inline_keyboard || []).flat().map((b) => b.text) }); } catch { /* */ } return json({ ok: true, result: {} }); }
+    if (url.pathname.startsWith("/tg/")) { try { const j = JSON.parse(body || "{}"); if (url.pathname.endsWith("/sendMessage")) { tgSent.push({ chat_id: j.chat_id, text: j.text, eph: j.ephemeral_message_parameters?.receiver_user_id, ereply: j.reply_parameters?.ephemeral_message_id, ecb: j.ephemeral_message_parameters?.callback_query_id, mode: j.parse_mode }); for (const b of j.reply_markup?.inline_keyboard?.flat() || []) tgButtons.push({ chat_id: j.chat_id, text: b.text, url: b.web_app?.url || b.url, cb: b.callback_data, disabled: !!b.disabled }); } } catch { /* */ }
       if (url.pathname.endsWith("/sendDocument")) { const f = (n) => new RegExp(`name="${n}"\r\n\r\n([^\r]*)`).exec(body)?.[1]; tgDocs.push({ chat_id: Number(f("chat_id")), caption: f("caption"), name: /filename="([^"]*)"/.exec(body)?.[1] }); } return json({ ok: true, result: {} }); }
-    if (url.pathname.startsWith("/dnevuch")) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(dnevuchPage()); }
+    if (url.pathname.startsWith("/dnevuch")) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(dnevuchPage(url.searchParams.get("group"))); }
+    // misis.ru для «Сессии»: страница программ со ссылкой на настоящий учебный план БИСТ-24 (fixtures) и страница сессии.
+    if (url.pathname.startsWith("/eduop")) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(`<a href="/sveden/files/x/Opisanie_09.03.02-BIST-24.plx.pdf">Описание результатов освоения образовательных траекторий 09.03.02-БИСТ-24.plx</a> <a href="/sveden/files/aic/09.03.02-BIST-24.plx.pdf">Учебный план</a>`); }
+    if (url.pathname.endsWith("/09.03.02-BIST-24.plx.pdf")) { res.writeHead(200, { "content-type": "application/pdf" }); return res.end(readFileSync(join(HERE, "fixtures", "09.03.02-BIST-24.plx.pdf"))); }
+    if (url.pathname.startsWith("/session")) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(sessionFile ? `<a href="/files/${sessionFile}">Институт компьютерных наук</a>` : "<p>Информация будет опубликована перед экзаменационной сессией.</p>"); }
+    if (sessionFile && url.pathname === `/files/${sessionFile}`) { res.writeHead(200); return res.end(readFileSync(join(SIM, sessionFile))); }
     if (url.pathname.startsWith("/campus")) return json({ items: [] });
-    const pf = /^\/pluginfile\/(\d+)\/metod\.txt$/.exec(url.pathname);
+    const pf = /^\/pluginfile\/(\d+)\/(metod\.txt|lecture\.html)$/.exec(url.pathname);
     if (pf) { // вложение отдаётся только с токеном того же пользователя
       if (url.searchParams.get("token") !== `tok-u${pf[1]}`) { res.writeHead(403); return res.end("forbidden"); }
-      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }); return res.end(`методичка пользователя ${pf[1]}`);
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      return res.end(pf[2] === "lecture.html" ? `<html><body><h1>Лекция</h1><p>текст лекции пользователя ${pf[1]}</p></body></html>` : `методичка пользователя ${pf[1]}`);
     }
     const sf = /^\/pluginfile\/sub\/(\d+)\/(\d+)\/(.+)$/.exec(url.pathname);
     if (sf) { // сданный файл — только с токеном его владельца
       if (url.searchParams.get("token") !== `tok-u${sf[1]}`) { res.writeHead(403); return res.end("forbidden"); }
       res.writeHead(200, { "content-type": "application/octet-stream" }); return res.end(fileBody(decodeURIComponent(sf[3]), Number(sf[1])));
+    }
+    const xf = /^\/webservice\/pluginfile\.php\/(\d+)\/mod_resource\/content\/\d+\/([^/]+)$/.exec(url.pathname);
+    if (xf) { // таблица курса — только с токеном того же пользователя
+      const ok = url.searchParams.get("token") === `tok-u${xf[1]}`, name = decodeURIComponent(xf[2]);
+      fileGets.push({ n: Number(xf[1]), name, ok });
+      if (!ok) { res.writeHead(403); return res.end("forbidden"); }
+      const f = [...courseFiles.values()].flat().find((x) => x.n === Number(xf[1]) && x.name === name);
+      if (!f) { res.writeHead(404); return res.end("not found"); }
+      res.writeHead(200, { "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }); return res.end(readFileSync(f.path));
     }
     if (url.pathname === "/sim/submit") { // то, что делает скрипт навыка: новый файл заменяет прежние; --final отправляет на проверку
       const j = JSON.parse(body || "{}"), un = userOf(j.token);
@@ -182,6 +260,7 @@ const fake = createServer((req, res) => {
     if (!n) return json({ exception: "moodle_exception", errorcode: "invalidtoken", message: "Ключ недействителен" });
     if (outage.get(n) === "network") return req.socket.destroy();
     if (outage.get(n) === "maintenance") { res.writeHead(503, { "content-type": "text/html" }); return res.end("<html>Site is undergoing maintenance</html>"); }
+    if (outage.get(n) === "blocked") { res.writeHead(403, { "content-type": "text/html" }); return res.end("<html>403 Forbidden</html>"); } // защита перед Moodle отклоняет запросы
     json(ws(p.wsfunction, p, n));
   });
 });
@@ -191,7 +270,12 @@ await new Promise((r) => fake.listen(9911, "127.0.0.1", r));
 const serverLog = join(SIM, "server.log");
 writeFileSync(serverLog, "");
 const child = spawn(process.execPath, ["server.mjs"], { cwd: SIM, windowsHide: true,
-  env: { ...process.env, PORT: String(PORT), HOST: "127.0.0.1", USERPROFILE: HOME, HOME, APPDATA, LOCALAPPDATA: join(SIM, "local"), SIM_AGENT_LOG: AGENT_LOG, PIN_ASSIGNS: "", LAB_RETRY_MS: "300", LAB_REACHED_MS: "4000", LAB_FAKE_SLEEP_FILE: FAKE_SLEEP, LAB_PARALLEL: String(PAR), GATEWAY_URL: FAKE + "/campus", CAL_TUNNEL: "0", BACKUP: "0", RATE_USER_PER_MIN: "2000", PYTHONUSERBASE: join(process.env.APPDATA || "", "Python"), NEWS_EVERY_MS: "1000", MATERIALS_EVERY_MS: "1000", NOTIFY_EVERY_MS: "20000" } });
+  env: { ...process.env, PORT: String(PORT), HOST: "127.0.0.1", USERPROFILE: HOME, HOME, APPDATA, LOCALAPPDATA: join(SIM, "local"), SIM_AGENT_LOG: AGENT_LOG, PIN_ASSIGNS: "", LAB_RETRY_MS: "300", LAB_REACHED_MS: "4000", LAB_FAKE_SLEEP_FILE: FAKE_SLEEP, LAB_PARALLEL: String(PAR), GATEWAY_URL: FAKE + "/campus", CAL_TUNNEL: "0", BACKUP: "0", GUARD_WATCH: "0", RATE_USER_PER_MIN: "2000",
+    // «Сессия»: учебные планы и страница сессии — с поддельного misis.ru; страница сессии проверяется раз в 2 с.
+    MISIS_EDUOP_URL: FAKE + "/eduop/", MISIS_SESSION_URL: FAKE + "/session/", SESSION_REFRESH_MS: "2000", SESSION_TICK_MS: "2000",
+    // Обращения к Moodle: без пауз между запросами и без ночного режима (иначе прогон зависел бы от часа), дедлайны
+    // перечитываются на каждом обходе, опрос тестов раз в 10 с, «Обновить» — до 10 раз в минуту (как раньше).
+    BOT_UPDATES: "1", MOODLE_PACE: "0", MOODLE_NIGHT: "off", MOODLE_FULL_EVERY_MS: "1000", QUICK_EVERY_MS: "10000", QUICK_FULL_EVERY_MS: "10000", MOODLE_STALE_AFTER_MS: "20000", RATE_REFRESH_PER_MIN: "10", QUIZ_OPEN_RETRY_MS: "3000", PYTHONUSERBASE: join(process.env.APPDATA || "", "Python"), NEWS_EVERY_MS: "1000", MATERIALS_EVERY_MS: "1000", NOTIFY_EVERY_MS: "20000", CHATS_TICK_MS: "2000", CHATS_RELAY_MS: "2000", CHATS_QUIET: "off" } });
 const startedAt = Date.now();
 child.stdout.on("data", (d) => appendFileSync(serverLog, d));
 child.stderr.on("data", (d) => appendFileSync(serverLog, d));
@@ -276,7 +360,11 @@ try {
   const own = await api(b, `/api/teachers?course=${nOf(b) * 10 + 1}`);
   check("фаза 4: преподаватели чужого курса → отказ, своего → есть", foreign.s === 404 && own.s === 200 && own.j.teachers[0].name === `Преподаватель ${nOf(b)}`, `чужой=${foreign.s}`);
   check("фаза 4: экран владельца «Доступ к отчётам» закрыт для остальных", (await api(a, "/api/access")).s === 403);
-  check("фаза 4: без белого списка лаба закрыта", (await api(a, "/api/lab/777")).s === 403);
+  {
+    // Без белого списка — только пробный отчёт (lab-trial.mjs): лаба открывается пустой, «Исправить» и сообщения закрыты.
+    const g = await api(a, "/api/lab/777"), msg = await api(a, "/api/lab/777/message", { text: "привет" });
+    check("фаза 4: без белого списка — только пробный: лаба пустая, писать агенту до начала нельзя", g.s === 200 && g.j.status === "idle" && msg.s === 403 && msg.j.error === "trial_start_first", `${g.s} ${g.j?.status} ${msg.s} ${msg.j?.error}`);
+  }
 
   // Фаза 5: перебор паролей
   const bf = 5999; const tries = [];
@@ -289,6 +377,13 @@ try {
   const [outs, stays] = await Promise.all([Promise.all(half.map((id) => api(id, "/api/logout", {}))), Promise.all(rest.map((id) => api(id, "/api/deadlines?refresh")))]);
   const after = await Promise.all(half.map((id) => api(id, "/api/deadlines")));
   check("фаза 6: вышедшие получают 401, остальные — свои данные", outs.every((r) => r.s === 200 && r.j.loggedIn === false) && after.every((r) => r.s === 401) && stays.every((r, i) => r.s === 200 && r.j.items.every((it) => it.title.endsWith(`пользователя ${nOf(rest[i])}`))));
+  {
+    // Пароль журнала (16 окт 2026): у всех вошедших он в файле только зашифрованным, у вышедших — удалён.
+    const raw = (id) => { try { return readFileSync(join(SIM, "users", `${id}.json`), "utf8"); } catch { return ""; } };
+    check("фаза 6: пароль журнала — зашифрован у оставшихся, удалён у вышедших, открытым текстом нигде",
+      rest.every((id) => /"ejCred":\s*"[^"]+"/.test(raw(id))) && half.every((id) => !raw(id).includes("ejCred")) && ids.every((id) => !raw(id).includes(`ok-u${nOf(id)}`)),
+      `оставшиеся с паролем: ${rest.filter((id) => raw(id).includes("ejCred")).length}/${rest.length}, вышедшие с паролем: ${half.filter((id) => raw(id).includes("ejCred")).length}`);
+  }
   const back = await Promise.all(half.map((id) => api(id, "/api/login", { username: `u${nOf(id)}`, password: `ok-u${nOf(id)}` })));
   check("фаза 6: повторный вход возвращает доступ, настройки (вариант, курсы) сохранились", back.every((r, i) => r.s === 200 && r.j.loggedIn && r.j.variant === String(nOf(half[i])).padStart(2, "0") && r.j.courseOverrides[nOf(half[i]) * 10 + 2] === false));
 
@@ -313,6 +408,11 @@ try {
   check("фаза 7: ЗАДАНИЕ.md и вложение у каждого — из ЕГО Moodle", labUsers.every((id) => read(join(labDir(id, 777), "ЗАДАНИЕ.md")).includes(`Условие для пользователя ${nOf(id)}`) && read(join(labDir(id, 777), "metod.txt")) === `методичка пользователя ${nOf(id)}`));
   const turnFiles = labUsers.map((id) => readdirSync(join(labDir(id, 777), "tmp")).filter((f) => f.startsWith("turn-")).map((f) => read(join(labDir(id, 777), "tmp", f))).join("\n"));
   check("фаза 7: в инструкции агенту — ссылка на готовые материалы, токена и команды moodle.mjs нет", turnFiles.every((t) => t.includes("ЗАДАНИЕ.md") && t.includes("`metod.txt`") && !t.includes("tok-u") && !t.includes("moodle.mjs\" details") && !t.includes("{{")));
+  // Текст вложений сервер извлёк сам (п. 159): HTML-лекция → tmp\тексты\, список — в ЗАДАНИЕ.md, агенту — одна строка об этом.
+  check("фаза 7: текст вложения извлечён заранее и назван в ЗАДАНИЕ.md и в ходе агента", labUsers.every((id) => {
+    const txt = read(join(labDir(id, 777), "tmp", "тексты", "lecture.html.txt")), task = read(join(labDir(id, 777), "ЗАДАНИЕ.md"));
+    return txt.includes(`текст лекции пользователя ${nOf(id)}`) && !txt.includes("<p>") && task.includes("## Текст файлов уже извлечён") && task.includes("tmp\\тексты\\lecture.html.txt");
+  }) && turnFiles.every((t) => t.includes("уже извлёк в `tmp\\тексты\\`")), labUsers.map((id) => read(join(labDir(id, 777), "ЗАДАНИЕ.md")).slice(0, 600)).join("\n---\n"));
   check("фаза 7: в файлах заданий нет токена и служебного busy", labUsers.every((id) => { const t = read(join(SIM, "jobs", `${id}-777.json`)); return t && !t.includes("tok-u") && !t.includes('"busy"'); }));
 
   // Ход закончился, агент ждёт студента → сообщение в Telegram с кнопкой, открывающей чат этой лабы.
@@ -351,7 +451,13 @@ try {
 
   // Фаза 9: комментарий преподавателя, «Исправить отчёт», замена файла в Moodle
   const waitJob = async (uid, aid) => { let j = null; for (let i = 0; i < 80; i++) { j = (await api(uid, `/api/lab/${aid}`)).j; if (j.status !== "running") break; await sleep(300); } return j; };
-  const attachOk = async (uid, aid) => { await api(uid, `/api/lab/${aid}/approve`, {}); return api(uid, `/api/lab/${aid}/attach`, {}); };
+  // Статус «отчёт» сервер ставит чуть раньше, чем снимает «занят» (между ними — уведомление в Telegram), а в ответе
+  // «занят» не виден: подтверждение в этот миг получает «Агент ещё работает» — повторяем, как повторил бы человек
+  // (15 окт: три прогона подряд падали на 33 мс этого окна).
+  const attachOk = async (uid, aid) => {
+    for (let i = 0; i < 20; i++) { const r = await api(uid, `/api/lab/${aid}/approve`, {}); if (!/ещё работает/.test(r.j?.error || "")) break; await sleep(150); }
+    return api(uid, `/api/lab/${aid}/attach`, {});
+  };
   const meta = (aid) => ({ title: `Правка ${aid}`, course: "Курс", due: Date.now() + 86400e3 });
   const [fa, fbU, fc] = labUsers;
   const dl9 = (await api(fa, "/api/deadlines?refresh")).j;
@@ -415,6 +521,8 @@ try {
   await api(fbU, "/api/lab/781/fix", meta(781));
   const j2 = await waitJob(fbU, 781);
   const a2 = await attachOk(fbU, 781);
+  // В JOB.json лабы 781 агент записал терминал «по методичке» — это свойство работы, в профиль студента оно не идёт.
+  check("терминал: выбор «по методичке» в профиль студента не записывается", !JSON.parse(read(join(SIM, "users", `${fbU}.json`)) || "{}").terminal);
   check("фаза 9: ответ закрыт для правок → отчёт исправлен, но замена отклонена до загрузки, Moodle не тронут", j2.status === "report" && a2.s === 400 && /не разрешает менять ответ/.test(a2.j.error) && (await api(fbU, "/api/feedback/781")).j.files[0].name === "Отчёт 781.pdf", a2.j?.error);
 
   // 9.3 лаба велась в приложении: отчёт → черновик → замечание → исправление → замена черновика → отправка
@@ -437,6 +545,9 @@ try {
   const tgBeforeQ = tgSent.length;
   await api(fc, "/api/lab/782/message", { text: "вопрос: что написано в разделе 2 отчёта?" });
   const r4 = await waitJob(fc, 782);
+  // Уведомления хода уходят после сохранения статуса (lab.mjs, outbox) — под нагрузкой на доли секунды позже, чем
+  // waitJob видит конец хода (16 окт: проверка упала, когда стенд делил процессор с другими тестами). Ждём до 5 с.
+  for (let i = 0; i < 20 && !tgSent.slice(tgBeforeQ).some((m) => m.chat_id === fc && /отчёт пока не менялся/.test(m.text)); i++) await sleep(250);
   check("ход по готовому отчёту без нового файла → в Telegram ответ агента с пометкой «отчёт пока не менялся»", tgSent.slice(tgBeforeQ).some((m) => m.chat_id === fc && /отчёт пока не менялся/.test(m.text)), tgSent.slice(tgBeforeQ).map((m) => m.text.slice(0, 60)).join(" | "));
   check("круг проверки: вопрос по готовому отчёту файл не меняет → подтверждение не сбрасывается, отчёт заново не шлётся", r4.status === "report" && r4.review === "approved" && r4.messages.filter((m) => m.kind === "report").length === 2 && docs782() === d0 + 1, `${r4.status} ${r4.review}`);
   const a3 = await attachOk(fc, 782);
@@ -501,6 +612,24 @@ try {
   check("сон ПК посреди хода: агент продолжает сам, отчёт получен, в чате честная строка о сне без «отправьте ещё раз»", sl1.status === "report" && cnt(fc, 780) === 2 && sl1.messages.some((m) => m.role === "system" && /уходил в сон \(с \d\d:\d\d до \d\d:\d\d\)/.test(m.text) && /продолжает сам/.test(m.text)) && !sl1.messages.some((m) => /не дошло|не запустился/.test(m.text)) && sl1.messages.filter((m) => m.role === "user").length === 1, `${sl1.status}, вызовов ${cnt(fc, 780)}: ${sl1.messages.map((m) => m.role + ":" + m.text.slice(0, 50)).join(" | ")}`);
   const resumeMsg = lastTurnOf(fc, 780);
   check("сон ПК: агенту при продолжении сказано, что ход оборвался из-за сна и замеры этого времени надо переснять", resumeMsg.includes("[Сообщение приложения, не студента.]") && /ПК был в спящем режиме с \d\d:\d\d до \d\d:\d\d/.test(resumeMsg) && resumeMsg.includes("пересними") && !resumeMsg.includes("tok-u"), resumeMsg.slice(0, 160));
+  { // Терминал для снимков: ответ студента (JOB.json лабы 782) запомнен и подсказан в следующей работе того же курса.
+    const uFile = (id) => { try { return JSON.parse(readFileSync(join(SIM, "users", `${id}.json`), "utf8")); } catch { return {}; } };
+    const cFc = nOf(fc) * 10 + 1, t = uFile(fc).terminal, task = read(join(labDir(fc, 780), "ЗАДАНИЕ.md"));
+    check("терминал: ответ студента запомнен по курсу и подсказан в следующей работе курса; в первой работе подсказки ещё не было",
+      t?.byCourse?.[cFc]?.value === "wsl" && t?.last?.value === "wsl" && task.includes("## Терминал студента") && task.includes("по этому курсу студент сам выбрал: Linux (Ubuntu в WSL)") && task.includes("не переспрашивай")
+      && !read(join(labDir(fc, 782), "ЗАДАНИЕ.md")).includes("Терминал студента"), `${JSON.stringify(t)} | ${/Терминал[^\n]*\n[^\n]*/.exec(task)?.[0] || "нет раздела"}`);
+    // Путь отчёта пишет агент: файл не из папки work\report этой лабы и файл без сигнатуры PDF сервер студенту не показывает.
+    const docsFc = () => tgDocs.filter((d) => d.chat_id === fc).length, d0 = docsFc();
+    writeFileSync(AGENT_LOG + ".badreport", "outside");
+    await api(fc, "/api/lab/780/message", { text: "переделай вывод в разделе 3 отчёта" });
+    const o1 = await waitJob(fc, 780);
+    writeFileSync(AGENT_LOG + ".badreport", "notpdf");
+    await api(fc, "/api/lab/780/message", { text: "переделай вывод в разделе 4 отчёта" });
+    const o2 = await waitJob(fc, 780);
+    check("отчёт вне папки work\\report и файл без сигнатуры PDF не принимаются: студенту понятная строка, в Telegram файл не уходит",
+      o1.status === "waiting" && o1.messages.some((m) => m.role === "system" && m.text.includes("лежит не в папке work\\report")) && o2.status === "waiting" && o2.messages.some((m) => m.role === "system" && m.text.includes("это не PDF")) && docsFc() === d0,
+      `${o1.status}/${o2.status}, документов ${docsFc() - d0}: ${o2.messages.slice(-3).map((m) => m.role + ":" + m.text.slice(0, 60)).join(" | ")}`);
+  }
   // 2) ответ пришёл, но работа не закончена (после сна ход обрывается на полуслове): тоже продолжает сам
   writeFileSync(AGENT_LOG + ".working", "1");
   writeFileSync(FAKE_SLEEP, JSON.stringify({ from: Date.now(), to: Date.now() + 1500 }));
@@ -525,7 +654,7 @@ try {
   // 5) ход оборвался, а агент на стороне Gateway доработал и записал отчёт: он подбирается, когда студент открывает лабу
   const d779 = labDir(fc, 779);
   mkdirSync(join(d779, "work", "report"), { recursive: true });
-  writeFileSync(join(d779, "work", "report", "Отчёт 779.pdf"), "PDF доработан без сервера");
+  writeFileSync(join(d779, "work", "report", "Отчёт 779.pdf"), `%PDF-1.4\n% доработан без сервера\n${" ".repeat(1100)}`);
   writeFileSync(join(d779, "JOB.json"), `{"status": "report", "progress": 100, "stage": "Отчёт готов", "text": "", "pdf": "${join(d779, "work", "report", "Отчёт 779.pdf")}", "docx": null, "pages": 5}`); // пути с одиночными слешами — как пишет агент
   const docsBefore = tgDocs.filter((d) => d.chat_id === fc).length;
   const pk1 = (await api(fc, "/api/lab/779")).j, pk2 = (await api(fc, "/api/lab/779")).j;
@@ -964,6 +1093,77 @@ try {
     check("частота: общий предел на адрес (1500 в минуту) — лишние запросы получают отказ", flood.filter((s) => s === 200).length === 1500 && flood.filter((s) => s === 429).length === 100, `200: ${flood.filter((s) => s === 200).length}, 429: ${flood.filter((s) => s === 429).length}`);
   }
 
+  {
+    // Фаза 11: пробный отчёт нового пользователя (lab-trial.mjs, 16 окт 2026). Свои пользователи 5901 и 5902 (в других фазах
+    // их нет); 5902 входит под той же учёткой Moodle (u901), что и 5901, — второй Telegram того же человека.
+    const OWN = 945210206, t1 = 5901, t2 = 5902;
+    const login = (id, n) => api(id, "/api/login", { username: `u${n}`, password: `ok-u${n}` });
+    const waitLab = async (id, aid, not = "running") => { let j = null; for (let i = 0; i < 60; i++) { j = (await api(id, `/api/lab/${aid}`)).j; if (j && j.status !== not) break; await sleep(300); } return j; };
+    await login(t1, 901);
+    const me0 = (await api(t1, "/api/me")).j;
+    check("фаза 11: новому пользователю положен пробный отчёт, лаба открывается пустой", me0.labsAllowed === false && me0.labTrial === "available" && (await api(t1, "/api/lab/777")).j?.status === "idle", JSON.stringify(me0.labTrial));
+    const fix0 = await api(t1, "/api/lab/777/fix", {}), chk0 = await api(t1, "/api/check/777");
+    check("фаза 11: до начала пробного «Исправить» и «Проверить отчёт» закрыты", fix0.s === 403 && fix0.j.error === "trial_start_first" && chk0.s === 403, `${fix0.s} ${fix0.j?.error} ${chk0.s}`);
+    // Две разные работы разом: пробный один — ровно одна стартует, вторая получает trial_used.
+    const two = await Promise.all([api(t1, "/api/lab/777/start", { title: "ЛР пробная", course: "Курс", due: Date.now() + 86400e3, trial: true }), api(t1, "/api/lab/778/start", { title: "ЛР вторая", course: "Курс", due: Date.now() + 86400e3 })]);
+    const win = two.findIndex((r) => r.s === 200), wid = win === 0 ? "777" : "778", lid = win === 0 ? "778" : "777";
+    check("фаза 11: две работы разом — стартует ровно одна, вторая 403 trial_used", two.filter((r) => r.s === 200).length === 1 && two.some((r) => r.s === 403 && r.j.error === "trial_used"), two.map((r) => `${r.s} ${r.j?.error || ""}`).join(" | "));
+    check("фаза 11: пробная лаба помечена, флаг «проверочный запуск» от клиента не прошёл", two[win]?.j?.viaTrial === true && two[win]?.j?.trial === false && two[win]?.j?.trialModel === undefined, JSON.stringify({ via: two[win]?.j?.viaTrial, trial: two[win]?.j?.trial }));
+    const ledger = JSON.parse(readFileSync(join(SIM, "lab-trials.json"), "utf8"));
+    check("фаза 11: учёт: пробный записан за этой работой, учёткой Moodle и моделью Opus", ledger.trials[t1]?.id === wid && ledger.trials[t1]?.mu === 1901 && ledger.trials[t1]?.model === "claude-cli/claude-opus-5-5", JSON.stringify(ledger.trials[t1]));
+    check("фаза 11: начавшие лабы с полным доступом в учёте «уже пользовались»", labUsers.every((id) => ledger.used.tg[id]), JSON.stringify(ledger.used.tg));
+    const tl = await waitLab(t1, wid);
+    const models = readFileSync(AGENT_LOG, "utf8").split("\n").filter((l) => l.startsWith("model "));
+    check("фаза 11: ход пробной лабы — на Opus (--model), у обычных лаб модель не меняется", tl?.status === "waiting" && models.some((l) => l === `model agent:files:lab-${t1}-${wid} claude-cli/claude-opus-5-5`) && models.every((l) => l.includes(`lab-${t1}-`)), models.join(" | "));
+    const meT = (await api(t1, "/api/me")).j;
+    check("фаза 11: в профиле — пробная лаба по этой работе", meT.labTrial?.id === wid && meT.labsAllowed === false, JSON.stringify(meT.labTrial));
+    const other = await api(t1, `/api/lab/${lid}`), labsT = await api(t1, "/api/labs");
+    check("фаза 11: другая работа закрыта (trial_used), на Главной только пробная", other.s === 403 && other.j.error === "trial_used" && labsT.j.length === 1 && labsT.j[0].id === wid, `${other.s} ${other.j?.error} / ${JSON.stringify(labsT.j?.map((l) => l.id))}`);
+    const msgT = await api(t1, `/api/lab/${wid}/message`, { text: "вариант 01, данные верны" });
+    check("фаза 11: в своей пробной лабе писать агенту можно", msgT.s === 200, `${msgT.s} ${msgT.j?.error || ""}`);
+    await waitLab(t1, wid);
+    // Второй Telegram с той же учёткой Moodle — пробного нет.
+    await login(t2, 901);
+    const me2 = (await api(t2, "/api/me")).j, lab2 = await api(t2, "/api/lab/777");
+    check("фаза 11: второй Telegram с той же учёткой Moodle пробного не получает", me2.labTrial === null && lab2.s === 403 && lab2.j.error === "labs_not_allowed", `${JSON.stringify(me2.labTrial)} ${lab2.s} ${lab2.j?.error}`);
+    // Вход под другой учёткой Moodle тем же Telegram: пробная лаба под ней не ведётся (attach/submit ушли бы в чужой Moodle).
+    await api(t1, "/api/logout", {}); await login(t1, 902);
+    const swap = await api(t1, `/api/lab/${wid}`);
+    check("фаза 11: под другой учёткой Moodle пробная лаба закрыта (trial_other_account), второго пробного нет", swap.s === 403 && swap.j.error === "trial_other_account" && (await api(t1, "/api/me")).j.labTrial?.otherAccount === true, `${swap.s} ${swap.j?.error}`);
+    await api(t1, "/api/logout", {}); await login(t1, 901);
+    check("фаза 11: вернулся под свою учётку — пробная лаба снова открыта", (await api(t1, `/api/lab/${wid}`)).s === 200);
+    // Предел расхода пробной лабы (lab-trial.json): ход заглушки — 350 тыс. токенов с весом, предел 0,3 млн уже исчерпан.
+    writeFileSync(join(SIM, "lab-trial.json"), JSON.stringify({ budgetMTok: 0.3 }));
+    const over = await api(t1, `/api/lab/${wid}/message`, { text: "добавь вывод" });
+    check("фаза 11: предел расхода пробной лабы исчерпан → сообщение не уходит агенту, понятный текст", over.s === 403 && /Пробный отчёт исчерпан/.test(over.j?.error || ""), `${over.s} ${over.j?.error}`);
+    // Владелец открыл полный доступ — предела пробного у этой лабы больше нет; потом доступ снова закрыт.
+    await api(OWN, "/api/access", { tgId: t1, allowed: true });
+    const fullMsg = await api(t1, `/api/lab/${wid}/message`, { text: "добавь вывод" });
+    check("фаза 11: после выдачи полного доступа предел пробного не действует", fullMsg.s === 200, `${fullMsg.s} ${fullMsg.j?.error || ""}`);
+    await waitLab(t1, wid);
+    await api(OWN, "/api/access", { tgId: t1, allowed: false });
+    rmSync(join(SIM, "lab-trial.json"), { force: true });
+    // Закрытие НЕначатого пробного помечает и учётку Moodle: второй Telegram с тем же логином пробного не получает.
+    const t3 = 5903, t4 = 5904;
+    await login(t3, 903);
+    const before3 = (await api(t3, "/api/me")).j.labTrial;
+    await api(OWN, "/api/access", { tgId: t3, closeTrial: true });
+    await login(t4, 903);
+    const me4 = (await api(t4, "/api/me")).j, lab4 = await api(t4, "/api/lab/777");
+    check("фаза 11: закрыт неначатый пробный → второй Telegram с той же учёткой Moodle его не получает", before3 === "available" && (await api(t3, "/api/me")).j.labTrial === null && me4.labTrial === null && lab4.s === 403, `${JSON.stringify(before3)} ${JSON.stringify(me4.labTrial)} ${lab4.s}`);
+    // Вход возвращает полный профиль (как /api/me): поле пробного не пропадает.
+    const t5 = 5905, li5 = await login(t5, 905);
+    check("фаза 11: ответ входа уже содержит пробный отчёт (не пропадает до перезагрузки)", li5.s === 200 && li5.j.labTrial === "available", JSON.stringify(li5.j?.labTrial));
+    // Владелец закрывает пробный — и идущая пробная лаба закрывается.
+    const acc = await api(OWN, "/api/access");
+    check("фаза 11: владелец видит пробный у пользователя", acc.s === 200 && acc.j.users.find((u) => u.tgId === t1)?.trial?.id === wid, JSON.stringify(acc.j?.users?.find((u) => u.tgId === t1)?.trial));
+    const closed = await api(OWN, "/api/access", { tgId: t1, closeTrial: true });
+    const afterClose = await api(t1, `/api/lab/${wid}`);
+    check("фаза 11: владелец закрыл пробный → пробная лаба 403, в белом списке пользователя нет", closed.s === 200 && afterClose.s === 403 && !readFileSync(join(SIM, "lab-allowlist.txt"), "utf8").split(/\s+/).includes(String(t1)), `${closed.s} ${afterClose.s}`);
+    const us = await api(OWN, "/api/usage");
+    check("фаза 11: в расходе пробные лабы отдельно", us.s === 200 && us.j.trials?.count === 1 && us.j.labs.some((l) => l.tgId === t1 && l.trial === true), JSON.stringify(us.j?.trials));
+  }
+
   const ev9 = readFileSync(AGENT_LOG, "utf8").trim().split("\n").filter((l) => /^(start|end) /.test(l)).map((l) => l.split(" "));
   let run9 = 0, peak9 = 0; for (const [kind] of ev9) { run9 += kind === "start" ? 1 : -1; peak9 = Math.max(peak9, run9); }
   check(PAR === 1 ? "фаза 9: и при исправлениях агент работал строго по одной лабе" : "фаза 9: предел одновременных лаб не превышен", (PAR === 1 ? peak9 === 1 : peak9 <= PAR) && run9 === 0, `событий ${ev9.length}, одновременно максимум ${peak9}`);
@@ -975,12 +1175,21 @@ try {
   const log = readFileSync(serverLog, "utf8");
   const bad5xx = log.split("\n").filter((l) => / 50\d( |$)/.test(l));
   // Ошибки обходов у пользователя, которому тест сам ненадолго «выключал» Moodle, сбоем не считаются.
-  const tickErrors = log.split("\n").filter((l) => /^(notify|quick|news|journal-watch) \d+: /.test(l) && !/: (отправлено|вопросов о курсах|объявлений|строк о журнале) \d+/.test(l) && !(l.includes(` ${outUser}: `) && /Moodle (не отвечает|ответил не данными)/.test(l)));
+  const tickErrors = log.split("\n").filter((l) => /^(notify|quick|news|journal-watch) \d+: /.test(l) && !/: (отправлено|по таймеру отправлено|вопросов о курсах|объявлений|сообщений о материалах|строк о журнале) \d+/.test(l) && !(l.includes(` ${outUser}: `) && /Moodle (не отвечает|ответил не данными)/.test(l)));
   check("фаза 8: фоновые обходы прошли без ошибок", tickErrors.length === 0, tickErrors[0] || "");
   check("за весь прогон ни одного ответа 5xx", !Object.keys(statuses).some((s) => Number(s) >= 500) && bad5xx.length === 0, JSON.stringify(statuses));
-  const seeded = readdirSync(join(SIM, "notify")).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(readFileSync(join(SIM, "notify", f), "utf8")));
+  // 15 окт: путь «//» роняет new URL — раньше это было вне try и останавливало весь процесс одним запросом снаружи.
+  {
+    const odd = [];
+    for (const p of ["//", "///", "//["]) odd.push(await fetch(B + p).then((r) => r.status).catch((e) => `сбой ${e.message}`));
+    const alive = await fetch(B + "/api/health").then((r) => r.status).catch(() => 0);
+    check("странный путь «//»: отказ 400, сервер жив", odd.every((s) => s === 400) && alive === 200, `${odd.join(",")} → health ${alive}`);
+  }
+  // Только основные N пользователей: 59xx фазы 11 (пробный отчёт) вошли только что, их первый обход ещё может не пройти
+  // (16 окт: проверка падала в 2 из 4 прогонов соседней сессии — гонка времени, а не порча).
+  const seeded = readdirSync(join(SIM, "notify")).filter((f) => f.endsWith(".json") && ids.includes(Number(f.slice(0, -5)))).map((f) => JSON.parse(readFileSync(join(SIM, "notify", f), "utf8")));
   check("фаза 8: состояние уведомлений у каждого своё и целое (первый обход только запоминает работы)", seeded.length >= N && seeded.every((s) => Array.isArray(s.seen) && s.seededFull && s.seededQuick), `файлов ${seeded.length}`);
-  check("фаза 8: при первом обходе никто не получил пачку «новых работ»", !tgSent.some((m) => /Новое задание|Новый тест|новых работ/.test(m.text || "")));
+  check("фаза 8: при первом обходе никто не получил пачку «новых работ»", !tgSent.some((m) => /Новое задание|Новая лабораторная|Новая контрольная|Новый этап|Новый тест|новых работ|Срок продлили|Срок перенесли/.test(m.text || "")));
   // Вопрос о курсе: нечётные пользователи к этому времени уже ответили «нет» в приложении (ниже), чётные — нет.
   const asks = tgSent.filter((m) => /Это ваш курс сейчас/.test(m.text || ""));
   check("фаза 8: бот спросил про курс «Архив» каждого по одному разу, с названием работы и разделом", ids.every((id) => { const mine = asks.filter((m) => m.chat_id === id); return mine.length === 1 && mine[0].text.includes(`Архив ${nOf(id)}. Весна 2026`) && mine[0].text.includes(`Долг пользователя ${nOf(id)}`) && mine[0].text.includes("Должникам"); }), `вопросов всего ${asks.length}`);
@@ -1005,6 +1214,411 @@ try {
   check("новое замечание преподавателя → одно сообщение бота, только этому пользователю", mine.length === 1 && mine[0].text.includes(`Новое замечание после проверки ${nOf(target)}`) && rem.every((m) => m.chat_id === target || m.chat_id === labUsers[0]), `сообщений ${rem.length}: ${rem.map((m) => m.chat_id).join(",")}`);
   const toFixer = rem.filter((m) => m.chat_id === labUsers[0]);
   check("повторная проверка в фазе 9 → бот написал о новых замечаниях не больше одного раза за обход", toFixer.length <= 1 && toFixer.every((m) => m.text.includes("Добавьте вывод") && m.text.includes("Новых замечаний: 2")), toFixer.map((m) => m.text).join(" | "));
+  { // «Тест открыт»: сообщение приходит, когда тест действительно можно начать, а не когда он появился в курсе.
+    const [qa, qb, qc] = [ids[13], ids[14], ids[15]], qidOf = (id) => (nOf(id) * 10 + 1) * 100 + 50;
+    const opened = (id) => tgSent.filter((m) => m.chat_id === id && /^🟢 Тест открыт/.test(m.text));
+    const before = tgSent.filter((m) => /^🟢 Тест открыт/.test(m.text)).length;
+    quizOpen.set(qidOf(qa), nowS() + 25);                        // откроется через 25 с и сразу станет доступен
+    quizOpen.set(qidOf(qb), nowS() + 25); quizHeld.add(qidOf(qb)); // время придёт, а преподаватель тест придержит
+    for (let i = 0; i < 80 && !opened(qa).length; i++) await sleep(1000);
+    await sleep(6000);
+    const a1 = opened(qa), b1 = opened(qb).length;
+    quizHeld.delete(qidOf(qb));
+    for (let i = 0; i < 40 && !opened(qb).length; i++) await sleep(1000);
+    await sleep(12000); // ещё один опрос тестов: повторных сообщений быть не должно
+    const btn = tgButtons.filter((b) => b.chat_id === qa && /Открыть тест в Moodle/.test(b.text)).length;
+    check("тест открыт: сообщение уходит в минуту открытия, один раз, с временем на попытку и кнопкой в Moodle; заранее открытые тесты и чужие пользователи сообщений не получают",
+      before === 0 && a1.length === 1 && /можно проходить до /.test(a1[0].text) && /на попытку 5 мин · попыток: 1/.test(a1[0].text) && btn >= 1 && opened(qa).length === 1 && opened(qc).length === 0
+      && tgSent.filter((m) => /^🟢 Тест открыт/.test(m.text)).length === 2, `до ${before}, А ${opened(qa).length}, В ${opened(qb).length}, С ${opened(qc).length}: ${(a1[0]?.text || "").replace(/\n/g, " ⏎ ")}`);
+    check("тест открыт: пока Moodle отвечает «недоступен», сообщения нет; как только тест стал доступен — сообщение пришло", b1 === 0 && opened(qb).length === 1, `до снятия ${b1}, после ${opened(qb).length}`);
+    // Преподаватель перенёс открытие на уже прошедшее время: сообщение приходит сразу, а не в прежний срок.
+    const qd = ids[16];
+    quizOpen.set(qidOf(qd), nowS() + 3600);
+    await sleep(14000); // быстрый опрос (раз в 10 с) запомнил, что тест откроется через час
+    const early = opened(qd).length;
+    quizOpen.set(qidOf(qd), nowS() - 120);
+    for (let i = 0; i < 40 && !opened(qd).length; i++) await sleep(1000);
+    await sleep(12000);
+    check("тест открыт: открытие перенесли на уже прошедшее время — сообщение приходит сразу и один раз", early === 0 && opened(qd).length === 1, `до переноса ${early}, после ${opened(qd).length}`);
+  }
+  { // Тест пройден в Moodle, а оценку преподаватель скрыл (best_grade: «оценки нет») — в Doodle «сдано»; тест закрыт и не
+    // пройден — не показывается (сделать с ним уже ничего нельзя); закрыт и пройден — «сдано» (владелец, 15 окт).
+    const tu = ids[23], tq = (nOf(tu) * 10 + 1) * 100 + 50, qid = `moodle:quiz:${tq}`;
+    const quizNow = async () => (await api(tu, "/api/deadlines?refresh")).j.items.find((x) => x.id === qid);
+    const before = (await quizNow())?.status;
+    quizDone.add(tq);
+    const passed = (await quizNow())?.status;
+    quizDone.delete(tq); quizClose.set(tq, nowS() - 3600);
+    const closed = await quizNow();
+    quizDone.add(tq);
+    const closedPassed = (await quizNow())?.status;
+    quizDone.delete(tq);
+    // Закрыт, но попытка просрочена в льготный период — её ещё можно отправить: тест остаётся (Moodle при этом отвечает
+    // «попыток больше нет» и isfinished — это не «закрыт»).
+    quizState.set(tq, "overdue");
+    const grace = (await quizNow())?.status;
+    quizClose.delete(tq);
+    // До срока единственная попытка брошена, новых Moodle не даст — тест тоже не висит с напоминаниями.
+    quizState.set(tq, "abandoned");
+    const abandoned = await quizNow();
+    quizState.delete(tq);
+    check("тест: пройден в Moodle при скрытой оценке — «сдано»; закрыт и не пройден — не показывается; закрыт и пройден — «сдано»; закрыт с неотправленной попыткой в льготный период — остаётся; попытки исчерпаны брошенной — не показывается",
+      before === "open" && passed === "done" && !closed && closedPassed === "done" && grace === "open" && !abandoned,
+      JSON.stringify({ before, passed, closed: closed?.status ?? null, closedPassed, grace, abandoned: abandoned?.status ?? null }));
+  }
+  { // Сборка отчёта программой: способ выбирается при запуске работы (report-kit.txt) и запоминается в ней.
+    const [ku, kv] = [ids[21], ids[22]];
+    writeFileSync(join(SIM, "lab-allowlist.txt"), readFileSync(join(SIM, "lab-allowlist.txt"), "utf8") + [ku, kv].join("\n") + "\n");
+    const firstTurn = async (uid, aid) => { for (let i = 0; i < 40; i++) { try { const f = readdirSync(join(labDir(uid, aid), "tmp")).filter((x) => x.startsWith("turn-")).sort()[0]; if (f) return readFileSync(join(labDir(uid, aid), "tmp", f), "utf8"); } catch { /* папки ещё нет */ } await sleep(500); } return ""; };
+    writeFileSync(join(SIM, "report-kit.txt"), "all\n");
+    await api(ku, "/api/lab/781/start", { title: "ЛР сборщик", course: "Курс", due: Date.now() + 86400e3 });
+    const tKit = await firstTurn(ku, 781);
+    writeFileSync(join(SIM, "report-kit.txt"), "off\n");
+    await api(kv, "/api/lab/781/start", { title: "ЛР по-старому", course: "Курс", due: Date.now() + 86400e3 });
+    const tOld = await firstTurn(kv, 781);
+    const has = (uid, f) => existsSync(join(labDir(uid, 781), f));
+    let title = null; try { title = JSON.parse(readFileSync(join(labDir(ku, 781), "title.json"), "utf8")); } catch { /* нет файла */ }
+    const holes = (t) => /\{\{[A-Z_]+\}\}/.test(t); // незаполненные места шаблона
+    check("сборка программой: включённой работе агент получает короткий шаг «пиши report.md — соберёт программа», в папке лежат профиль и данные титула; остальным — прежний шаг, без этих файлов",
+      /report_kit\.py build --pdf/.test(tKit) && !/Отчёт собирай по шаблону курса/.test(tKit) && !holes(tKit) && has(ku, "style.json") && title?.city === "Москва" && typeof title.student === "string"
+      && /Отчёт собирай по шаблону курса/.test(tOld) && !/report_kit\.py/.test(tOld) && !has(kv, "style.json") && !holes(tOld), `с программой ${tKit.length} зн., по-старому ${tOld.length} зн.`);
+  }
+  { // Копия личных данных приложения на сервере (перед переездом на нового бота: облако Telegram у каждого бота своё).
+    const [ca, cb] = [ids[19], ids[20]];
+    const none = await api(ca, "/api/cloud");
+    const mine = { subjects: [{ id: "s1", name: "Свой предмет" }], deadlines: [{ id: "d1", title: "Своё дело" }], tasks: [], notes: [], settings: { hiddenMoodleIds: ["moodle:assign:1"] }, extra: "лишнее" };
+    const saved = await api(ca, "/api/cloud", mine);
+    const back = await api(ca, "/api/cloud"), other = await api(cb, "/api/cloud");
+    const bad = await api(ca, "/api/cloud", { foo: 1 });
+    await api(ca, "/api/cloud", { ...mine, tasks: [{ id: "t1", title: "Задача" }] });
+    const second = await api(ca, "/api/cloud");
+    const prev = existsSync(join(SIM, "cloud", `${ca}.prev.json`)) ? JSON.parse(readFileSync(join(SIM, "cloud", `${ca}.prev.json`), "utf8")) : null;
+    check("копия личных данных: сохраняется и отдаётся только своему владельцу, лишние поля отбрасываются, неверные данные не принимаются; предыдущая копия остаётся рядом",
+      none.s === 200 && none.j.backup === null && saved.s === 200 && saved.j.ok === true && back.j.backup?.data.deadlines[0].title === "Своё дело" && back.j.backup.data.settings.hiddenMoodleIds.length === 1
+      && !("extra" in back.j.backup.data) && other.j.backup === null && bad.s === 400 && second.j.backup.data.tasks.length === 1 && prev?.data.tasks.length === 0, `${none.s} ${saved.s} ${bad.s} prev=${!!prev}`);
+  }
+  { // Приветствие бота: ответ на /start роликом с кнопками, листаемые карточки, личное приветствие после входа.
+    const wu = ids[18], priv = { id: wu, type: "private" };
+    const waitFor = async (fn) => { for (let i = 0; i < 30 && !fn(); i++) await sleep(500); return !!fn(); };
+    tgUpdates.push({ update_id: 101, message: { message_id: 1, chat: priv, from: { id: wu, first_name: "Польз" }, text: "/start" } });
+    const started = await waitFor(() => tgAnims.some((a) => a.chat_id === wu));
+    const hello = tgAnims.find((a) => a.chat_id === wu);
+    check("приветствие: на /start бот отвечает роликом с текстом и кнопками «Открыть Doodle», «Что умеет Doodle», «Как войти»",
+      started && /Привет! Это Doodle/.test(hello.caption) && ["Открыть Doodle", "Что умеет Doodle", "Как войти"].every((t) => hello.buttons.includes(t)) && tgAnims.filter((a) => a.chat_id === wu).length === 1, `${started} ${JSON.stringify(hello?.buttons)}`);
+    tgUpdates.push({ update_id: 102, callback_query: { id: "c1", data: "tour:new", message: { message_id: 7, chat: priv } } });
+    const card1 = await waitFor(() => tgSent.some((m) => m.chat_id === wu && /Дедлайны · 1 из 4/.test(m.text)));
+    tgUpdates.push({ update_id: 103, callback_query: { id: "c2", data: "tour:1", message: { message_id: 8, chat: priv } } });
+    const card2 = await waitFor(() => tgEdits.some((m) => m.chat_id === wu && m.message_id === 8 && /Напоминания · 2 из 4/.test(m.text)));
+    tgUpdates.push({ update_id: 104, callback_query: { id: "c3", data: "tour:3", message: { message_id: 8, chat: priv } } });
+    const card4 = await waitFor(() => tgEdits.some((m) => m.chat_id === wu && /Календарь · 4 из 4/.test(m.text) && m.buttons.includes("Открыть Doodle") && m.buttons.includes("← Назад") && !m.buttons.includes("Дальше →")));
+    check("приветствие: «Что умеет Doodle» — первая карточка новым сообщением, дальше листается правкой того же сообщения; на последней — «Открыть Doodle»", card1 && card2 && card4, `${card1} ${card2} ${card4}`);
+    // Ссылка из беседы (старые сообщения с «?start=chat»): уже нажимавшему Start — тишина, новому — приветствие.
+    const newcomer = 999003;
+    tgUpdates.push({ update_id: 107, message: { message_id: 11, chat: priv, from: { id: wu, first_name: "Польз" }, text: "/start chat" } },
+      { update_id: 108, message: { message_id: 1, chat: { id: newcomer, type: "private" }, from: { id: newcomer, first_name: "Новый" }, text: "/start chat" } });
+    const fresh = await waitFor(() => tgAnims.some((a) => a.chat_id === newcomer));
+    await sleep(1500);
+    check("приветствие: «/start chat» из ссылки беседы — новому человеку ролик, уже нажимавшему Start — ничего",
+      fresh && tgAnims.filter((a) => a.chat_id === wu).length === 1, `новому: ${fresh}, повторных роликов: ${tgAnims.filter((a) => a.chat_id === wu).length - 1}`);
+    tgUpdates.push({ update_id: 105, message: { message_id: 9, chat: priv, from: { id: wu, first_name: "Польз" }, text: "привет" } }, { update_id: 106, message: { message_id: 10, chat: priv, from: { id: wu, first_name: "Польз" }, text: "ау" } });
+    await waitFor(() => tgSent.some((m) => m.chat_id === wu && /На сообщения в чате не отвечаю/.test(m.text)));
+    await sleep(2500);
+    check("приветствие: на обычные сообщения бот один раз подсказывает, где приложение, и не засыпает ответами", tgSent.filter((m) => m.chat_id === wu && /На сообщения в чате не отвечаю/.test(m.text)).length === 1);
+    { // Быстрые команды: ответ собирает сервер, без агента.
+      const cu = ids[2], fromU = (id, text, n) => ({ update_id: n, message: { message_id: n, chat: { id, type: "private" }, from: { id, first_name: "Польз" }, text } });
+      const agentBefore = existsSync(AGENT_LOG) ? readFileSync(AGENT_LOG, "utf8").length : 0;
+      tgUpdates.push(fromU(cu, "/today", 201), fromU(cu, "/deadlines", 202), fromU(cu, "/grades@DoodleBot", 203), fromU(999001, "/deadlines", 204),
+        fromU(cu, "/week", 205), fromU(cu, "/invite", 206), fromU(cu, "/settings", 207), fromU(cu, "/stats", 208), fromU(999002, "/start ref_" + cu, 209));
+      const got = (id, re) => tgSent.find((m) => m.chat_id === id && re.test(m.text));
+      await waitFor(() => got(cu, /^📅 Сегодня/) && got(cu, /^📋/) && got(cu, /^📝/) && got(999001, /Сначала войдите в Moodle/));
+      const t = got(cu, /^📅 Сегодня/)?.text || "", d = got(cu, /^📋/)?.text || "", g = got(cu, /^📝/)?.text || "";
+      await waitFor(() => got(cu, /^🗓|Группа не выбрана|Расписание сейчас не загрузилось/) && got(cu, /Ваша ссылка-приглашение/) && got(cu, /^🔔 Уведомления бота/) && tgAnims.some((a) => a.chat_id === 999002));
+      const inv = got(cu, /Ваша ссылка-приглашение/)?.text || "";
+      // Выключатель: кнопка «Все сообщения» → правка сообщения; при выключенных уведомлениях ответы на команды всё равно приходят.
+      tgUpdates.push({ update_id: 210, callback_query: { id: "s1", data: "set:all:0", message: { message_id: 30, chat: { id: cu, type: "private" } } } });
+      const mutedView = await waitFor(() => tgEdits.some((m) => m.chat_id === cu && m.message_id === 30 && /выключены все сообщения/.test(m.text)));
+      tgUpdates.push(fromU(cu, "/invite", 211));
+      const afterInv = await waitFor(() => tgSent.filter((m) => m.chat_id === cu && /Ваша ссылка-приглашение/.test(m.text)).length === 2);
+      const inv2 = tgSent.filter((m) => m.chat_id === cu && /Ваша ссылка-приглашение/.test(m.text)).at(-1)?.text || "";
+      tgUpdates.push({ update_id: 212, callback_query: { id: "s2", data: "set:all:1", message: { message_id: 30, chat: { id: cu, type: "private" } } } });
+      const unmuted = await waitFor(() => tgEdits.some((m) => m.chat_id === cu && m.message_id === 30 && /приходят всегда/.test(m.text)));
+      // Утренняя сводка: выбор времени кнопкой и выключение.
+      tgUpdates.push(fromU(cu, "/digest", 213));
+      await waitFor(() => got(cu, /^☀️ Утренняя сводка/));
+      tgUpdates.push({ update_id: 214, callback_query: { id: "d1", data: "dg:8", message: { message_id: 31, chat: { id: cu, type: "private" } } } });
+      const dgOn = await waitFor(() => tgEdits.some((m) => m.chat_id === cu && m.message_id === 31 && /Сейчас: в 8:00/.test(m.text)));
+      tgUpdates.push({ update_id: 215, callback_query: { id: "d2", data: "dg:off", message: { message_id: 31, chat: { id: cu, type: "private" } } } }, { update_id: 216, callback_query: { id: "d3", data: "dg:23", message: { message_id: 31, chat: { id: cu, type: "private" } } } });
+      const dgOff = await waitFor(() => tgEdits.some((m) => m.chat_id === cu && m.message_id === 31 && /Сейчас: выключена/.test(m.text)));
+      check("команды бота: /digest — время утренней сводки выбирается кнопкой и выключается; недопустимый час не принимается", /Сейчас: выключена/.test(got(cu, /^☀️ Утренняя сводка/)?.text || "") && dgOn && dgOff && !tgEdits.some((m) => m.chat_id === cu && /в 23:00/.test(m.text)));
+      // Ответ «моя / не моя» о дисциплине журнала без курса в Moodle (16 окт, attendance.answerAsk): нажатие идёт через
+      // welcome → bot-commands → attendance; записи о вопросе нет (состояние из копии) — ответ всё равно записан.
+      tgUpdates.push({ update_id: 217, callback_query: { id: "e1", data: "ejq:n:424242", message: { message_id: 32, chat: { id: cu, type: "private" } } } });
+      const ejqNo = await waitFor(() => tgEdits.some((m) => m.chat_id === cu && m.message_id === 32 && /🚫 Ответ: не моя/.test(m.text) && m.buttons.join() === "Всё-таки моя"));
+      check("кнопка ответа о дисциплине журнала без курса: «Нет, не моя» → правка с ответом и кнопкой «Всё-таки моя» (даже без записи о вопросе)", ejqNo);
+      // «Вернуть» во вкладке «Журнал» (POST api/ej/mine, 16 окт 2026, позже) — через сервер: «не моя» снята, /settings её
+      // больше не предлагает; неверный id — 400.
+      tgUpdates.push({ update_id: 218, callback_query: { id: "e2", data: "set:news:1", message: { message_id: 33, chat: { id: cu, type: "private" } } } });
+      const backBefore = await waitFor(() => tgEdits.some((m) => m.chat_id === cu && m.message_id === 33 && m.buttons.some((b) => b.startsWith("↩️"))));
+      const mineBad = await api(cu, "/api/ej/mine", { id: "x1" }), mineOk = await api(cu, "/api/ej/mine", { id: 424242 });
+      tgUpdates.push({ update_id: 219, callback_query: { id: "e3", data: "set:news:1", message: { message_id: 34, chat: { id: cu, type: "private" } } } });
+      const backAfter = await waitFor(() => tgEdits.some((m) => m.chat_id === cu && m.message_id === 34 && /Уведомления бота/.test(m.text)));
+      check("«Вернуть» во вкладке «Журнал» (POST api/ej/mine): «не моя» снята — /settings её больше не предлагает; неверный id — 400",
+        backBefore && mineBad.s === 400 && mineOk.s === 200 && backAfter && !tgEdits.find((m) => m.chat_id === cu && m.message_id === 34)?.buttons.some((b) => b.startsWith("↩️")),
+        `${backBefore}/${mineBad.s}/${mineOk.s}/${backAfter} ${JSON.stringify(tgEdits.find((m) => m.chat_id === cu && m.message_id === 34)?.buttons)}`);
+      check("команды бота: /week, /settings с выключателем всех сообщений (ответы на команды приходят и при выключенных), /invite считает пришедших по ссылке, /stats — только владельцу",
+        !!got(cu, /^🗓|Группа не выбрана|Расписание сейчас не загрузилось/) && /start=ref_\d+/.test(inv) && /пришло: 0/.test(inv) && mutedView && afterInv && /пришло: 1/.test(inv2) && unmuted && !got(cu, /Doodle за неделю/), `${inv.replace(/\n/g, " ⏎ ").slice(0, 110)} || ${inv2.slice(-20)}`);
+      check("команды бота: /today — только пары на сегодня (без сроков), /deadlines — работы на неделю, /grades — оценки; не вошедшему — просьба войти; агент не запускается",
+        !/Ближайшие сроки/.test(t) && /Сроки на неделю: \d+/.test(d) && /до .+, \d\d:\d\d/.test(d) && (/из \d/.test(g) || /пока нет/.test(g)) && !!got(999001, /Сначала войдите в Moodle/)
+        && (existsSync(AGENT_LOG) ? readFileSync(AGENT_LOG, "utf8").length : 0) === agentBefore, `${t.replace(/\n/g, " ⏎ ").slice(0, 150)} || ${d.replace(/\n/g, " ⏎ ").slice(0, 90)} || ${g.replace(/\n/g, " ⏎ ").slice(0, 80)}`);
+      // «Сессия»: учебный план группы (настоящий PDF БИСТ-24 с поддельного misis.ru), команда /session, публикация расписания экзаменов.
+      const sv = (await api(cu, "/api/session")).j;
+      check("сессия: по группе БИСТ-24-ПО-2 найден учебный план — курс, семестр, даты ближайшей сессии, дисциплины с формами контроля; расписания экзаменов ещё нет",
+        sv.program?.code === "09.03.02" && sv.course >= 1 && sv.course <= 4 && sv.semester >= 1 && /^\d{4}-\d\d-\d\d$/.test(sv.upcoming?.from || "") && sv.subjects.length > 0 && sv.subjects.some((s) => s.exam && s.labels.includes("экзамен")) && sv.exams.published === false,
+        `курс ${sv.course}, семестр ${sv.semester}, сессия ${sv.upcoming?.label} ${sv.upcoming?.from}..${sv.upcoming?.to}, дисциплин ${sv.subjects?.length}, ${sv.planError || ""}`);
+      // Уточнения самого студента (15 окт): «не моё» убирает дисциплину из списка и счётчиков, «вернуть» — обратно;
+      // неверное уточнение — 400, сводка не меняется.
+      {
+        const victim = sv.subjects.find((s) => s.exam && !s.elective) || sv.subjects[0];
+        const hid = await api(cu, "/api/session/choice", { kind: "hidden", key: victim.key, value: true });
+        const back = await api(cu, "/api/session/choice", { kind: "hidden", key: victim.key, value: null });
+        const bad = await api(cu, "/api/session/choice", { kind: "admin", key: "x", value: true });
+        const big = await api(cu, "/api/session/choice", { kind: "hidden", key: "x".repeat(500), value: true });
+        check("сессия: «не моё» — дисциплина в скрытых и не в счётчиках; «вернуть» — на месте; неверное уточнение и длинный ключ — 400",
+          hid.s === 200 && !hid.j.subjects.some((s) => s.key === victim.key) && hid.j.hidden.some((h) => h.key === victim.key) && (hid.j.counts.exam + hid.j.counts.graded + hid.j.counts.pass) < (sv.counts.exam + sv.counts.graded + sv.counts.pass)
+          && back.s === 200 && back.j.subjects.some((s) => s.key === victim.key) && !back.j.hidden.length && bad.s === 400 && big.s === 400,
+          `${victim.name}: ${hid.s}/${back.s}/${bad.s}/${big.s}, counts ${JSON.stringify(sv.counts)} → ${JSON.stringify(hid.j?.counts)}`);
+      }
+      tgUpdates.push(fromU(cu, "/session", 217));
+      await waitFor(() => got(cu, /^🎓 Сессия/));
+      const st = got(cu, /^🎓 Сессия/)?.text || "";
+      check("команды бота: /session — семестр, дни до сессии, формы контроля, «расписания экзаменов ещё нет»", /семестр/.test(st) && /сессия/.test(st) && /экзамен/.test(st) && /Расписания экзаменов ещё нет/.test(st), st.replace(/\n/g, " ⏎ ").slice(0, 200));
+      // Учебный отдел «выложил» расписание: файл Excel в виде сетки с группой cu и экзаменом по дисциплине из плана → всем в группе уходят даты.
+      const subj = sv.subjects.find((s) => s.exam) || sv.subjects[0], exDay = sv.upcoming.from, dmy = `${exDay.slice(8, 10)}.${exDay.slice(5, 7)}.${exDay.slice(0, 4)}`;
+      writeFileSync(join(SIM, "make-session.py"), `import openpyxl\nwb = openpyxl.Workbook(); ws = wb.active; ws.title = "ИТКН"\nws.append(["Дата", "Время", "БИСТ-24-ПО-2", "БПМ-23-1"])\nws.append(["${dmy}", "10:00", ${JSON.stringify(`${subj.name}\nПетров П.П.\nБ-302`)}, "Матанализ\\nИванов И.И.\\nА-100"])\nwb.save(r"${join(SIM, "itkn-sessiya.xlsx").replace(/\\/g, "\\\\")}")\n`);
+      const mk = spawnSync(["C:\\Program Files\\Python312\\python.exe", process.env.PYTHON].find((p) => p && existsSync(p)) || "python", [join(SIM, "make-session.py")], { encoding: "utf8", env: { ...process.env, PYTHONUSERBASE: process.env.PYTHONUSERBASE || join(process.env.USERPROFILE || "", "AppData", "Roaming", "Python") } });
+      sessionFile = mk.status ? null : "itkn-sessiya.xlsx";
+      const pub = sessionFile ? await waitFor(() => got(cu, /^📅 Расписание экзаменов опубликовано/), 45) : false;
+      const pt = got(cu, /^📅 Расписание экзаменов опубликовано/)?.text || "";
+      const sv2 = sessionFile ? (await api(cu, "/api/session")).j : null;
+      const exSubj = sv2?.subjects.find((s) => s.name === subj.name);
+      check("сессия: вышло расписание экзаменов → каждому в группе сообщение с датой, временем и аудиторией своего экзамена; в /api/session даты по дисциплинам; владельцу «не разобрал» не пришло",
+        !mk.status && pub && pt.includes(subj.name) && /10:00/.test(pt) && /Б-302/.test(pt) && sv2?.exams.published === true && exSubj?.examDates[0]?.date === exDay && exSubj.examDates[0].place === "Б-302" && !tgSent.some((m) => /разобрать его не удалось/.test(m.text || "")),
+        mk.status ? `python: ${(mk.stderr || "").slice(-200)}` : `${pt.replace(/\n/g, " ⏎ ").slice(0, 220)} || ${JSON.stringify(exSubj?.examDates)}`);
+      check("сессия: расписание пришло только участникам группы из файла, по одному разу каждому", ids.every((id) => tgSent.filter((m) => m.chat_id === id && /^📅 Расписание экзаменов опубликовано/.test(m.text)).length <= 1) && !tgSent.some((m) => m.chat_id === 999001 && /Расписание экзаменов опубликовано/.test(m.text)));
+    }
+    const personal = (id) => tgSent.filter((m) => m.chat_id === id && /вход выполнен — Doodle подключён к вашему Moodle/.test(m.text));
+    const got = ids.filter((id) => personal(id).length === 1), sample = personal(got[0])[0]?.text || "";
+    check("приветствие: после входа каждому один раз приходит личное сообщение — сколько курсов и работ, ближайший срок",
+      ids.every((id) => personal(id).length <= 1) && got.length >= N - 2 && /Курсов этого семестра: \d+\. Работ со сроком впереди: \d+\./.test(sample), `получили ${got.length} из ${N}: ${sample.replace(/\n/g, " ⏎ ").slice(0, 220)}`);
+  }
+  { // Таблицы преподавателей в курсе Moodle (course-sheets.mjs, 15 окт 2026): дисциплины нет в журнале → баллы «Сессии»
+    // из Excel курса, пороги — из шкалы в другом файле курса; вкладка «Журнал» — посещения и баллы из той же таблицы.
+    const xu = ids[7], xn = nOf(xu), cid = xn * 10 + 3;
+    const waitFor = async (fn, sec = 30) => { for (let i = 0; i < sec * 2; i++) { const v = await fn(); if (v) return v; await sleep(500); } return null; };
+    const sv0 = (await api(xu, "/api/session")).j;
+    const plain = (s) => s.controls.length && !s.elective && !/\.\s/.test(s.name); // «Название. Осень 2026» — точка внутри названия сбила бы разбор курса
+    const subj = sv0.subjects?.find((s) => s.exam && plain(s)) || sv0.subjects?.find(plain);
+    const dmy = (d) => { const t = new Date(Date.now() + d * 86400e3); return `${String(t.getUTCDate()).padStart(2, "0")}.${String(t.getUTCMonth() + 1).padStart(2, "0")}.${t.getUTCFullYear()}`; };
+    const py = [process.env.PYTHON, "C:\\Program Files\\Python312\\python.exe"].find((p) => p && existsSync(p)) || "python";
+    const make = (out, sheets) => {
+      const spec = join(SIM, `${out}.json`);
+      writeFileSync(spec, JSON.stringify({ out: join(SIM, out), sheets }));
+      return spawnSync(py, [join(SIM, "make-sheet.py"), spec], { encoding: "utf8", env: { ...process.env, PYTHONUSERBASE: process.env.PYTHONUSERBASE || join(process.env.APPDATA || "", "Python") } });
+    };
+    writeFileSync(join(SIM, "make-sheet.py"), "import json, sys, openpyxl\nspec = json.load(open(sys.argv[1], encoding='utf-8'))\nwb = openpyxl.Workbook(); wb.remove(wb.active)\nfor sh in spec['sheets']:\n    ws = wb.create_sheet(sh['title'])\n    for r in sh['rows']: ws.append(r)\n    for m in sh.get('merge', []): ws.merge_cells(m)\nwb.save(spec['out'])\n");
+    // Журнал: лекции и лабораторные с датами (одно прошло, одно впереди), КТ без даты, строка максимумов, итог.
+    const mk1 = make(`journal-${cid}.xlsx`, [{ title: "БИСТ-24_ПО_2", merge: ["G1:H1", "I1:J1"], rows: [
+      [null, "Журнал", null, null, null, null, "Лекции", null, "Лабораторные работы", null, "КТ1", null],
+      [null, "Группа «БИСТ-24-ПО-2»", null, null, null, "Дата занятия", dmy(-30), dmy(60), dmy(-30), dmy(60), null, null],
+      [null, "№", "Номер", "Фамилия", "Имя", "Отчество", "Л 1", "Л 2", "Лаб 1", "Лаб 2", null, null],
+      [null, null, null, null, null, null, 10, 10, 20, 20, 40, 100],
+      [null, 1, 11, "Абрамов", "Олег", "Петрович", 9, null, 18, null, null, 27],
+      [null, 2, 12, "Студент", String(xn), "Тестович", 7.5, null, "Н", null, null, 7.5],
+      [null, 3, 13, "Студент", String(xn + 1), "Тестович", 10, null, 20, null, null, 30]] }]);
+    const mk2 = make(`brs-${cid}.xlsx`, [{ title: "БРС", rows: [["Оценка", "Баллы"], ["Отлично", "85-100"], ["Хорошо", "70-84"], ["Удовл.", "55-69"], ["Неуд.", "0-54"]] }]);
+    courseNames.set(cid, `${subj?.name}. Осень 2026`); // курс Moodle = дисциплина плана (взаимная пара в matchCourse)
+    courseFiles.set(cid, [
+      { n: xn, id: cid * 1000 + 950, module: "Журнал", name: "Журнал посещаемости БИСТ-24.xlsx", path: join(SIM, `journal-${cid}.xlsx`), at: nowS() },
+      { n: xn, id: cid * 1000 + 951, module: "Рейтинг-план", name: "БРС.xlsx", path: join(SIM, `brs-${cid}.xlsx`), at: nowS() }]);
+    await api(xu, "/api/deadlines?refresh"); // перечитать курсы — новое название
+    const sv = await waitFor(async () => { const r = await api(xu, "/api/session"); return r.s === 200 && r.j.subjects?.find((s) => s.name === subj?.name)?.score?.source === "sheet" ? r.j : null; });
+    const s = sv?.subjects.find((x) => x.name === subj?.name), sc = s?.score;
+    check("таблицы курса: дисциплины нет в журнале → баллы «Сессии» из Excel курса: 7,5 из 100, можно ещё 70 (Л 2, Лаб 2, КТ1)",
+      !mk1.status && !mk2.status && !!subj && sc?.source === "sheet" && sc.have === 7.5 && sc.scale === 100 && sc.left === 70 && sc.sheet?.title === "Журнал" && /view\.php\?id=/.test(sc.sheet?.url || ""),
+      mk1.status ? `python: ${(mk1.stderr || "").slice(-200)}` : `${subj?.name}: ${JSON.stringify(sc)?.slice(0, 400)}`);
+    check("таблицы курса: пороги — из шкалы «Удовл./Неуд.» в другом файле курса; на 5 уже не набрать (7,5 + 70 < 85), тройка достижима — не «красная»",
+      sc?.thresholdsFrom === "sheet" && sc.targets.map((t) => t.need).join("/") === "47.5/62.5/77.5" && sc.targets[2].reachable === false && s.level === "ok",
+      JSON.stringify({ from: sc?.thresholdsFrom, t: sc?.targets, level: s?.level }));
+    check("таблицы курса: скачано только токеном самого студента", fileGets.length >= 2 && fileGets.every((g) => g.ok && g.n === xn), JSON.stringify(fileGets.slice(0, 4)));
+    const ej8 = (await api(xu, "/api/ej")).j;
+    const sh = ej8?.sheets?.find((x) => x.courseId === cid);
+    // С 16 окт 2026 пароль журнала запоминается при входе в бот, даже если журнал не ответил (у стенда он не отвечает):
+    // журнал «подключён» паролем, данных нет, есть причина — и таблица преподавателя всё равно видна.
+    check("таблицы курса: вкладка «Журнал» без открывшегося журнала (пароль сохранён, журнал не ответил) — посещения (1 из 2, пропуск лабораторной) и баллы из таблицы",
+      ej8?.connected === true && ej8?.saved === true && ej8?.data === null && !!ej8?.loadError && !ej8?.needPassword && sh && sh.attendance === 50 && sh.lessons?.absent === 1 && sh.absences[0]?.kind === "Лабораторная" && sh.rating === 7.5 && sh.ejId === null && !JSON.stringify(ej8).includes("Абрамов"),
+      JSON.stringify(sh)?.slice(0, 300));
+    const otherR = await api(ids[8], "/api/session"), otherEjR = await api(ids[8], "/api/ej"), other = otherR.j, otherEj = otherEjR.j;
+    check("таблицы курса: у другого студента (его строка есть в файле, но курса у него нет) баллов из этой таблицы нет",
+      otherR.s === 200 && otherEjR.s === 200 && Array.isArray(other.subjects) && !other.subjects.some((x) => x.score?.source === "sheet") && Array.isArray(otherEj?.sheets) && !otherEj.sheets.length, JSON.stringify(otherEj?.sheets)?.slice(0, 200));
+    const fromU = (id, text, n) => ({ update_id: n, message: { message_id: n, chat: { id, type: "private" }, from: { id, first_name: "Польз" }, text } });
+    tgUpdates.push(fromU(xu, "/session", 380));
+    const bt = await waitFor(() => tgSent.find((m) => m.chat_id === xu && /^🎓 Сессия/.test(m.text || ""))?.text);
+    check("таблицы курса: /session в боте — «по таблице «Журнал»», не хватает до 3/4/5, источник в оговорке",
+      /по таблице «Журнал»/.test(bt || "") && /на 3 ещё 47,5/.test(bt || "") && /таблицы преподавателей в курсах/.test(bt || ""), (bt || "").replace(/\n/g, " ⏎ ").slice(-400));
+  }
+  { // Бот в общей беседе (chats.mjs): привязка к группе админом, расписание командами, изменения — сообщением в беседу.
+    const G = -100500, G2 = -1001500, adm = 777001, mem = 777002;
+    const waitFor = async (fn, n = 30) => { for (let i = 0; i < n && !fn(); i++) await sleep(500); return !!fn(); };
+    const msk = (d) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Moscow" }).format(new Date(Date.now() + d * 86400e3));
+    const slot = (date, time, name, place, subGroup = "") => ({ date, time, classes: [{ name, lessonType: "Лекционные", teacher: "", place, subGroup }] });
+    chatSched.days = [slot(msk(0), "09:00 - 10:35", "Матанализ", "ауд. А-100"), slot(msk(0), "10:50 - 12:25", "Физкультура", "ауд. Зал", "Подгруппа (2)"), slot(msk(1), "12:40 - 14:15", "Базы данных", "ауд. Б-512")];
+    const chat = { id: G, type: "group", title: "БИСТ болталка" };
+    let uid = 400;
+    const say = (from, text, c = chat) => tgUpdates.push({ update_id: ++uid, message: { message_id: uid, chat: c, from: { id: from, first_name: "Одногруппник" }, text } });
+    const inG = (re, id = G) => tgSent.filter((m) => m.chat_id === id && re.test(m.text || ""));
+    const chatsFile = () => { try { return JSON.parse(readFileSync(join(SIM, "chats.json"), "utf8")); } catch { return {}; } };
+    chatAdmins.add(adm);
+    tgUpdates.push({ update_id: ++uid, my_chat_member: { chat, from: { id: adm }, old_chat_member: { status: "left" }, new_chat_member: { status: "member" } } });
+    const hello = await waitFor(() => inG(/Я бот Doodle\. В беседе показываю расписание/).length);
+    const btns = tgButtons.filter((b) => b.chat_id === G);
+    check("беседа: бота добавили — приветствие с подсказкой /group; кнопка — ссылка на личку t.me, без web_app",
+      hello && btns.length > 0 && btns.every((b) => /^https:\/\/t\.me\/DoodleSimBot$/.test(b.url || "")), JSON.stringify(btns));
+    say(mem, "/group ТЕСТ-26-1");
+    const denied = await waitFor(() => inG(/только админы беседы/).length);
+    say(adm, "/group@DoodleSimBot тест-26-1");
+    const bound = await waitFor(() => inG(/привязана к группе ТЕСТ-26-1, все подгруппы/).length);
+    say(adm, "/group НЕТ-99-9");
+    const unknown = await waitFor(() => inG(/не нашёл в расписании МИСИС/).length);
+    check("беседа: привязку меняет только админ; группа находится без учёта регистра; неизвестная группа не принимается",
+      denied && bound && unknown && chatsFile()[G]?.group === "ТЕСТ-26-1" && chatsFile()[G]?.subgroup === null, JSON.stringify(chatsFile()[G] || null).slice(0, 120));
+    say(mem, "/today"); say(mem, "/today@OtherBot"); say(mem, "/week"); say(mem, "/deadlines");
+    await waitFor(() => inG(/^📅 Сегодня/).length && inG(/^🗓/).length && inG(/Это личное/).length);
+    say(mem, "/today"); // повтор сразу — не отвечаем (не засыпать беседу)
+    await sleep(2500);
+    const p = inG(/^📅 Сегодня/), wk = inG(/^🗓/)[0]?.text || "";
+    check("беседа: /today и /week — расписание группы беседы со всеми подгруппами; команда другому боту и повтор сразу — без ответа; /deadlines — «это личное»",
+      p.length === 1 && /ТЕСТ-26-1/.test(p[0].text) && /\n\n1 пара \(09:00 — 10:35\)\nМатанализ \(Лекционные\)\nТЕСТ-26-1 \[1\], ТЕСТ-26-1 \[2\]\nА-100\n\n2 пара \(10:50 — 12:25\)\nФизкультура \(Лекционные\)\nТЕСТ-26-1 \[2\]\nЗал$/.test(p[0].text)
+      && /Базы данных/.test(wk) && /Физкультура \(подгр\. 2\) · Зал/.test(wk)
+      && inG(/Это личное/).length === 1 && !inG(/Сроки на неделю|Сначала войдите/).length && ![adm, mem].some((id) => tgSent.some((m) => m.chat_id === id)),
+      `${p.length}: ${(p[0]?.text || "").replace(/\n/g, " ⏎ ").slice(0, 160)}`);
+    // Эфемерная /deadlines от вошедшего в Doodle (16 окт 2026): его сроки ответом, который видит только он.
+    tgUpdates.push({ update_id: ++uid, message: { message_id: 0, ephemeral_message_id: 9001, chat, from: { id: ids[0], first_name: "Вошедший" }, text: "/deadlines" } });
+    const ephOk = await waitFor(() => tgSent.some((m) => m.chat_id === G && m.eph === ids[0]));
+    const eph = tgSent.find((m) => m.chat_id === G && m.eph === ids[0]);
+    // Коротко (вариант A владельца): HTML-заголовок, три строки «🔥/⏳ работа · курс — срок», остальное в свёрнутой цитате.
+    const top = (eph?.text || "").split("\n").slice(1, 4);
+    check("беседа: эфемерная /deadlines от вошедшего — короткий ответ, видный только ему (receiver_user_id, ответ на ephemeral_message_id), без копии в личку",
+      ephOk && eph.ereply === 9001 && eph.mode === "HTML" && /^<b>🔒 Ваши сроки<\/b> · \d+ на неделю\n/.test(eph.text) && top.length === 3 && top.every((l) => /^(🔥|⏳) .+ — (сегодня \d\d:\d\d|завтра \d\d:\d\d|[а-я]{2} \d\d:\d\d|\d+ [а-я]{3})$/.test(l))
+      && (!/<blockquote expandable>/.test(eph.text) || /<\/blockquote>$/.test(eph.text)) && eph.text.length < 4096 && !tgSent.some((m) => m.chat_id === ids[0] && /Ответ на \/deadlines/.test(m.text || ""))
+      && tgButtons.filter((b) => b.chat_id === G).every((b) => (/^https:\/\//.test(b.url || "") && !/\?open=/.test(b.url)) || /^eph:/.test(b.cb || "") || b.disabled), (eph?.text || "").replace(/\n/g, " ⏎ ").slice(0, 200));
+    tgUpdates.push({ update_id: ++uid, message: { message_id: 0, ephemeral_message_id: 9002, chat, from: { id: ids[0], first_name: "Вошедший" }, text: "/grades" } });
+    tgUpdates.push({ update_id: ++uid, message: { message_id: 0, ephemeral_message_id: 9003, chat, from: { id: ids[0], first_name: "Вошедший" }, text: "/session" } });
+    const e2ok = await waitFor(() => tgSent.some((m) => m.ereply === 9002) && tgSent.some((m) => m.ereply === 9003));
+    const eg = tgSent.find((m) => m.ereply === 9002), es = tgSent.find((m) => m.ereply === 9003);
+    check("беседа: эфемерные /grades и /session — короткие ответы с заголовком «🔒 Ваши оценки» / «🔒 Ваша сессия», только автору",
+      e2ok && eg.eph === ids[0] && es.eph === ids[0] && /^<b>🔒 Ваши оценки<\/b>/.test(eg.text) && /^<b>🔒 Ваша сессия<\/b>/.test(es.text) && es.text.length < 4096,
+      `${(eg?.text || "").replace(/\n/g, " ⏎ ").slice(0, 120)} || ${(es?.text || "").replace(/\n/g, " ⏎ ").slice(0, 160)}`);
+    // Кнопки личного ответа (16 окт 2026): вкладка «Журнал» правит тот же ответ; «Мои сроки 🔒» под общим сообщением.
+    const now = Math.floor(Date.now() / 1000);
+    tgUpdates.push({ update_id: ++uid, callback_query: { id: "cbE1", from: { id: ids[0], first_name: "Вошедший" }, data: "eph:journal", message: { message_id: 0, ephemeral_message_id: 777, chat, date: now } } });
+    const tabOk = await waitFor(() => tgEph.some((x) => x.method === "answerCallbackQuery" && x.callback_query_id === "cbE1"));
+    const te = tgEph.find((x) => x.method === "editEphemeralMessageText" && x.ephemeral_message_id === 777);
+    check("беседа: вкладка «Журнал» на личном ответе — тот же ответ правится (editEphemeralMessageText, receiver — нажавший), «• Журнал» неактивна, нажатие отвечено",
+      tabOk && te?.receiver_user_id === ids[0] && te.chat_id === G && /^<b>🔒 Ваш журнал<\/b>/.test(te.text || "") && te.reply_markup?.inline_keyboard?.[0]?.[2]?.disabled && te.parse_mode === "HTML",
+      JSON.stringify(te || null).slice(0, 200));
+    const mineBtn = tgButtons.some((b) => b.chat_id === G && b.cb === "eph:new:deadlines" && b.text === "Мои сроки 🔒");
+    tgUpdates.push({ update_id: ++uid, callback_query: { id: "cbE2", from: { id: mem, first_name: "Одногруппник" }, data: "eph:new:deadlines", message: { message_id: 4100, chat, date: now, text: "📅 Сегодня" } } });
+    const mOk = await waitFor(() => tgSent.some((m) => m.chat_id === G && m.ecb === "cbE2"));
+    const mm = tgSent.find((m) => m.chat_id === G && m.ecb === "cbE2");
+    check("беседа: под расписанием есть «Мои сроки 🔒»; нажал не вошедший в Doodle — ему лично «Сначала войдите» (callback_query_id), остальным ничего",
+      mineBtn && mOk && mm.eph === mem && /^Сначала войдите/.test(mm.text || "") && !tgSent.some((m) => m.chat_id === G && m.eph == null && /Сначала войдите/.test(m.text || "")),
+      (mm?.text || "").slice(0, 120));
+    // Изменение: «Базы данных» завтра перенесли на 14:30 → одно сообщение в беседу.
+    await waitFor(() => chatsFile()[G]?.schedule, 10);
+    chatSched.days[2] = slot(msk(1), "14:30 - 16:05", "Базы данных", "ауд. Б-512");
+    await api(ids[0], `/api/schedule?group=${encodeURIComponent("ТЕСТ-26-1")}&refresh`);
+    const changed = await waitFor(() => inG(/^📅 Изменения в расписании · ТЕСТ-26-1/).length);
+    await sleep(5000); // ещё пара обходов — повтора быть не должно
+    const ch = inG(/^📅 Изменения в расписании · ТЕСТ-26-1/);
+    check("беседа: перенос пары — одно сообщение в беседу «Базы данных перенесена с 12:40 на 14:30», без повтора",
+      changed && ch.length === 1 && /«Базы данных» перенесена с 12:40 на 14:30/.test(ch[0].text), ch.map((m) => m.text.replace(/\n/g, " ⏎ ")).join(" | ").slice(0, 200));
+    // Беседа стала супергруппой: отправка в старую отвечает новым номером — привязка и ответ переезжают туда.
+    chatMigrate.set(G, G2);
+    say(mem, "/tomorrow");
+    const moved = await waitFor(() => inG(/^📅 Завтра/, G2).length);
+    check("беседа стала супергруппой — привязка перенесена на новый номер, ответ пришёл туда", moved && !chatsFile()[G] && chatsFile()[G2]?.group === "ТЕСТ-26-1", Object.keys(chatsFile()).join(","));
+    tgUpdates.push({ update_id: ++uid, my_chat_member: { chat: { id: G2, type: "supergroup", title: "БИСТ болталка" }, from: { id: adm }, old_chat_member: { status: "member" }, new_chat_member: { status: "kicked" } } });
+    const removed = await waitFor(() => !chatsFile()[G2]);
+    check("беседа: бота удалили — привязка снята", removed, Object.keys(chatsFile()).join(","));
+  }
+  { // Уведомления по курсам в беседе (chats.mjs, этап 2, 16 окт 2026): бота добавил вошедший в Doodle — его курсы становятся
+    // источником общих уведомлений беседы, ему в личку — что из его данных используется. Новый тест у него приходит и в
+    // беседу (тем же текстом, без web_app), а оценки и замечания преподавателя — только ему лично.
+    // Новый пользователь стенда (Moodle u97, свой номер Telegram): его тест закрыт, пока первые обходы только запоминают
+    // работы, а потом «открывается» — для обходов это новый тест.
+    const su = 777097, sn = 97, GC = -100700, qid = (sn * 10 + 1) * 100 + 50;
+    const waitFor = async (fn, sec = 60) => { for (let i = 0; i < sec && !fn(); i++) await sleep(1000); return !!fn(); };
+    const chatsFile = () => { try { return JSON.parse(readFileSync(join(SIM, "chats.json"), "utf8")); } catch { return {}; } };
+    const stateOf = () => { try { return JSON.parse(readFileSync(join(SIM, "notify", `${su}.json`), "utf8")); } catch { return {}; } };
+    const inC = (re) => tgSent.filter((m) => m.chat_id === GC && re.test(m.text || ""));
+    const toMe = (re) => tgSent.filter((m) => m.chat_id === su && re.test(m.text || ""));
+    quizClose.set(qid, nowS() - 3600);
+    const login = await api(su, "/api/login", { username: `u${sn}`, password: `ok-u${sn}` });
+    await api(su, "/api/group"); // группа определяется сама (как в фазе 2) — беседа без группы привяжется к ней
+    let uid = 900;
+    tgUpdates.push({ update_id: ++uid, my_chat_member: { chat: { id: GC, type: "group", title: "БИСТ общая" }, from: { id: su, is_bot: false, first_name: "Староста" }, old_chat_member: { status: "left" }, new_chat_member: { status: "member" } } });
+    const hello = await waitFor(() => inC(/^Я бот Doodle/).length && toMe(/Doodle подключён к беседе «БИСТ общая»/).length, 30);
+    const dm = toMe(/Doodle подключён к беседе/)[0]?.text || "", help = inC(/^Я бот Doodle/)[0]?.text || "";
+    check("беседа, уведомления по курсам: бота добавил вошедший в Doodle — он источник; в беседе справка с «Уведомления по курсам Moodle включены»; ему в личку одно сообщение — курсы используются, личные данные нет",
+      login.s === 200 && hello && chatsFile()[GC]?.source === su && /Уведомления по курсам Moodle включены/.test(help) && toMe(/Doodle подключён к беседе/).length === 1
+      && /Сведения о ваших курсах Moodle (текущего семестра )?используются для общих уведомлений/.test(dm) && /личные данные[^\n]*не используются/.test(dm),
+      `${JSON.stringify(chatsFile()[GC] || null).slice(0, 160)} | ${dm.replace(/\n/g, " ⏎ ").slice(0, 160)}`);
+    // Первые обходы нового пользователя (полный и быстрый опрос тестов) только запоминают работы; затем тест «открывается».
+    const seeded = await waitFor(() => stateOf().seededFull && stateOf().seededQuick, 90);
+    quizClose.delete(qid);
+    const isNew = new RegExp(`^🆕 Новый тест: Тест пользователя ${sn}\\b`);
+    const got = await waitFor(() => toMe(isNew).length && inC(isNew).length, 90);
+    await sleep(6000); // ещё обходы — повтора быть не должно
+    const mine = toMe(isNew), shared = inC(isNew), cb = tgButtons.filter((b) => b.chat_id === GC);
+    check("беседа, уведомления по курсам: новый тест у источника — тот же «🆕 Новый тест» приходит и в беседу, один раз; кнопки в беседе — ссылки (Moodle и t.me), без web_app",
+      seeded && got && mine.length === 1 && shared.length === 1 && shared[0].text === mine[0].text && cb.some((b) => b.text === "Открыть тест в Moodle")
+      && cb.every((b) => /^https:\/\/t\.me\/DoodleSimBot$/.test(b.url || "") || String(b.url || "").startsWith(`${FAKE}/`) || b.cb === "eph:new:deadlines") && !cb.some((b) => /sim\.example\.test/.test(b.url || "")), // web_app — адрес приложения
+      `засеяно ${seeded}, себе ${mine.length}, в беседу ${shared.length}: ${(shared[0]?.text || "").replace(/\n/g, " ⏎ ").slice(0, 120)} | ${JSON.stringify(cb.filter((b) => !/t\.me/.test(b.url || "")).slice(-3))}`);
+    // Оценка и новое замечание преподавателя у источника — только ему, не в беседу.
+    const s780 = subState(sn, 780);
+    s780.grade = "5.00000";
+    s780.thread.push({ author: "Преподаватель", text: `Замечание старосте ${sn}`, userid: 9000, at: nowS() });
+    const personal = await waitFor(() => toMe(/^📝 Оценка/).length && toMe(/^💬 Замечание преподавателя/).length, 90);
+    await sleep(3000);
+    const leaked = tgSent.filter((m) => Number(m.chat_id) < 0 && /📝 Оценка|💬 Замечание|Замечание преподавателя/.test(m.text || ""));
+    check("беседа, уведомления по курсам: оценка и замечание преподавателя приходят источнику лично, в беседы (отрицательные номера) — никогда",
+      personal && leaked.length === 0, `лично: оценка ${toMe(/^📝 Оценка/).length}, замечание ${toMe(/^💬 Замечание/).length}; в беседы: ${leaked.map((m) => `${m.chat_id}: ${String(m.text).slice(0, 40)}`).join(" | ")}`);
+    // Экзамены группы беседы: если блок «Сессия» выложил файл с БИСТ-24-ПО-2, а беседа привязалась к этой группе, — одно
+    // объявление с кнопкой на файл (обход бесед раз в 2 с — CHATS_RELAY_MS).
+    if (sessionFile && chatsFile()[GC]?.group === "БИСТ-24-ПО-2") {
+      const ex = await waitFor(() => inC(/^📅 Расписание экзаменов опубликовано/).length, 20);
+      const fileBtn = tgButtons.filter((b) => b.chat_id === GC && b.text === "Файл на misis.ru");
+      check("беседа, уведомления по курсам: расписание экзаменов группы беседы — одно объявление с кнопкой «Файл на misis.ru»",
+        ex && inC(/^📅 Расписание экзаменов опубликовано/).length === 1 && fileBtn.length === 1 && fileBtn[0].url.endsWith(`/files/${sessionFile}`),
+        `${inC(/^📅 Расписание экзаменов/).length}: ${JSON.stringify(fileBtn)}`);
+    } else console.log(`(экзамены в беседе не проверены: файл сессии ${sessionFile || "не выложен"}, группа беседы ${chatsFile()[GC]?.group ?? "нет"})`);
+  }
+  { // Moodle отклоняет запросы бота (403). Последним: после отказа фоновые обходы стенда встают на паузу.
+    const bu = ids[17], OWN = 945210206;
+    const blockAlerts = () => tgSent.filter((m) => m.chat_id === OWN && /отклоняет запросы бота/.test(m.text)).length;
+    const fresh = await api(bu, "/api/deadlines?refresh");
+    outage.set(nOf(bu), "blocked");
+    const st = [];
+    for (let i = 0; i < 3; i++) st.push(await api(bu, "/api/deadlines?refresh"));
+    const status = await api(bu, "/api/status");
+    await sleep(3000);
+    const calls = moodleCalls;
+    await sleep(15000); // за это время прошли бы опрос тестов и обход уведомлений всех пользователей
+    check("Moodle отклоняет запросы (403): приложение получает прежние данные с причиной «blocked», а не ошибку",
+      fresh.s === 200 && !fresh.j.stale && st.every((r) => r.s === 200 && r.j.stale === true && r.j.moodle?.down === true && r.j.moodle.reason === "blocked" && r.j.items.length === fresh.j.items.length)
+      && status.j.moodle?.down === true && status.j.moodle.reason === "blocked", `${st.map((r) => `${r.s}:${r.j?.stale}:${r.j?.moodle?.reason}`).join(" ")} status=${JSON.stringify(status.j?.moodle)}`);
+    check("Moodle отклоняет запросы (403): владельцу одно сообщение на весь эпизод, фоновые обходы в Moodle не идут", blockAlerts() === 1 && moodleCalls - calls < 5, `сообщений ${blockAlerts()}, запросов за 15 с ${moodleCalls - calls}`);
+  }
   console.log(`вызовов поддельного Moodle: ${moodleCalls}, одновременно максимум ${moodlePeak} (пул сервера — 6 соединений); фаза 2 (${N} стартов приложения разом): ${t2} мс`);
 } catch (e) { fails++; console.log("СБОЙ СЦЕНАРИЯ: " + (e.stack || e)); }
 finally { stop(); }

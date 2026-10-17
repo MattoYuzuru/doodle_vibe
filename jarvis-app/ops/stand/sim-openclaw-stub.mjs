@@ -28,6 +28,8 @@ if (a[0] === "agent") {
   }
   if (key.endsWith("-779") && n === 0) { console.error("Error: something broke inside openclaw"); process.exit(1); }
   appendFileSync(LOG, "start " + key + " " + Date.now() + "\n");
+  // Модель хода (пробный отчёт, lab-trial.mjs: --model только у пробной лабы) — для проверки стендом.
+  if (a.includes("--model")) appendFileSync(LOG, "model " + key + " " + a[a.indexOf("--model") + 1] + "\n");
   // Агент окружения (lab.mjs setupEnv, сессия agent:files:env-…): читает work\env-needs.json, пишет env-result.json и ОКРУЖЕНИЕ.md.
   if (key.includes(":env-")) {
     await new Promise((r) => setTimeout(r, 1500));
@@ -133,8 +135,18 @@ if (a[0] === "agent") {
   }
   // Сообщение, начинающееся со слова «вопрос», — агент только отвечает, файл отчёта не трогает.
   const isQuestion = /^(?:Сообщение студента:\s*)?вопрос/i.test(msg.trim()); // текст студента приходит с приставкой сервера
-  const jobJson = (pdf) => writeFileSync(join(dir, "JOB.json"), JSON.stringify({ status: "report", progress: 100, stage: "Отчёт готов", text: "", pdf, docx: null, pages: 3 }));
-  const report = (name) => { const p = join(dir, "work", "report", name); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, `PDF ${name} ${key}`); jobJson(p); };
+  const jobJson = (pdf) => writeFileSync(join(dir, "JOB.json"), JSON.stringify({ status: "report", progress: 100, stage: "Отчёт готов", text: "", pdf, docx: null, pages: 3,
+    // Терминал: в 782 «студент выбрал Linux» (сервер запомнит), в 781 среду назвала методичка (в профиль не идёт).
+    ...(id === "782" ? { terminal: "wsl", terminalFrom: "студент" } : id === "781" ? { terminal: "powershell", terminalFrom: "методичка" } : {}) }));
+  // .badreport — один раз: «outside» — отчёт положен вне work\report, «notpdf» — файл без сигнатуры PDF (сервер обязан отклонить).
+  const badMode = existsSync(LOG + ".badreport") ? readFileSync(LOG + ".badreport", "utf8").trim() : "";
+  if (badMode) rmSync(LOG + ".badreport");
+  const report = (name) => {
+    const p = badMode === "outside" ? join(dir, name) : join(dir, "work", "report", name);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, badMode === "notpdf" ? `PDF ${name} ${key}` : `%PDF-1.4\n% стенд: ${name} ${key}\n${" ".repeat(1100)}`); // сервер принимает только файл с сигнатурой PDF
+    jobJson(p);
+  };
   // Имя исправленного файла агенту называет сервер (по файлу, сданному в Moodle): «… (испр.).pdf», «… (испр. 2).pdf».
   const named = /НОВЫЙ PDF с именем `([^`]+)`/.exec(msg)?.[1];
   if (["780", "781", "782"].includes(id) && !isQuestion) report(isFix ? named || `Отчёт ${id} (без имени).pdf` : `Отчёт ${id}.pdf`);

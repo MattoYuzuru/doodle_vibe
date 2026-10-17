@@ -9,7 +9,7 @@ try {
   $def = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "0.0.0.0/0" | Where-Object { $_.NextHop -ne "0.0.0.0" } | Sort-Object RouteMetric | Select-Object -First 1
   if (-not $def) { Log "no default gateway yet"; exit 0 }
   $gw = $def.NextHop; $if = $def.InterfaceIndex
-  $ips = @("85.143.106.23", "85.143.104.227")
+  $ips = @("85.143.106.23", "85.143.104.227", "5.253.61.53") # journal, Moodle, misis.ru (official schedule)
   foreach ($h in "lk.misis.ru", "ej.misis.ru", "id.misis.ru", "login.misis.ru") {
     try { $ips += (Resolve-DnsName $h -Type A -ErrorAction Stop | Where-Object { $_.IPAddress -like "85.143.*" }).IPAddress } catch { }
   }

@@ -1,5 +1,5 @@
 import { Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "../components/Toast";
 import { useNav } from "../hooks/useNav";
 import { useMainButton } from "../hooks/useTelegramButtons";
@@ -14,7 +14,14 @@ export const fieldClass = "glass-tile block w-full rounded-2xl px-4 py-3 text-m 
 export function TaskFormScreen({ id, date }: { id?: string; date?: string }) {
   const { tasks, addTask, updateTask, deleteTask } = useAppStore();
   const pop = useNav((s) => s.pop);
-  const existing = tasks.find((t) => t.id === id);
+  const found = tasks.find((t) => t.id === id);
+  // Уезжающий экран (проверка 15 окт): после «Удалить» задачи в сторе уже нет, а экран ещё ~0,4 с уезжает — без снимка он
+  // на глазах становился «Новой задачей» с активной «Добавить», и нажатие возвращало удалённую задачу.
+  const last = useRef(found);
+  if (found) last.current = found;
+  // Форма уже сохранена или задача удалена: двойной тап по «Сохранить» больше не добавляет вторую такую же задачу.
+  const done = useRef(false);
+  const existing = found ?? (done.current ? last.current : undefined);
   const [text, setText] = useState(existing?.text ?? "");
   const [day, setDay] = useState(existing?.date ?? date ?? todayKey());
   const [time, setTime] = useState(existing?.time ?? "");
@@ -22,7 +29,8 @@ export function TaskFormScreen({ id, date }: { id?: string; date?: string }) {
 
   const close = () => { useUi.setState({ exitDir: 1 }); pop(); };
   const save = () => {
-    if (!canSave) return;
+    if (!canSave || done.current) return;
+    done.current = true;
     if (existing) updateTask(existing.id, { text: text.trim(), date: day, time });
     else addTask({ text: text.trim(), date: day, time });
     haptic.success();
@@ -30,9 +38,11 @@ export function TaskFormScreen({ id, date }: { id?: string; date?: string }) {
     close();
   };
   const remove = async () => {
-    if (!existing) return;
+    if (!existing || done.current) return;
+    done.current = true; // пока открыт вопрос, «Сохранить» и второе «Удалить» не срабатывают
     haptic.warning();
     if (await confirmDialog(`Удалить «${existing.text}»?`)) { deleteTask(existing.id); toast("Удалено"); close(); }
+    else done.current = false;
   };
   const nativeButton = useMainButton(existing ? "Сохранить" : "Добавить", save, canSave);
 

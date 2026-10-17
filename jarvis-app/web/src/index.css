@@ -43,6 +43,22 @@ body,
   min-height: 100%;
 }
 
+html {
+  /* Резинка окна выключена и на корне (проверка 15 окт): для окна браузеры берут overscroll-behavior с html,
+     а с body его учитывают не все. */
+  overscroll-behavior-y: none;
+  /* Место под полосу прокрутки держим всегда: в Telegram на ПК (Windows, полоса ~16 px) html.stack-open убирал её,
+     и вкладка под открывающимся экраном прыгала вбок. На телефонах полосы накладные — ничего не меняет. */
+  scrollbar-gutter: stable;
+  /* Прокрутка к полю при фокусе и scrollIntoView учитывают плавающую панель вкладок (проверка 15 окт). */
+  scroll-padding-bottom: calc(96px + var(--safe-bottom));
+}
+/* Открыт экран поверх вкладок (App): окно под ним не прокручивается (проверка 15 окт). Без этого короткий экран
+   (без своей прокрутки) и рывок у края длинного прокручивали скрытую вкладку под ним, сжималась панель вкладок. */
+html.stack-open {
+  overflow: hidden;
+}
+
 body {
   margin: 0;
   background: var(--c-page);
@@ -117,18 +133,24 @@ html[data-bg="grid"] body::before {
 html[data-bg="glow1"] body::before { background: radial-gradient(75% 38% at 50% -6%, var(--bg-glow), transparent 70%); }
 
 /* ---------- Liquid Glass ----------
-   .glass — полупрозрачная поверхность с размытием, бликом сверху и светлой кромкой.
-   В Chromium (Telegram на Android и ПК) добавляется преломление по краям: SVG-фильтр
-   с картой смещений (см. hooks/useLiquidGlass.ts). В WebKit (iPhone) — матовое стекло. */
+   .glass — полупрозрачная поверхность с бликом сверху и светлой кромкой.
+   .glass-float — размытие под стеклом, только у плавающих поверх контента элементов: панель вкладок, «+», тост,
+   значок обновления (пока виден). В Chromium (Telegram на Android и ПК) у панели и «+» вместо него — преломление
+   по краям: SVG-фильтр с картой смещений (см. hooks/useLiquidGlass.ts). В WebKit (iPhone) — матовое стекло.
+   Проверка 15 окт: размытие было у каждой плитки и каждого стеклянного элемента внутри прокручиваемого контента. Фон
+   закреплён, а плитка едет — размытие под каждой пересчитывалось на каждом кадре прокрутки, отсюда рывки (хуже всего
+   на Android). Без saturate цвет плитки на градиенте фона меняется на 2–4 уровня яркости — глазом не видно. */
 /* Слой components: утилиты Tailwind (fixed, absolute, rounded-*) имеют приоритет над этими правилами. */
 @layer components {
   .glass {
     position: relative;
     isolation: isolate;
     background: var(--glass-bg);
+    box-shadow: var(--glass-shadow);
+  }
+  .glass-float {
     -webkit-backdrop-filter: blur(14px) saturate(180%);
     backdrop-filter: blur(14px) saturate(180%);
-    box-shadow: var(--glass-shadow);
   }
   .glass::before,
   .glass-lens::before {
@@ -154,14 +176,20 @@ html[data-bg="glow1"] body::before { background: radial-gradient(75% 38% at 50% 
     pointer-events: none;
     z-index: -1;
   }
-  /* Плитка бенто: плотнее обычного стекла, чтобы текст читался, но свечение фона сквозь неё видно. */
+  /* Плитка бенто: плотнее обычного стекла, чтобы текст читался, но свечение фона сквозь неё видно.
+     Без размытия (см. выше): плитка растеризуется один раз, рамка-маска ::before — тоже только при растеризации. */
   .glass-tile {
     position: relative;
     isolation: isolate;
     background: var(--tile-bg);
-    -webkit-backdrop-filter: blur(20px) saturate(160%);
-    backdrop-filter: blur(20px) saturate(160%);
     box-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 8px 24px rgb(0 0 0 / 0.12);
+  }
+  /* Узорные фоны (?bg=…): без размытия точки, сетка, кольца и зерно просвечивали бы сквозь плитку — плитка сплошная. */
+  html[data-bg="dots"] .glass-tile,
+  html[data-bg="grid"] .glass-tile,
+  html[data-bg="rings"] .glass-tile,
+  html[data-bg="grain"] .glass-tile {
+    background: var(--c-card);
   }
   .glass-tile::before {
     content: "";
@@ -196,6 +224,56 @@ html[data-bg="glow1"] body::before { background: radial-gradient(75% 38% at 50% 
   }
 }
 
+/* Экраны поверх вкладок (App: StackScreen) — без размытия под стеклом (проверка 15 окт): под ними сплошной bg-page,
+   размывать нечего, а пузыри чата лабы, поля и плитки пересчитывали размытие на каждом кадре прокрутки.
+   Вне @layer — чтобы перебить и слой components, и преломление. */
+.stack-screen :is(.glass, .glass-tile, .glass-sheet) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* Обрезка по горизонтали без вертикального скроллера (проверка 15 окт): overflow-x: hidden превращал overflow-y в auto,
+   и лента вкладок с main становились скрытыми вертикальными скроллерами — резкий взмах прилипал к ним и «упирался»,
+   а «потянуть вниз» срабатывало ложно. clip скроллер не создаёт; hidden — запас для iOS < 16, где clip нет. */
+.clip-x {
+  overflow-x: hidden;
+}
+@supports (overflow: clip) {
+  .clip-x {
+    overflow-x: clip;
+  }
+}
+
+/* «Дыхание» колец на карточке ближайшего дедлайна (HeroDeadlineCard). Анимация transform в @keyframes идёт на
+   композиторе (проверка 15 окт: framer считал scale в JS на каждом кадре). Два набора кадров, а не var() в кадрах:
+   с переменными часть движков не отдаёт анимацию композитору. */
+@keyframes hero-breathe-a {
+  50% { transform: scale(1.06); }
+}
+@keyframes hero-breathe-b {
+  50% { transform: scale(1.1); }
+}
+.hero-ring-a {
+  animation: hero-breathe-a 6s ease-in-out infinite;
+  will-change: transform;
+}
+.hero-ring-b {
+  animation: hero-breathe-b 6s ease-in-out 0.6s infinite;
+  will-change: transform;
+}
+/* Главная за другой вкладкой или под экраном стека — кольца стоят. */
+[data-tab-page][aria-hidden="true"] :is(.hero-ring-a, .hero-ring-b),
+html.stack-open :is(.hero-ring-a, .hero-ring-b) {
+  animation-play-state: paused;
+}
+/* MotionConfig CSS-анимации не касается — «уменьшить движение» учитываем сами. */
+@media (prefers-reduced-motion: reduce) {
+  .hero-ring-a,
+  .hero-ring-b {
+    animation: none;
+    will-change: auto;
+  }
+}
+
 /* Облегчённый режим (lib/perf.ts): размытие под стеклом — самое дорогое при прокрутке на слабых телефонах.
    Без него стекло и шторки — почти непрозрачные, плитки — как есть, тени проще. */
 /* Пульсирующая точка «агент работает» (LabPulse) на слабых телефонах не мигает. */
@@ -224,6 +302,11 @@ html.lite body::before {
 }
 html.lite .glass-tile {
   border: 1px solid var(--c-separator);
+}
+/* Кольца на карточке дедлайна не «дышат» и не держат свой слой. */
+html.lite :is(.hero-ring-a, .hero-ring-b) {
+  animation: none;
+  will-change: auto;
 }
 /* Невидимые вкладки ленты отрисовываются, только когда свайп выводит их на экран. */
 html.lite [data-tab-page][aria-hidden="true"] {

@@ -1,7 +1,7 @@
 // Стенд для просмотра интерфейса «Комментарий преподавателя / Исправить отчёт» без настоящих Moodle, Telegram и агента.
 // Копия сервера приложения на 127.0.0.1:8799, поддельный Moodle на 127.0.0.1:9911, вместо OpenClaw и скрипта навыка —
 // заглушки. Настоящие токены, users/, jobs/ и папки работ не затрагиваются. Останов: создать файл sim-ui/stop.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
@@ -25,10 +25,13 @@ for (const f of readdirSync(APP).filter((x) => x.endsWith(".mjs"))) {
   writeFileSync(join(SIM, f), src);
 }
 cpSync(join(APP, "lab-instruction.md"), join(SIM, "lab-instruction.md"));
+for (const f of ["lab-report-classic.md", "lab-report-kit.md"]) cpSync(join(APP, f), join(SIM, f)); // шаг «собери отчёт» — два способа
+cpSync(join(APP, "assets", "styles"), join(SIM, "assets", "styles"), { recursive: true });           // профили оформления для сборки программой
 for (const f of readdirSync(APP).filter((x) => x.endsWith("-instruction.md") && x !== "lab-instruction.md")) cpSync(join(APP, f), join(SIM, f));
 // Постоянный адрес календаря в стенде — условный; сам туннель ngrok стенд не запускает (CAL_TUNNEL=0).
 writeFileSync(join(SIM, "calendar-base.txt"), "https://cal.example.test");
 cpSync(join(APP, "schedule_xls.py"), join(SIM, "schedule_xls.py"));
+for (const f of ["curriculum_pdf.py", "session_xls.py", "sheet_xls.py"]) cpSync(join(APP, f), join(SIM, f)); // учебный план, расписание сессии, таблицы преподавателей («Сессия»)
 // Программа измерений оформления для «Проверки своего отчёта» (сервер зовёт её из своей папки assets).
 mkdirSync(join(SIM, "assets"), { recursive: true });
 cpSync(join(APP, "assets", "report_check.py"), join(SIM, "assets", "report_check.py"));
@@ -44,6 +47,31 @@ cpSync(join(HERE, "sim-skill-stub.mjs"), join(HOME, ".openclaw", "skills", "mood
 
 // ---------- поддельный Moodle: один студент, один курс ----------
 const COURSE = 31, tgSent = [];
+// Таблицы преподавателей (course-sheets.mjs): «Методы оптимизации» — дисциплины нет в журнале (отдельная карточка и
+// баллы «Сессии»), «Физическая культура и спорт» — в журнале есть, но без оценок (баллы из таблицы в её карточке).
+const SHEET_COURSES = [{ id: 32, fullname: "Методы оптимизации. Осень 2026", file: "Журнал посещаемости БИСТ-24.xlsx" }, { id: 33, fullname: "Физическая культура и спорт. Осень 2026", file: "Баллы ФК.xlsx" }];
+function makeSheets() {
+  const d = (n) => { const t = new Date(Date.now() + n * 86400e3); return `${String(t.getUTCDate()).padStart(2, "0")}.${String(t.getUTCMonth() + 1).padStart(2, "0")}.${t.getUTCFullYear()}`; };
+  const head = [
+    [null, "Журнал посещаемости", null, null, null, null, "Лекции", null, null, null, "Лабораторные работы", null, null, null, "Практические занятия", null, null, null, "КТ1", "КТ2", "КТ3", null],
+    [null, "Группа «БИСТ-24-ПО-2»", null, null, null, "Дата занятия", d(-35), d(-21), d(-7), d(7), d(-35), d(-21), d(-7), d(7), d(-36), d(-22), d(-8), d(6), null, null, null, null],
+    [null, "№", "Номер", "Фамилия", "Имя", "Отчество", "Л 1", "Л 2", "Л 3", "Л 4", "Лаб 1", "Лаб 2", "Лаб 3", "Лаб 4", "П 1", "П 2", "П 3", "П 4", null, null, null, null],
+    [null, null, null, null, null, null, 4, 4, 4, 4, 6, 6, 6, 6, 5, 5, 5, 5, 12, 13, 15, 100]];
+  const mo = [...head,
+    [null, 1, 2400001, "Абрамов", "Олег", "Петрович", 4, 4, 3, null, 6, 6, 5, null, 5, 5, 5, null, null, null, null, 43],
+    [null, 2, 2400002, "Студент", "Тестовый", "Стендович", 3, 2.5, "Н", null, 4.5, "+", 6, null, 5, "Н", 4, null, null, null, null, 25],
+    [null, 3, 2400003, "Яковлева", "Мария", "Ильинична", 4, 4, 4, null, 6, 6, 6, null, 5, 5, 5, null, null, null, null, 45]];
+  const pe = [["ФИО", "Группа", "Норматив 1", "Норматив 2", "Посещения", "Итого"], [null, null, 30, 30, 40, 100],
+    ["Абрамов Олег Петрович", "БИСТ-24-ПО-2", 25, 20, 30, 75], ["Студент Тестовый Стендович", "БИСТ-24-ПО-2", 18, null, 22, 40]];
+  const spec = join(SIM, "sheets-spec.json");
+  writeFileSync(spec, JSON.stringify([
+    { out: join(SIM, SHEET_COURSES[0].file), sheets: [{ title: "БИСТ-24_ПО_2", rows: mo, merge: ["G1:J1", "K1:N1", "O1:R1"] }] },
+    { out: join(SIM, SHEET_COURSES[1].file), sheets: [{ title: "Лист1", rows: pe }] }]));
+  writeFileSync(join(SIM, "make-sheets.py"), "import json, sys, openpyxl\nfor b in json.load(open(sys.argv[1], encoding='utf-8')):\n    wb = openpyxl.Workbook(); wb.remove(wb.active)\n    for sh in b['sheets']:\n        ws = wb.create_sheet(sh['title'])\n        for r in sh['rows']: ws.append(r)\n        for m in sh.get('merge', []): ws.merge_cells(m)\n    wb.save(b['out'])\n");
+  const py = [process.env.PYTHON, "C:\\Program Files\\Python312\\python.exe"].find((p) => p && existsSync(p)) || "python";
+  const r = spawnSync(py, [join(SIM, "make-sheets.py"), spec], { encoding: "utf8", env: { ...process.env, PYTHONUSERBASE: process.env.PYTHONUSERBASE || join(process.env.APPDATA || "", "Python") } });
+  if (r.status) console.log("ui-sim: таблицы не собрались:", (r.stderr || "").slice(-300));
+}
 const sub = { id: 780001, status: "submitted", canedit: true, graded: true, grade: "2.00000", files: ["Отчет ЛР3 вариант 04.pdf"],
   comment: "Балл может быть повышен при исправлении замечаний.\n1. стр. 21. Значения VU (2, 4, 8, 16) для четырёх прогонов не обоснованы.\n2. стр. 21. Загрузка CPU базы приведена числом, снимок docker stats не приложен.",
   thread: [] };
@@ -62,8 +90,12 @@ const assigns = () => [
 function ws(fn, p) {
   switch (fn) {
     case "core_webservice_get_site_info": return { userid: 1001, fullname: "Студент Тестовый Стендович", username: "u1" };
-    case "core_enrol_get_users_courses": return [{ id: COURSE, fullname: "Оптимизация клиент-серверных приложений. Осень 2026", hidden: false, lastaccess: nowS() - 3600, startdate: nowS() - 30 * 86400 }];
+    case "core_enrol_get_users_courses": return [{ id: COURSE, fullname: "Оптимизация клиент-серверных приложений. Осень 2026", hidden: false, lastaccess: nowS() - 3600, startdate: nowS() - 30 * 86400 },
+      ...SHEET_COURSES.map((c) => ({ id: c.id, fullname: c.fullname, hidden: false, lastaccess: nowS() - 3600, startdate: nowS() - 30 * 86400 }))];
     case "core_course_get_contents": {
+      const sc = SHEET_COURSES.find((c) => c.id === Number(p.courseid));
+      if (sc) return [{ id: 1, name: "Журнал", modules: [{ id: sc.id * 100, modname: "resource", name: "Журнал", url: `${FAKE}/mod/resource/view.php?id=${sc.id * 100}`,
+        contents: [{ type: "file", filename: sc.file, filepath: "/", filesize: existsSync(join(SIM, sc.file)) ? readFileSync(join(SIM, sc.file)).length : 1000, timemodified: nowS() - 86400, fileurl: `${FAKE}/pluginfile/sheet/${encodeURIComponent(sc.file)}` }] }] }];
       const file = (name, size = 2000) => ({ type: "file", filename: name, filepath: "/", filesize: size, fileurl: `${FAKE}/pluginfile/course/${encodeURIComponent(name)}` });
       return [
         { id: 1, name: "Общее", modules: [
@@ -105,6 +137,7 @@ function ws(fn, p) {
     case "mod_assign_submit_for_grading": { stateOf(Number(p.assignmentid)).status = "submitted"; return []; }
     case "core_comment_get_comments": return { comments: Number(p.itemid) === sub.id ? sub.thread.map((c, i) => ({ id: i + 1, content: `<div>${c.text}</div>`, fullname: c.author, userid: 9000, timecreated: c.at })) : [] };
     case "mod_quiz_get_user_best_grade": return { hasgrade: false };
+    case "mod_quiz_get_user_attempts": return { attempts: [] };
     case "core_group_get_course_user_groups": return { groups: [{ name: (process.env.SIM_GROUP || "БИСТ-24-ПО-2") + "  Глобальная группа" }] };
     case "core_course_get_courses_by_field": return { courses: [{ id: COURSE, fullname: "Оптимизация клиент-серверных приложений. Осень 2026", summary: "", contacts: [{ id: 9000, fullname: "Преподаватель Тестовый" }] }] };
     case "core_user_get_course_user_profiles": return [{ id: 9000, email: "teacher@example.test", roles: [{ name: "Преподаватель" }] }];
@@ -223,6 +256,7 @@ const fake = createServer((req, res) => {
     if (url.pathname.startsWith("/ej/")) return ejFake(req, res, url, body);
     if (url.pathname.startsWith("/dnevuch")) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(dnevuchPage()); }
     if (url.pathname.startsWith("/campus")) return json({ items: [] });
+    if (url.pathname.startsWith("/pluginfile/sheet/")) { const f = join(SIM, decodeURIComponent(url.pathname.slice(18))); if (!existsSync(f)) { res.writeHead(404); return res.end(); } res.writeHead(200, { "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }); return res.end(readFileSync(f)); }
     if (url.pathname.startsWith("/pluginfile/course/")) { res.writeHead(200, { "content-type": "application/octet-stream" }); return res.end("файл курса " + decodeURIComponent(url.pathname.slice(19))); }
     if (url.pathname === "/pluginfile/metod.txt") { res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }); return res.end("методичка"); }
     if (url.pathname.startsWith("/pluginfile/sub/")) { res.writeHead(200, { "content-type": "application/octet-stream" }); return res.end(fileBody(decodeURIComponent(url.pathname.slice(16)))); }
@@ -250,11 +284,12 @@ const fake = createServer((req, res) => {
   });
 });
 await new Promise((r) => fake.listen(9911, "127.0.0.1", r));
+makeSheets(); // таблицы преподавателей для курсов SHEET_COURSES
 
 const serverLog = join(SIM, "server.log");
 writeFileSync(serverLog, "");
 const child = spawn(process.execPath, ["server.mjs"], { cwd: SIM, windowsHide: true,
-  env: { ...process.env, PORT: String(PORT), HOST: "127.0.0.1", USERPROFILE: HOME, HOME, APPDATA, LOCALAPPDATA: join(SIM, "local"), SIM_AGENT_LOG: AGENT_LOG, SIM_NICE: "1", PIN_ASSIGNS: "", LAB_RETRY_MS: "300", GATEWAY_URL: FAKE + "/campus", CAL_TUNNEL: "0", BACKUP: "0", LOCAL_OWNER: "1", PYTHONUSERBASE: join(process.env.APPDATA || "", "Python"), NOTIFY_EVERY_MS: "15000", SCHEDULE_TTL_MS: "5000", LAB_ACTIVE_MS: process.env.LAB_ACTIVE_MS || "8000", LAB_STUCK_MS: process.env.LAB_STUCK_MS || "25000", LAB_PROC_CACHE_MS: "3000" } });
+  env: { ...process.env, PORT: String(PORT), HOST: "127.0.0.1", USERPROFILE: HOME, HOME, APPDATA, LOCALAPPDATA: join(SIM, "local"), SIM_AGENT_LOG: AGENT_LOG, SIM_NICE: "1", PIN_ASSIGNS: "", LAB_RETRY_MS: "300", GATEWAY_URL: FAKE + "/campus", CAL_TUNNEL: "0", BACKUP: "0", GUARD_WATCH: "0", MOODLE_PACE: "0", MOODLE_NIGHT: "off", LOCAL_OWNER: "1", PYTHONUSERBASE: join(process.env.APPDATA || "", "Python"), NOTIFY_EVERY_MS: "15000", SCHEDULE_TTL_MS: "5000", LAB_ACTIVE_MS: process.env.LAB_ACTIVE_MS || "8000", LAB_STUCK_MS: process.env.LAB_STUCK_MS || "25000", LAB_PROC_CACHE_MS: "3000" } });
 child.stdout.on("data", (d) => appendFileSync(serverLog, d));
 child.stderr.on("data", (d) => appendFileSync(serverLog, d));
 for (let i = 0; i < 50; i++) { try { if ((await fetch(`${B}/api/health`)).ok) break; } catch { /* ещё стартует */ } await sleep(200); }

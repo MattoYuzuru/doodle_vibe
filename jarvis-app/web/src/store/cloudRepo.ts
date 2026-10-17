@@ -8,6 +8,8 @@ import type { AppData, Collection } from "./types";
 const CHUNK = 4000;
 const COLLECTIONS: Collection[] = ["subjects", "deadlines", "tasks", "notes", "settings"];
 const LS_PREFIX = "jarvis.";
+/** Отметка «хранилище этого бота сверено с копией на сервере» (см. useAppStore.loadAll). */
+export const CHECKED = "backup_checked";
 const empty = (c: Collection) => (c === "settings" ? { hiddenMoodleIds: [] } : []);
 
 const ls = {
@@ -41,10 +43,22 @@ export function createCloudRepository(): Repository {
   return {
     loadCached: readLocal,
 
+    // Отметка в хранилище: в Telegram — только в облаке (у каждого бота своё), вне Telegram — в браузере.
+    async flag(name) {
+      if (!cs) return ls.get(name) === "1";
+      return (await cs.get([name]))[name] === "1";
+    },
+    async setFlag(name) {
+      if (cs) await cs.set(name, "1"); else ls.set(name, "1");
+    },
+
     async load() {
       if (!cs) return readLocal();
-      const counts = await cs.get(COLLECTIONS.map((c) => `${c}_n`));
-      if (COLLECTIONS.every((c) => !counts[`${c}_n`])) return readLocal();
+      const counts = await cs.get([...COLLECTIONS.map((c) => `${c}_n`), CHECKED]);
+      // Облако пусто. Если оно уже сверялось с копией на сервере — берём локальную копию, как раньше. Если нет (первый
+      // запуск в этом боте) — локальной не доверяем: она могла остаться от другого аккаунта Telegram на этом телефоне
+      // или устареть; данные придут из копии на сервере.
+      if (COLLECTIONS.every((c) => !counts[`${c}_n`])) return counts[CHECKED] === "1" ? readLocal() : null;
       // Все куски всех коллекций — одним запросом (раньше было пять последовательных, это заметно тормозило старт).
       const keys: string[] = [];
       for (const c of COLLECTIONS) {

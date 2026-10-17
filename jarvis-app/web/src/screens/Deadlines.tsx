@@ -1,15 +1,18 @@
 import { AnimatePresence, m } from "framer-motion";
 import { ChevronDown, Flag } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { DeadlineRow } from "../components/DeadlineRow";
+import { MoodleFailed } from "../components/MoodleDown";
 import { Segmented } from "../components/Segmented";
 import { Tile, TileLabel } from "../components/Tile";
 import { EmptyState, Skeleton } from "../components/ui";
 import { useNav } from "../hooks/useNav";
 import { useNow } from "../hooks/useNow";
 import { addDays, dueDayKey, effectiveDue, todayKey, weekStart } from "../lib/dates";
+import { plural } from "../lib/journal";
 import type { Deadline, DeadlineKind } from "../store/types";
-import { subjectOf, useAppStore } from "../store/useAppStore";
+import { subjectOf, useAppStore, useFirstLoad } from "../store/useAppStore";
 import { KINDS } from "../theme/kinds";
 import { spring } from "../theme/motion";
 import { haptic } from "../telegram/webapp";
@@ -23,38 +26,62 @@ const MODES: { value: Mode; label: string }[] = [{ value: "active", label: "Ак
 /** Дедлайны: секции «Просрочено / Эта неделя / Следующая неделя / Позже», фильтр по типу работы.
  * «Сдано», «Вернуть» и «Удалить» — в карточке дедлайна (нажатие на строку), свайпы по строкам убраны: свайп листает вкладки. */
 export function DeadlinesScreen() {
-  const { status, subjects, deadlines } = useAppStore();
+  // Из стора — только нужные поля, а не весь (проверка 15 окт): иначе каждый set в refresh() перерисовывал вкладку.
+  const { status, subjects, deadlines } = useAppStore(useShallow((s) => ({ status: s.status, subjects: s.subjects, deadlines: s.deadlines })));
+  const { pending, failed } = useFirstLoad();
   const push = useNav((s) => s.push);
   const now = useNow();
   const [mode, setMode] = useState<Mode>("active");
   const [kind, setKind] = useState<KindFilter>("all");
   const [laterOpen, setLaterOpen] = useState(false);
+  const today = todayKey();
 
-  const ws = weekStart(todayKey());
-  const endThisWeek = addDays(ws, 6), endNextWeek = addDays(ws, 13);
-  const sorted = [...deadlines].sort((a, b) => effectiveDue(a.due) - effectiveDue(b.due));
-  const openAll = sorted.filter((d) => d.status === "open");
-  const doneAll = sorted.filter((d) => d.status === "done");
-  // Фильтр по типу показываем, когда типов больше одного; считаем по активным и сданным вместе.
-  const kindCounts = KINDS.map((k) => ({ ...k, count: sorted.filter((d) => d.kind === k.value).length })).filter((k) => k.count);
-  const byKind = (d: Deadline) => kind === "all" || d.kind === kind;
-  const open = openAll.filter(byKind), done = doneAll.filter(byKind);
-  // «Активные» — по срокам; «Сданные» — отдельная вкладка, последние сданные сверху.
-  const groups = (mode === "done" ? [
-    { key: "done", title: "Сдано", items: [...done].reverse() },
-  ] : [
-    { key: "overdue", title: "Просрочено", items: open.filter((d) => effectiveDue(d.due) <= now) },
-    { key: "week", title: "Эта неделя", items: open.filter((d) => effectiveDue(d.due) > now && dueDayKey(d.due) <= endThisWeek) },
-    { key: "next", title: "Следующая неделя", items: open.filter((d) => dueDayKey(d.due) > endThisWeek && dueDayKey(d.due) <= endNextWeek) },
-    { key: "later", title: "Позже", items: open.filter((d) => dueDayKey(d.due) > endNextWeek) },
-  ]).filter((g) => g.items.length);
+  // Сортировка и группы пересчитываются только при новых данных, тике часов или смене фильтра (проверка 15 окт):
+  // effectiveDue и dueDayKey зовут Intl, и на 80 дедлайнах это сотни вызовов на каждую перерисовку.
+  const { openAll, doneAll, kindCounts } = useMemo(() => {
+    const sorted = [...deadlines].sort((a, b) => effectiveDue(a.due) - effectiveDue(b.due));
+    return {
+      openAll: sorted.filter((d) => d.status === "open"),
+      doneAll: sorted.filter((d) => d.status === "done"),
+      // Фильтр по типу показываем, когда типов больше одного; считаем по активным и сданным вместе.
+      kindCounts: KINDS.map((k) => ({ ...k, count: sorted.filter((d) => d.kind === k.value).length })).filter((k) => k.count),
+    };
+  }, [deadlines]);
+  // Выбранный тип пропал (удалили последний тест или он ушёл из Moodle) — фильтр сам возвращается на «Все» (проверка
+  // 15 окт): ряд чипов при одном типе скрыт, и снять фильтр было бы нечем. Пока эффект не сбросил состояние, список уже
+  // рисуется без фильтра; а состояние сбрасываем, чтобы тип, появившись снова, не отфильтровал список неожиданно.
+  const kindOk = kind !== "all" && kindCounts.length > 1 && kindCounts.some((k) => k.value === kind);
+  const kindOn: KindFilter = kindOk ? kind : "all";
+  useEffect(() => { if (kind !== "all" && !kindOk) setKind("all"); }, [kind, kindOk]);
+
+  const groups = useMemo(() => {
+    const byKind = (d: Deadline) => kindOn === "all" || d.kind === kindOn;
+    const open = openAll.filter(byKind), done = doneAll.filter(byKind);
+    // «Сданные» — отдельная вкладка, последние сданные сверху.
+    if (mode === "done") return done.length ? [{ key: "done", title: "Сдано", items: [...done].reverse() }] : [];
+    // «Активные» — по срокам; раскладываем за один проход (dueDayKey — по разу на дедлайн).
+    const ws = weekStart(today);
+    const endThisWeek = addDays(ws, 6), endNextWeek = addDays(ws, 13);
+    const overdue: Deadline[] = [], week: Deadline[] = [], next: Deadline[] = [], later: Deadline[] = [];
+    for (const d of open) {
+      const day = dueDayKey(d.due);
+      (effectiveDue(d.due) <= now ? overdue : day <= endThisWeek ? week : day <= endNextWeek ? next : later).push(d);
+    }
+    return [
+      { key: "overdue", title: "Просрочено", items: overdue },
+      { key: "week", title: "Эта неделя", items: week },
+      { key: "next", title: "Следующая неделя", items: next },
+      { key: "later", title: "Позже", items: later },
+    ].filter((g) => g.items.length);
+  }, [openAll, doneAll, kindOn, mode, now, today]);
 
   return (
     <div className="flex flex-col gap-3">
       <m.header className="px-1" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
         <h1 className="font-display text-l font-extrabold tracking-[-0.03em]">Дедлайны</h1>
         <p className="mt-0.5 text-s font-semibold text-hint">
-          {openAll.length ? `${openAll.length} активных · ${doneAll.length} сдано` : "Все сроки закрыты"}
+          {openAll.length ? `${openAll.length} ${plural(openAll.length, "активный", "активных", "активных")} · ${doneAll.length} сдано`
+            : pending ? "Загружаю из Moodle…" : failed ? "Дедлайны не загрузились" : "Все сроки закрыты"}
         </p>
       </m.header>
 
@@ -62,8 +89,8 @@ export function DeadlinesScreen() {
 
       {kindCounts.length > 1 && (
         <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4" role="tablist" aria-label="Тип работы">
-          {[{ value: "all" as const, plural: "Все", Icon: null, count: sorted.length }, ...kindCounts].map((k) => {
-            const active = kind === k.value;
+          {[{ value: "all" as const, plural: "Все", Icon: null, count: deadlines.length }, ...kindCounts].map((k) => {
+            const active = kindOn === k.value;
             return (
               <button
                 key={k.value}
@@ -82,12 +109,15 @@ export function DeadlinesScreen() {
         </div>
       )}
 
-      {status === "loading" ? (
+      {/* Первая загрузка из Moodle идёт — скелетон, не удалась — причина и «Повторить» (проверка 15 окт). */}
+      {status === "loading" || pending ? (
         <div className="flex flex-col gap-2.5"><Skeleton className="h-40 rounded-[22px]" /><Skeleton className="h-56 rounded-[22px]" /><Skeleton className="h-32 rounded-[22px]" /></div>
+      ) : failed ? (
+        <MoodleFailed index={0} />
       ) : groups.length === 0 ? (
         <Tile index={0} className="min-h-0">
           <EmptyState icon={Flag} title={mode === "active" ? "Активных дедлайнов нет" : "Сданных пока нет"}
-            text={kind !== "all" ? "В этом типе пока пусто. Выберите «Все» или добавьте срок." : mode === "active" ? "Всё сдано. Новые сроки появятся здесь." : "Сданные и оценённые работы будут собираться здесь."}
+            text={kindOn !== "all" ? "В этом типе пока пусто. Выберите «Все» или добавьте срок." : mode === "active" ? "Всё сдано. Новые сроки появятся здесь." : "Сданные и оценённые работы будут собираться здесь."}
             action="Добавить дедлайн" onAction={() => push({ name: "deadline-form" })} />
         </Tile>
       ) : (

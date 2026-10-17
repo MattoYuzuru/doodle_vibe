@@ -8,6 +8,9 @@
 
 # --- секреты (никогда не добавлять) ---
 jarvis-app/bot-token.txt
+jarvis-app/bot-token-new.txt
+jarvis-app/bot-token-prev.txt
+jarvis-app/cloud/
 jarvis-app/users.key
 jarvis-app/ngrok-token.txt
 jarvis-app/ngrok.yml
@@ -25,7 +28,12 @@ jarvis-app/diag/
 jarvis-app/ej-debug/
 jarvis-app/lessons/
 jarvis-app/course-styles/
+jarvis-app/quality/
+jarvis-app/welcome-media.json
+jarvis-app/bot-updates.on
 jarvis-app/cal-cache/
+jarvis-app/deadlines-cache/
+jarvis-app/**/*.bad-*
 jarvis-app/schedule-cache/
 jarvis-app/lab-allowlist.txt
 jarvis-app/notify-state.old.json
@@ -51,7 +59,17 @@ jarvis-app/ops/migrate/*.zip
 # сторож агента: журнал отказов и отметка «вызывается»
 jarvis-app/ops/agent-guard/guard.log
 jarvis-app/ops/agent-guard/guard.seen
+jarvis-app/ops/agent-guard/guard.alert
 
 # ежедневные копии данных и их настройка
 jarvis-app/backups/
 jarvis-app/backup.json
+
+# учётная запись агента лаб (ops/migrate/agent-account): настройка этого ПК и выгрузка для 2-агент.cmd
+jarvis-app/agent-account.json
+jarvis-app/ops/migrate/agent-account/export/
+
+# состояние бесед и рассылок: Telegram-ID студентов и названия бесед
+jarvis-app/chats.json
+jarvis-app/announce-session-state.json
+jarvis-app/bot-move-state.json

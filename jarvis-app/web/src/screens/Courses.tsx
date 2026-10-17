@@ -45,9 +45,12 @@ export function CoursesScreen() {
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <p className="line-clamp-2 text-m font-semibold leading-[20px]">{c.name}</p>
-          <p className="mt-0.5 truncate text-s text-hint">
-            {c.reason}{c.override !== null ? " · выбрано вручную" : " · автоматически"}
-            {c.override !== null && <button onClick={() => set(c, null)} className="ml-2 inline-flex items-center gap-1 font-bold text-accent"><RotateCcw size={12} strokeWidth={2.5} />сбросить</button>}
+          {/* «Сбросить» — вне обрезаемого текста (проверка 15 окт): на 360–390 px строка обрезалась многоточием вместе с кнопкой,
+              и вернуть автоматический выбор было нечем. Сокращается причина, кнопка видна всегда; -my-2 py-2 — палец
+              попадает легче, а высота строки та же. */}
+          <p className="mt-0.5 flex min-w-0 items-center gap-2 text-s text-hint">
+            <span className="min-w-0 truncate">{c.reason}{c.override !== null ? " · выбрано вручную" : " · автоматически"}</span>
+            {c.override !== null && <button onClick={() => set(c, null)} disabled={busy === c.id} className="-my-2 inline-flex shrink-0 items-center gap-1 py-2 font-bold text-accent disabled:opacity-50"><RotateCcw size={12} strokeWidth={2.5} />сбросить</button>}
           </p>
         </div>
         <button onClick={() => set(c, !c.active)} disabled={busy === c.id} role="switch" aria-checked={c.active} aria-label={c.name}

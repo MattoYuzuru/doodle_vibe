@@ -1,7 +1,7 @@
 import { CalendarX2, ChevronRight, GraduationCap, TriangleAlert } from "lucide-react";
 import { useEffect } from "react";
 import { useNav } from "../hooks/useNav";
-import { pct, plural, tone } from "../lib/journal";
+import { pct, plural, tone, withSheets } from "../lib/journal";
 import { useJournal } from "../store/journal";
 import { haptic } from "../telegram/webapp";
 import { Ring } from "./Ring";
@@ -15,23 +15,29 @@ const STALE_MS = 30 * 60e3;
  * Журнал не подключён — короткое приглашение подключить (пароль вводится во вкладке один раз).
  */
 export function JournalTile({ index }: { index: number }) {
-  const { st, status, load } = useJournal();
+  // Подписки по полям (проверка 15 окт): весь useNav перерисовывал плитку (и Главную) на каждый push/pop и смену вкладки.
+  const st = useJournal((s) => s.st);
+  const load = useJournal((s) => s.load);
   const setTab = useNav((s) => s.setTab);
+  const setJournalView = useNav((s) => s.setJournalView);
   useEffect(() => {
     const s = useJournal.getState();
     const at = s.st?.data?.at ? Date.parse(s.st.data.at) : 0;
     if (s.status === "idle" && (!s.st || (s.st.connected && Date.now() - at > STALE_MS))) void load();
   }, [load]);
-  const open = () => { haptic.tap(); setTab("journal"); };
+  // Во вкладке «Журнал» два вида (журнал и сессия): с этой плитки — именно журнал, даже если там остался вид «Сессия».
+  const open = () => { haptic.tap(); setJournalView("journal"); setTab("journal"); };
 
-  if (st && !st.connected && status !== "loading") {
+  // Без оглядки на загрузку (проверка 15 окт): вкладка «Журнал» на старте всегда зовёт load(), и плитка исчезала на
+  // время запроса и въезжала снова — всё ниже прыгало при каждом запуске. Пока нет ответа, остаётся прошлое состояние.
+  if (st && !st.connected) {
     return (
       <Tile span={2} index={index} onClick={open} className="!min-h-0 py-3">
         <div className="flex items-center gap-3">
           <span className="grid size-9 shrink-0 place-items-center rounded-full bg-accent/15 text-accent"><GraduationCap size={18} strokeWidth={2.5} /></span>
           <span className="min-w-0 flex-1">
             <span className="block text-m font-bold">Посещаемость и оценки</span>
-            <span className="block text-s text-hint">{st.needPassword ? "Вход в журнал истёк — введите пароль ещё раз" : "Подключите электронный журнал — пароль от Moodle один раз"}</span>
+            <span className="block text-s text-hint">{st.rejected ? "Сохранённый пароль не подошёл — введите текущий" : st.needPassword ? "Журналу нужен пароль — введите его ещё раз" : "Подключите электронный журнал — пароль от Moodle один раз"}</span>
           </span>
           <ChevronRight size={18} className="shrink-0 text-hint" />
         </div>
@@ -40,10 +46,16 @@ export function JournalTile({ index }: { index: number }) {
   }
   const d = st?.connected ? st.data : null;
   if (!d) return null;
-  const { attendance, rating, absences, missedHours } = d.summary;
+  const { attendance, rating } = d.summary;
   // Риск по посещаемости: предметы в жёлтой (ниже 75 %) и красной (ниже 50 %) зоне журнала, худший первым. О переходе
   // в эти зоны бот пишет сам (attendance.mjs на сервере); здесь — чтобы было видно, не открывая вкладку.
-  const risky = d.subjects.filter((s) => s.attendance != null && s.attendance < 75).sort((a, b) => (a.attendance ?? 0) - (b.attendance ?? 0));
+  // С 15 окт 2026 — и по таблицам преподавателей: у дисциплины журнала без отметок — посещаемость из таблицы её курса,
+  // дисциплины, которых в журнале нет, — тоже (lib/journal withSheets).
+  const ws = withSheets(d.subjects, st?.sheets ?? [], d.notMine ?? []);
+  // Пропуски — и из таблиц преподавателей, где посещения взяты из них (иначе «Пропусков нет» рядом с «Мало посещений»).
+  const absences = d.summary.absences + ws.absences, missedHours = d.summary.missedHours + ws.missedHours;
+  const risky = [...d.subjects.map((s) => ({ name: s.name, attendance: ws.attendanceOf(s) })), ...ws.loose.map((x) => ({ name: x.name, attendance: x.attendance }))]
+    .filter((s) => s.attendance != null && s.attendance < 75).sort((a, b) => (a.attendance ?? 0) - (b.attendance ?? 0));
   const short = (n: string) => (n.length > 26 ? `${n.slice(0, 25).trimEnd()}…` : n);
   return (
     <Tile span={2} index={index} onClick={open} className="!min-h-0 py-3">

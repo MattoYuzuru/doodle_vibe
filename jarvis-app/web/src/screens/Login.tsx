@@ -9,7 +9,7 @@ import { spring } from "../theme/motion";
 import { haptic } from "../telegram/webapp";
 import { fieldClass } from "./TaskForm";
 
-/** Вход: логин и пароль Moodle МИСИС → сервер получает персональный токен, пароль не хранится. */
+/** Вход: логин и пароль Moodle МИСИС → сервер получает персональный токен; пароль хранится зашифрованно только для журнала. */
 export function LoginScreen() {
   const { login, error: loadError } = useAuth();
   const [username, setUsername] = useState("");
@@ -61,7 +61,7 @@ export function LoginScreen() {
 
       <p className="flex items-start gap-2 px-2 text-s text-hint">
         <ShieldCheck size={16} className="mt-0.5 shrink-0" strokeWidth={2.25} />
-        <span>Пароль отправляется только в Moodle и нигде не сохраняется. Приложение хранит зашифрованный токен доступа, как мобильное приложение Moodle. Выйти можно в любой момент.</span>
+        <span>Для Moodle приложение хранит зашифрованный токен доступа, как мобильное приложение Moodle. Пароль хранится в зашифрованном виде только для входа в электронный журнал МИСИС — чтобы журнал не просил его каждые двое суток. Выйти можно в любой момент — тогда пароль и токен удаляются. Входя, вы принимаете <a href="terms" target="_blank" rel="noreferrer" className="underline">условия использования</a> и <a href="privacy" target="_blank" rel="noreferrer" className="underline">политику конфиденциальности</a>.</span>
       </p>
     </div>
   );

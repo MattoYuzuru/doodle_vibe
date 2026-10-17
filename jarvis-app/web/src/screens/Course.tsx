@@ -6,7 +6,7 @@ import { Tile, TileLabel } from "../components/Tile";
 import { SubjectDot } from "../components/ui";
 import { useNav } from "../hooks/useNav";
 import { useNow } from "../hooks/useNow";
-import { effectiveDue, formatLongDate, todayKey } from "../lib/dates";
+import { effectiveDue, formatLongDate, formatShortDate, todayKey } from "../lib/dates";
 import { apiBase } from "../store/api";
 import { useSchedule, type Lesson } from "../store/schedule";
 import { useAppStore } from "../store/useAppStore";
@@ -71,9 +71,11 @@ export function CourseScreen({ title, subjectId, lesson }: { title: string; subj
         <Tile index={2} className="!min-h-0 py-1">
           <TileLabel className="pt-2">Ближайшие занятия</TileLabel>
           {upcoming.map((l, i) => (
+            // Дата короткая и не сжимается, сокращаются время и аудитория справа (проверка 15 окт): на 360 px от длинной
+            // даты оставалось «Понедельник, 2…» — обрезалось главное в строке.
             <div key={i} className="flex min-h-11 items-center justify-between gap-3 border-t border-separator text-s first:border-t-0">
-              <span className="min-w-0 truncate font-semibold">{formatLongDate(l.date)}</span>
-              <span className="shrink-0 text-hint tabular">{l.start}–{l.end}{l.place ? ` · ${l.place}` : ""}{TYPE_SHORT[l.type] ? ` · ${TYPE_SHORT[l.type]}` : ""}</span>
+              <span className="shrink-0 font-semibold">{formatShortDate(l.date)}</span>
+              <span className="min-w-0 truncate text-right text-hint tabular">{l.start}–{l.end}{l.place ? ` · ${l.place}` : ""}{TYPE_SHORT[l.type] ? ` · ${TYPE_SHORT[l.type]}` : ""}</span>
             </div>
           ))}
         </Tile>

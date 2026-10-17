@@ -131,6 +131,28 @@ export function whyPath(abs, write, ownRoot) {
   return null;
 }
 
+// Закодированный запуск PowerShell: -EncodedCommand и любое его сокращение (-e, -ec, -en, -enc, -encod…), также через «/»
+// и длинное тире. Сокращения ищем только среди ключей самого powershell/pwsh — до -Command/-File и до «;», «|», «&&»:
+// у других программ свой -enc (pdftotext -enc UTF-8 — без него теряется кириллица; 5 ложных отказов в лабе 31667, 16 окт),
+// и текст после -Command — уже команда, а не ключи PowerShell. Полное «-encodedc…» закрыто везде.
+const ENC_FULL = /(?:^|[\s"'`(,])[-/–—]encodedc/;
+const PS_EXE = /(?:^|[\s"'`;|&(=/])(?:powershell|pwsh)(?:\.exe)?(?=[\s"'`;|&),]|$)/g;
+const PS_SCRIPT = /^(?:c|co|com|comm|comma|comman|command|commandwithargs|cwa|f|fi|fil|file)$/;  // дальше — текст команды/скрипта
+function encodedPs(c) {
+  if (ENC_FULL.test(c)) return true;
+  for (const m of c.matchAll(PS_EXE)) {
+    const rest = c.slice(m.index + m[0].length).split(/[;|\n]|&&/)[0];
+    for (const raw of rest.split(/[\s,]+/)) {
+      const t = raw.replace(/^[\s"'`(@]+|["'`)]+$/g, "");
+      if (!/^[-/–—]/.test(t)) continue;
+      const k = t.slice(1);
+      if (PS_SCRIPT.test(k)) break;
+      if (k === "ec" || (k.length >= 1 && "encodedcommand".startsWith(k))) return true;
+    }
+  }
+  return false;
+}
+
 /** Почему команда оболочки закрыта (строка) или null. Команда разбирается как текст — см. оговорку в начале файла. */
 export function whyCommand(command, cwd) {
   const c = expandVars(norm(command));
@@ -147,7 +169,7 @@ export function whyCommand(command, cwd) {
   // Сетевые пути (UNC, \\сервер\ресурс, админ-шары C$) — ими обходят проверку локальных путей.
   if (/\/(?:localhost|127\.0\.0\.1|[a-z]\$)\//.test(c)) return "сетевые пути (UNC, \\\\сервер\\ресурс) закрыты";
   // Косвенный и закодированный запуск, ссылки-соединения, хранилища учётных данных и дамп окружения — лабе не нужны.
-  if (/-encodedcommand\b|\s-enc\b|\s-ec\b/.test(c)) return "запуск закодированной команды закрыт";
+  if (encodedPs(c)) return "запуск закодированной команды закрыт";
   if (/\biex\b|invoke-expression/.test(c)) return "непрямой запуск (iex/Invoke-Expression) закрыт";
   if (/\bmklink\b|-itemtype\s+(?:junction|symboliclink|hardlink)/.test(c)) return "создание ссылок и соединений (mklink/junction) закрыто";
   if (/\bcmdkey\b/.test(c)) return "диспетчер учётных данных Windows (cmdkey) закрыт";

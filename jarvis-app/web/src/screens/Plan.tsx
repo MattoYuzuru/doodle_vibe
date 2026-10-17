@@ -1,6 +1,7 @@
-import { AnimatePresence, m } from "framer-motion";
+import { AnimatePresence, m, useDragControls } from "framer-motion";
 import { ChevronLeft, ChevronRight, Flag, ListTodo } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { GroupPicker } from "../components/GroupPicker";
 import { LessonRow, matchSubject } from "../components/LessonRow";
 import { TaskRow, sortTasks } from "../components/TaskRow";
@@ -9,7 +10,9 @@ import { EmptyState, ProgressBar, Skeleton, SubjectDot, UrgencyBadge } from "../
 import { useNav } from "../hooks/useNav";
 import { useNow } from "../hooks/useNow";
 import { WEEKDAYS_SHORT, addDays, dueDayKey, effectiveDue, formatDue, keyToUtc, mskParts, todayKey, weekStart } from "../lib/dates";
+import { EDGE_PX } from "../lib/edge";
 import { useSchedule } from "../store/schedule";
+import type { Deadline } from "../store/types";
 
 const MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 /** «2026-10-01» → «1 окт» */
@@ -35,10 +38,14 @@ function dayTitle(key: string, today: string) {
 
 /**
  * План: неделя с точками, панель дня из задач и дедлайнов. Панель прижата к низу экрана (под большой палец),
- * свайп по ней влево/вправо листает дни. Тап по задаче — выполнено, двойной — редактировать.
+ * свайп по ней влево/вправо листает дни. Тап по задаче — выполнено, удержание — редактировать (TaskRow).
  */
 export function PlanScreen() {
-  const { status, subjects, deadlines, tasks, toggleTask } = useAppStore();
+  // Из сторов — только нужные поля (проверка 15 окт): refreshing и moodle «Плану» не нужны, а каждый их set в refresh()
+  // перерисовывал вкладку целиком.
+  const { status, subjects, deadlines, tasks, toggleTask } = useAppStore(useShallow((s) => ({
+    status: s.status, subjects: s.subjects, deadlines: s.deadlines, tasks: s.tasks, toggleTask: s.toggleTask,
+  })));
   const push = useNav((s) => s.push);
   const now = useNow();
   const today = todayKey();
@@ -51,19 +58,58 @@ export function PlanScreen() {
     ? `${MONTHS_NOM[wsDate.getUTCMonth()]} ${wsDate.getUTCFullYear()}`
     : `${MONTHS_NOM[wsDate.getUTCMonth()]} – ${MONTHS_NOM[weDate.getUTCMonth()]}`;
 
-  const { forDay, subgroup, setSubgroup, data: sched } = useSchedule();
+  // Расписание — по отдельным полям; forDay читает стор сам, перерисовку при новых данных и подгруппе дают data и subgroup.
+  const sched = useSchedule((s) => s.data);
+  const subgroup = useSchedule((s) => s.subgroup);
+  const forDay = useSchedule((s) => s.forDay);
+  const setSubgroup = useSchedule((s) => s.setSubgroup);
+  // «Загружаю расписание…» — только пока его нет совсем: обновление поверх копии вкладку не перерисовывает.
+  const schedLoading = useSchedule((s) => s.status === "loading" && !s.data);
   const needGroup = !!sched?.needGroup || (!!sched && !sched.group);
   // С отменёнными: «План» показывает их зачёркнутыми; считаются и решают «пар нет» только идущие пары.
   const lessons = forDay(day, true);
   const active = lessons.filter((l) => l.change !== "removed");
   const nowP = mskParts(now);
   const nowHM = `${String(nowP.hh).padStart(2, "0")}:${String(nowP.mm).padStart(2, "0")}`;
-  const openDl = deadlines.filter((d) => d.status === "open");
-  const dayTasks = sortTasks(tasks.filter((t) => t.date === day));
-  const dayDeadlines = openDl.filter((d) => dueDayKey(d.due) === day).sort((a, b) => effectiveDue(a.due) - effectiveDue(b.due));
+  // Открытые дедлайны по дням — один раз на новые данные (проверка 15 окт): точки недели и панель дня звали dueDayKey
+  // (Intl) на каждый дедлайн по 8 раз за перерисовку.
+  const dlByDay = useMemo(() => {
+    const byDay = new Map<string, Deadline[]>();
+    for (const d of deadlines) {
+      if (d.status !== "open") continue;
+      const k = dueDayKey(d.due), list = byDay.get(k);
+      if (list) list.push(d); else byDay.set(k, [d]);
+    }
+    for (const list of byDay.values()) list.sort((a, b) => effectiveDue(a.due) - effectiveDue(b.due));
+    return byDay;
+  }, [deadlines]);
+  const taskDays = useMemo(() => new Set(tasks.filter((t) => !t.done).map((t) => t.date)), [tasks]);
+  const dayTasks = useMemo(() => sortTasks(tasks.filter((t) => t.date === day)), [tasks, day]);
+  const dayDeadlines = dlByDay.get(day) ?? [];
   const doneCount = dayTasks.filter((t) => t.done).length;
+  // Порядок и отметки задач дня — layoutDependency обёрток задач (проверка 15 окт): без неё framer на каждой
+  // перерисовке (тик часов, обновление стора посреди прокрутки) снимал и мерил layout, сбрасывая transform ленты;
+  // замер нужен, только когда задачи переставляются.
+  const taskOrder = dayTasks.map((t) => `${t.id}:${t.done}`).join();
+
+  // Какие дни покрывает загруженное расписание — целыми неделями, от понедельника первой до воскресенья последней
+  // (сервер отдаёт текущую и две следующие). «Пар нет» говорим только про них (проверка 15 окт): за пределами пары
+  // просто не загружены, и «Свободный день» там был неправдой.
+  const range = useMemo(() => {
+    let lo = "", hi = "";
+    for (const l of sched?.lessons ?? []) { if (!lo || l.date < lo) lo = l.date; if (l.date > hi) hi = l.date; }
+    return lo ? { from: weekStart(lo), to: addDays(weekStart(hi), 6) } : null;
+  }, [sched]);
+  const covered = !!range && !needGroup && day >= range.from && day <= range.to;
 
   const go = (key: string) => { if (key !== day) { haptic.select(); setDir(key > day ? 1 : -1); setDay(key); } };
+
+  // Свайп по панели дня листает дни (проверка 15 окт). Раньше framer засчитывал и вертикальный взмах: когда браузер
+  // забирал прокрутку, pointercancel приходил как конец перетаскивания со скоростью взмаха, и день перескакивал.
+  // Теперь день меняется только при захвате по горизонтали (lock), не по pointercancel и с заметным смещением.
+  // Перетаскивание запускаем сами и не от края экрана: оттуда свайп листает вкладки, а раньше менялись и вкладка, и день.
+  const dragControls = useDragControls();
+  const lock = useRef<"x" | "y" | null>(null);
 
   return (
     // Панель дня — сразу под строкой недели (раньше прижималась к низу экрана, и между ними зияла пустота).
@@ -84,13 +130,14 @@ export function PlanScreen() {
         <div className="grid flex-1 grid-cols-7 gap-0.5">
           {week.map((k, i) => {
             const selected = k === day, isToday = k === today;
-            const hasTasks = tasks.some((t) => t.date === k && !t.done);
-            const hasDl = openDl.some((d) => dueDayKey(d.due) === k);
+            const hasTasks = taskDays.has(k);
+            const hasDl = dlByDay.has(k);
             const hasLessons = forDay(k).length > 0;
             return (
               <button key={k} onClick={() => go(k)} aria-label={k} aria-pressed={selected}
                 className={`relative flex min-h-14 flex-col items-center justify-center rounded-2xl pt-1 pb-2 text-s font-semibold transition-colors ${selected ? "text-on-accent" : isToday ? "text-accent" : "text-hint"}`}>
-                {selected && <m.span layoutId="plan-day" className="absolute inset-0 -z-10 rounded-2xl bg-accent" transition={spring(520, 40)} />}
+                {/* layoutDependency: ползунок мерится только при смене дня, а не на каждой перерисовке (проверка 15 окт). */}
+                {selected && <m.span layoutId="plan-day" layoutDependency={day} className="absolute inset-0 -z-10 rounded-2xl bg-accent" transition={spring(520, 40)} />}
                 <span className="text-[11px] uppercase">{WEEKDAYS_SHORT[i]}</span>
                 <span className={`text-m font-bold tabular ${selected ? "" : isToday ? "text-accent" : "text-text"}`}>{new Date(keyToUtc(k)).getUTCDate()}</span>
                 <span className="mt-0.5 flex h-1 gap-0.5">
@@ -110,7 +157,12 @@ export function PlanScreen() {
       {status === "loading" ? (
         <Skeleton className="h-64 rounded-[22px]" />
       ) : (
-        <div className="overflow-x-hidden">
+        // Обёртка режет только по горизонтали (проверка 15 окт): с overflow-x: hidden она становилась скрытым вертикальным
+        // скроллером (overflow-y вычислялся в auto) — частицы чекбокса у нижней задачи давали ей что прокрутить, и взмах
+        // по панели прилипал к ней. clip скроллера не создаёт; старый WebKit (iOS < 16) clip отбросит — сработает класс.
+        // Граница обрезки — у краёв экрана (-mx-4 px-4), а не у краёв плитки: иначе тень плитки снизу обрезалась по бокам
+        // и выглядела серой полосой с резкими краями.
+        <div className="-mx-4 overflow-x-hidden px-4" style={{ overflowX: "clip" }}>
           <AnimatePresence mode="wait" custom={dir} initial={false}>
             <m.div
               key={day}
@@ -118,13 +170,27 @@ export function PlanScreen() {
               initial={{ opacity: 0, x: dir * 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: dir * -40 }} transition={spring(420, 40)}
               data-own-swipe
               drag="x"
+              dragListener={false}
+              dragControls={dragControls}
               dragDirectionLock
+              dragMomentum={false}
               dragConstraints={{ left: 0, right: 0 }}
               dragElastic={0.45}
-              onDragEnd={(_, info) => {
-                // Свайп по панели дня: влево — следующий день, вправо — предыдущий.
-                if (info.offset.x < -56 || info.velocity.x < -450) go(addDays(day, 1));
-                else if (info.offset.x > 56 || info.velocity.x > 450) go(addDays(day, -1));
+              // При dragListener={false} framer не ставит ни touch-action, ни запрет выделения текста и меню «Скопировать»
+              // на долгом нажатии — ставим сами: вертикальную прокрутку отдаём браузеру явно.
+              className="select-none"
+              style={{ touchAction: "pan-y", WebkitTouchCallout: "none" }}
+              // Направление сбрасываем на касании, а не в onDragStart: framer зовёт onDragStart отложенно, уже после
+              // onDirectionLock того же кадра, и при резком взмахе стирал только что найденное «x» — день не менялся.
+              onPointerDown={(e) => { lock.current = null; if (e.clientX > EDGE_PX && e.clientX < window.innerWidth - EDGE_PX) dragControls.start(e); }}
+              onDirectionLock={(axis) => { lock.current = axis; }}
+              onDragEnd={(e, info) => {
+                // Свайп по панели дня: влево — следующий день, вправо — предыдущий. Быстрый взмах засчитываем, только
+                // если панель уже заметно сдвинулась.
+                if (e.type === "pointercancel" || lock.current !== "x") return;
+                const dx = info.offset.x, vx = info.velocity.x;
+                if (dx < -56 || (dx < -24 && vx < -450)) go(addDays(day, 1));
+                else if (dx > 56 || (dx > 24 && vx > 450)) go(addDays(day, -1));
               }}
             >
               <Tile index={0} className="min-h-0 px-0 pb-2">
@@ -158,7 +224,8 @@ export function PlanScreen() {
                     ))}
                   </div>
                 )}
-                {active.length === 0 && sched && day >= today && (day <= (sched.lessons.at(-1)?.date ?? "")) && (
+                {/* «Пар нет» — только для дней, покрытых расписанием, и не вместе с «Свободным днём» ниже (проверка 15 окт). */}
+                {covered && active.length === 0 && (dayTasks.length > 0 || dayDeadlines.length > 0 || lessons.length > 0) && (
                   <p className="px-4 pt-2 text-s text-hint">Пар нет</p>
                 )}
 
@@ -182,7 +249,7 @@ export function PlanScreen() {
                 <div className="px-4">
                   <AnimatePresence initial={false}>
                     {dayTasks.map((t) => (
-                      <m.div key={t.id} layout="position" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
+                      <m.div key={t.id} layout="position" layoutDependency={taskOrder} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
                         transition={spring(420, 34)} className="overflow-hidden">
                         <TaskRow task={t} onToggle={() => toggleTask(t.id)} onOpen={() => push({ name: "task-form", id: t.id })} />
                       </m.div>
@@ -191,15 +258,22 @@ export function PlanScreen() {
                 </div>
 
                 {/* Добавления задач нет нигде (просьба владельца): «План» показывает пары, сроки и уже заведённые задачи. */}
+                {/* «Свободный день» — только если расписание этот день покрывает; иначе честно: пар мы не знаем. */}
                 {dayTasks.length === 0 && dayDeadlines.length === 0 && lessons.length === 0 && (
-                  <EmptyState icon={ListTodo} title="Свободный день" text="Пар и сроков нет." />
+                  covered ? <EmptyState icon={ListTodo} title="Свободный день" text="Пар и сроков нет." />
+                    : <EmptyState icon={ListTodo} title="Сроков нет"
+                      text={schedLoading ? "Загружаю расписание…" : needGroup ? "Выберите группу — появятся пары." : "Расписания на этот день пока нет."} />
                 )}
               </Tile>
             </m.div>
           </AnimatePresence>
         </div>
       )}
-      <p className="px-1 text-center text-[12px] font-semibold text-hint">Нажатие — выполнено, двойное — изменить, свайп по панели — другой день</p>
+      {/* Про задачи — только когда они есть, и про настоящий жест: правку открывает удержание (TaskRow), двойного
+          нажатия нет — оно отмечало и тут же снимало задачу (проверка 15 окт). */}
+      <p className="px-1 text-center text-[12px] font-semibold text-hint">
+        {dayTasks.length > 0 ? "Нажатие — выполнено, удержание — изменить, свайп по панели — другой день" : "Свайп по панели — другой день"}
+      </p>
     </div>
   );
 }

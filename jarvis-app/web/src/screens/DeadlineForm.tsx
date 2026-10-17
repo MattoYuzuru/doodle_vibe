@@ -1,5 +1,5 @@
 import { Check, Plus } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Segmented } from "../components/Segmented";
 import { toast } from "../components/Toast";
 import { SubjectDot } from "../components/ui";
@@ -30,6 +30,9 @@ export function DeadlineFormScreen({ id }: { id?: string }) {
   const { deadlines, subjects, addDeadline, updateDeadline, addSubject } = useAppStore();
   const pop = useNav((s) => s.pop);
   const existing = deadlines.find((d) => d.id === id);
+  // Форма уже сохранена (проверка 15 окт): двойной тап по «Добавить», пока экран уезжает, создавал два одинаковых
+  // дедлайна и два тоста.
+  const done = useRef(false);
   const init = existing ? fromMs(existing.due) : { date: addDays(todayKey(), 7), time: "23:59" };
   const [title, setTitle] = useState(existing?.title ?? "");
   const [kind, setKind] = useState<DeadlineKind>(existing?.kind ?? "lab");
@@ -48,7 +51,8 @@ export function DeadlineFormScreen({ id }: { id?: string }) {
   const close = () => { useUi.setState({ exitDir: 1 }); pop(); };
 
   const save = () => {
-    if (!canSave) return;
+    if (!canSave || done.current) return;
+    done.current = true;
     const sid = creating ? addSubject(newName, newColor) : subjectId;
     const due = toMs(date, time);
     const opensAt = kind === "test" && opens.date ? toMs(opens.date, opens.time) : undefined;

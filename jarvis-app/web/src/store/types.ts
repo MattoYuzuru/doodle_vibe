@@ -121,13 +121,20 @@ export interface AppData {
 export interface PendingCourse { id: number; name: string; fullname: string; reason: string; title: string; due: number; section: string | null }
 
 /** Работает ли Moodle, по наблюдениям сервера: network — сеть МИСИС не отвечает, maintenance — отвечает не данными (техработы). */
-export interface MoodleHealth { down: boolean; since: number | null; reason: "network" | "maintenance" | null; okAt: number | null }
+export interface MoodleHealth { down: boolean; since: number | null; reason: "network" | "maintenance" | "blocked" | null; okAt: number | null }
 
 /** Ответ сервера /api/deadlines. */
 export interface MoodleResponse {
+  /** Когда сервер прочитал эти данные из Moodle (свежие тоже бывают из его кэша). */
   updated: number;
-  /** Moodle сейчас не отвечает: это последние загруженные данные (на момент updated), а не свежие. */
+  /**
+   * Это данные, прочитанные раньше (на момент updated), а не свежие. С moodle.down — Moodle не отвечает (плашка о сбое);
+   * без него — Moodle или очередь сервера не ответили за ~6 с, например сразу после перезапуска сервера: чтение идёт,
+   * приложение само спрашивает ещё раз (syncMoodle в useAppStore).
+   */
   stale?: boolean;
+  /** Откуда копия при stale без сбоя: disk — с диска сервера (после перезапуска), memory — из его памяти. */
+  source?: "disk" | "memory";
   moodle?: MoodleHealth;
   pendingCourses?: PendingCourse[];
   items: { id: string; kind: DeadlineKind; title: string; courseId: number; due: number; opensAt?: number; url: string; status: "open" | "done"; grade?: number | null; gradeMax?: number | null; remarks?: Remark[]; submission?: SubmissionState; upload?: UploadConfig }[];

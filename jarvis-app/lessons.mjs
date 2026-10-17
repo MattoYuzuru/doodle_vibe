@@ -12,10 +12,12 @@
 //
 // Хранение: lessons/<assignId>.json — { assignId, title, courseId, course, items: [{ tkey, text, srcs, returnedBy, agentBy,
 // firstAt, lastAt }] } (returnedBy/agentBy — тоже псевдонимы: после отказа от согласия пометки от этого человека уходят). Для агента — файл «ТИПИЧНЫЕ ЗАМЕЧАНИЯ.md» в папке лабы (writeForLab), его он проверяет перед сдачей.
-import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isStateReadError, readJson, writeJsonAtomic } from "./state-file.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const STORE = process.env.LESSONS_DIR || join(DIR, "lessons");
@@ -88,12 +90,16 @@ export function anonymize(text, names = "") {
 let queue = Promise.resolve();
 const serial = (fn) => (queue = queue.catch(() => {}).then(fn));
 const fileOf = (assignId) => join(STORE, `${Number(assignId)}.json`);
-const readStore = (assignId) => readFile(fileOf(assignId), "utf8").then(JSON.parse).catch(() => null);
+/*
+ * null — только когда файла нет (15 окт 2026). Раньше любая ошибка чтения тоже давала null, и harvest записывал файл
+ * работы заново — с замечаниями одного студента: замечания всех остальных (и прошлых семестров) пропадали. Теперь
+ * занятый файл — повторы и StateReadError: эту работу не пишем, она соберётся на следующем обходе. Испорченный JSON
+ * отложен в «<id>.json.bad-<время>» и дальше считается отсутствующим.
+ */
+const readStore = (assignId) => readJson(fileOf(assignId), { missing: null });
 async function writeStore(data) {
   await mkdir(STORE, { recursive: true });
-  const tmp = `${fileOf(data.assignId)}.${randomBytes(4).toString("hex")}.tmp`;
-  await writeFile(tmp, JSON.stringify(data, null, 1));
-  await rename(tmp, fileOf(data.assignId));
+  await writeJsonAtomic(fileOf(data.assignId), data, { space: 1 }); // своё имя временного файла, rename с повторами
 }
 
 /**
@@ -110,7 +116,11 @@ export function harvest(tgId, items, courses, { fullName = "", agentMade = async
       if (!assignId || !x.remarks?.length) continue;
       const remarks = x.remarks.map((r) => ({ ...r, text: anonymize(clean(r.text), fullName) })).filter((r) => useful(r.text));
       if (!remarks.length) continue;
-      const data = (await readStore(assignId)) || { assignId, title: x.title || null, courseId: x.courseId ?? null, course: names.get(x.courseId) || null, items: [] };
+      // Своя попытка на каждую работу: файл одной не прочитался — её пропускаем (не пишем), остальные собираются.
+      let stored;
+      try { stored = await readStore(assignId); }
+      catch (e) { console.error(`lessons ${assignId}: не прочитано, соберу на следующем обходе — ${e.message || e}`); continue; }
+      const data = stored || { assignId, title: x.title || null, courseId: x.courseId ?? null, course: names.get(x.courseId) || null, items: [] };
       data.title = x.title || data.title; data.courseId = x.courseId ?? data.courseId; data.course = names.get(x.courseId) || data.course;
       // Работу вернули на доработку (Moodle: «повторная попытка» или «черновик» после проверки) — замечания весомее.
       const returned = ["reopened", "draft"].includes(x.submission?.status);
@@ -129,19 +139,24 @@ export function harvest(tgId, items, courses, { fullName = "", agentMade = async
       data.items.sort((a, b) => b.lastAt - a.lastAt);
       data.items = data.items.slice(0, MAX_ITEMS);
       data.updatedAt = Date.now();
-      await writeStore(data);
+      try { await writeStore(data); } catch (e) { console.error(`lessons ${assignId}: не записано — ${e.message || e}`); }
     }
     return added;
   });
 }
 
-/** Отказ от согласия: замечания этого человека убираются из базы (запись остаётся, если то же было у других). */
+/**
+ * Отказ от согласия: замечания этого человека убираются из базы (запись остаётся, если то же было у других).
+ * Файл, который не прочитался, раньше молча пропускался — замечания человека оставались в базе после отказа. Теперь
+ * остальные файлы чистятся, а в конце — ошибка (запрос получит 424, и отказ можно повторить).
+ */
 export function purge(tgId) {
   return serial(async () => {
     const src = srcOf(tgId);
-    let removed = 0;
+    let removed = 0, failed = null;
     for (const f of (await readdir(STORE).catch(() => [])).filter((n) => /^\d+\.json$/.test(n))) {
-      const data = await readStore(Number(f.slice(0, -5)));
+      let data;
+      try { data = await readStore(Number(f.slice(0, -5))); } catch (e) { failed ??= e; continue; }
       if (!data?.items?.some((i) => i.srcs.includes(src))) continue;
       for (const i of data.items) for (const k of ["srcs", "returnedBy", "agentBy"]) i[k] = i[k].filter((s) => s !== src);
       const before = data.items.length;
@@ -150,6 +165,7 @@ export function purge(tgId) {
       data.updatedAt = Date.now();
       await writeStore(data);
     }
+    if (failed) throw failed;
     return removed;
   });
 }
@@ -170,7 +186,7 @@ export async function forLab(assignId, course = "", courseIdHint = null) {
   const others = [];
   const courseId = own?.courseId ?? courseIdHint ?? null, courseName = String(own?.course || course || "").trim().toLowerCase();
   for (const f of (await readdir(STORE).catch(() => [])).filter((n) => /^\d+\.json$/.test(n) && Number(n.slice(0, -5)) !== Number(assignId))) {
-    const d = await readStore(Number(f.slice(0, -5)));
+    const d = await readStore(Number(f.slice(0, -5))).catch(() => null); // чужая работа не прочиталась — без неё
     if (!d?.items?.length) continue;
     if ((courseId && d.courseId === courseId) || (courseName && String(d.course || "").trim().toLowerCase() === courseName)) others.push(d);
   }
@@ -186,8 +202,11 @@ export async function forLab(assignId, course = "", courseIdHint = null) {
 
 /** Кладёт актуальный список в папку лабы перед ходом агента; возвращает число пунктов (0 — замечаний пока нет). */
 export async function writeForLab(dir, assignId, course, courseId = null) {
-  const r = await forLab(assignId, course, courseId).catch(() => null);
+  let unread = false;
+  const r = await forLab(assignId, course, courseId).catch((e) => { unread = isStateReadError(e); return null; });
   const path = join(dir, LESSONS_FILE);
+  // Файл этой работы не прочитался (занят) — прежний список в папке лабы оставляем, а не заменяем на «замечаний нет».
+  if (!r && unread && existsSync(path)) return 0;
   if (!r) {
     await writeFile(path, "# Типичные замечания преподавателя\n\nПо этой работе и этому курсу замечаний пока не собрано. Проверь отчёт по методичке и общим правилам оформления.\n").catch(() => {});
     return 0;

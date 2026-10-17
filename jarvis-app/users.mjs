@@ -1,16 +1,20 @@
 // Пользователи мини-приложения. Ключ — Telegram id из подписанного initData.
 // Вход: логин и пароль Moodle → у Moodle берётся персональный токен (login/token.php, как у мобильного приложения);
-// пароль не сохраняется нигде, токен шифруется (AES-256-GCM, ключ в users.key) и лежит в users/<tgId>.json.
+// токен шифруется (AES-256-GCM, ключ в users.key) и лежит в users/<tgId>.json. Для Moodle пароль не нужен; с 16 окт 2026
+// он хранится зашифрованно только для повторного входа в электронный журнал (ejCred ниже).
 // Владелец (OWNER_ID) до первого входа пользуется старым токеном из ~/.openclaw/moodle-token.txt — но только пока не нажал
 // «Выйти из Moodle» (флаг loggedOut): после выхода старый токен не подставляется, и приложение показывает форму входа.
 import { execFile } from "node:child_process";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { Agent, fetch as undiciFetch } from "undici";
+import * as pace from "./moodle-pace.mjs";
+import { StateReadError, isStateReadError, readJson, readText as readStateText, writeJsonAtomic, writeTextAtomic } from "./state-file.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const USERS = join(DIR, "users");
@@ -20,7 +24,10 @@ export const OWNER_ID = 945210206;
 // Белый список для лаб с агентом (тратят подписку Claude владельца): Telegram id через запятую в lab-allowlist.txt.
 const ALLOW_FILE = join(DIR, "lab-allowlist.txt");
 
-const readText = (p) => readFile(p, "utf8").then((t) => t.replace(/^﻿/, "").trim()).catch(() => "");
+// Текстовые файлы (users.key, lab-allowlist.txt, токен OpenClaw). До 15 окт 2026 любая ошибка чтения давала «»: занятый
+// на миг белый список выглядел пустым, и setLabAccess переписывал его одним id — остальные теряли доступ к лабам. Теперь
+// «» — только когда файла нет (ENOENT); занятый файл читается повторно, а не вышло — StateReadError (запрос получит 424).
+const readText = async (p) => ((await readStateText(p)) ?? "").trim();
 
 /**
  * Все обращения к Moodle идут через один пул соединений (пакет undici, тот же fetch, что встроен в Node, но с настройками):
@@ -125,13 +132,29 @@ export function netHealth(host) {
   return { down, since: down ? s.streakAt : null, okAt: s.okAt || null };
 }
 
-export async function mfetch(url, opts = {}) {
+/*
+ * Каждый запрос к сайтам МИСИС проходит через ограничитель (moodle-pace.mjs): очередь с паузами вместо пачек, счётчик
+ * запросов, остановка фоновых обходов при отказах. Фоновый запрос во время паузы в сеть не уходит (PausedError).
+ */
+export async function mfetch(url, { timeoutMs, ...opts } = {}) {
+  const u = String(url);
+  const what = opts.body instanceof URLSearchParams ? opts.body.get("wsfunction") || (u.includes("/login/token.php") ? "login" : "post")
+    : /pluginfile/.test(u) ? "file" : /upload\.php/.test(u) ? "upload" : "page";
+  const turn = await pace.enter(u, what, u.includes("/webservice/rest/server.php") || u.includes("/login/token.php"));
+  // Пока запрос ждал очереди, его срок мог истечь — это не сбой сети: в сеть не идём и сбоем не считаем.
+  if (opts.signal?.aborted) { pace.cancel(turn); throw opts.signal.reason ?? new Error("истёк срок ожидания запроса"); }
+  // Срок запроса (timeoutMs) отсчитывается отсюда — когда запрос дождался очереди и уходит в сеть. Раньше он шёл и в
+  // очереди: при медленном Moodle запросы истекали, не успев уйти, и это считалось сбоем сети.
+  if (timeoutMs) { const t = AbortSignal.timeout(timeoutMs); opts.signal = opts.signal ? AbortSignal.any([opts.signal, t]) : t; }
   try {
     const r = await mfetchRaw(url, opts);
     noteNet(url, r.status < 500); // 5xx — узел отвечает, но не работает (техработы, сбой сервера)
+    pace.leave(turn, { status: r.status, retryAfter: r.headers.get("retry-after") });
     return r;
   } catch (e) {
-    if (e.message === "fetch failed" || e.name === "TimeoutError" || e.name === "AbortError") noteNet(url, false);
+    const network = e.message === "fetch failed" || e.name === "TimeoutError" || e.name === "AbortError";
+    if (network) noteNet(url, false);
+    pace.leave(turn, { error: network ? e : null });
     throw e;
   }
 }
@@ -142,27 +165,48 @@ export async function mfetch(url, opts = {}) {
  * идёт с нового соединения и обычно проходит. Повторяем только сетевые ошибки и таймауты; ошибки самого Moodle
  * (неверный пароль, нет токена) отдаём сразу.
  */
-export async function retry(fn, { attempts = 5, pause = 500 } = {}) {
+// С 5 окт 2026: паузы между попытками растут (0,5 → 1 → 1,5 с со случайным разбросом), а у фоновых обходов попыток три,
+// а не пять: когда Moodle действительно не отвечает, бот не должен стучаться впятеро чаще (3–4 окт так прошли сутки).
+// Долгий сбой останавливает фоновые обходы целиком — moodle-pace.mjs.
+// maxSent — предел для попыток, при которых запрос мог дойти до сервера (таймаут, обрыв уже установленного соединения):
+// тяжёлый запрос сервер доработает и без нас, повторять его много раз нельзя. Несостоявшееся соединение (запрос не
+// ушёл) в этот счёт не идёт — только в общий.
+const NO_CONNECT = /^(UND_ERR_CONNECT_TIMEOUT|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|EADDRNOTAVAIL|ENOTFOUND|EAI_AGAIN)$/;
+export async function retry(fn, { attempts, pause, maxSent } = {}) {
+  const bg = pace.isBackground();
+  const max = attempts ?? (bg ? 3 : 5), base = pause ?? (bg ? 1000 : 500);
+  let sent = 0;
   for (let i = 1; ; i++) {
     try { return await fn(); }
     catch (e) {
       const network = e.message === "fetch failed" || e.name === "TimeoutError" || e.name === "AbortError";
       if (!network) throw e;
-      if (i >= attempts) throw new Error("Moodle не отвечает (сеть МИСИС). Попробуйте ещё раз через минуту.", { cause: e });
-      await new Promise((r) => setTimeout(r, pause));
+      if (!(e.message === "fetch failed" && NO_CONNECT.test(String(e.cause?.code || "")))) sent++;
+      if (i >= max || (maxSent && sent >= maxSent)) throw new Error("Moodle не отвечает (сеть МИСИС). Попробуйте ещё раз через минуту.", { cause: e });
+      await new Promise((r) => setTimeout(r, base * i * (0.75 + Math.random() * 0.5)));
     }
   }
 }
 
 // Ключ читается (или создаётся) один раз на процесс — одним общим обещанием. Раньше при первом запуске несколько
 // одновременных входов каждый создавал свой ключ, файл перезаписывался, и часть токенов потом не расшифровывалась.
+// 15 окт 2026: новый ключ создаётся только когда файла нет (ENOENT). Занятый файл раньше читался как «», запись с wx
+// падала (файл есть), и при повторном «» ключ выходил нулевой длины — до перезапуска не расшифровывался ни один токен
+// (обещание с плохим ключом хранилось вечно). Теперь ошибка чтения бросается, обещание сбрасывается, и следующий вызов
+// читает файл заново; ключ не из 32 байт — тоже ошибка (испорченный файл не заменяем: старые токены новым не открыть).
 let keyPromise = null;
 function getKey() {
   keyPromise ??= (async () => {
     let hex = await readText(KEY_FILE);
-    if (!hex) { hex = randomBytes(32).toString("hex"); await writeFile(KEY_FILE, hex, { flag: "wx" }).catch(async () => { hex = await readText(KEY_FILE); }); }
-    return Buffer.from(hex, "hex");
-  })();
+    if (!hex) {
+      const fresh = randomBytes(32).toString("hex");
+      try { await writeFile(KEY_FILE, fresh, { flag: "wx" }); hex = fresh; }
+      catch (e) { if (e?.code !== "EEXIST") throw e; hex = await readText(KEY_FILE); } // одновременный вызов успел создать файл первым
+    }
+    const key = Buffer.from(hex, "hex");
+    if (key.length !== 32) throw new Error(`users.key: ключ не 32 байта (${key.length}) — файл испорчен, токены не расшифровать`);
+    return key;
+  })().catch((e) => { keyPromise = null; throw e; });
   return keyPromise;
 }
 async function encrypt(text) {
@@ -177,6 +221,27 @@ async function decrypt(blob) {
   d.setAuthTag(tag);
   return Buffer.concat([d.update(enc), d.final()]).toString("utf8");
 }
+/*
+ * Шифрование кэшей с личными данными на диске (15 окт 2026: копия дедлайнов, moodle.mjs) — тем же ключом users.key,
+ * AES-256-GCM, содержимое сжато. aad («связанные данные») в файл не пишется: копия открывается, только если совпало
+ * всё, к чему её привязали (токен, выбор курсов, семестр, версия кода), — иначе расшифровка падает. Сам токен в файл
+ * не попадает.
+ */
+export async function seal(obj, aad) {
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", await getKey(), iv);
+  c.setAAD(Buffer.from(String(aad), "utf8"));
+  const enc = Buffer.concat([c.update(gzipSync(JSON.stringify(obj))), c.final()]);
+  return `${iv.toString("base64")}.${c.getAuthTag().toString("base64")}.${enc.toString("base64")}`;
+}
+/** Обратное к seal; не тот aad, чужой ключ или порча — исключение. */
+export async function unseal(blob, aad) {
+  const [iv, tag, enc] = String(blob).split(".").map((x) => Buffer.from(x, "base64"));
+  const d = createDecipheriv("aes-256-gcm", await getKey(), iv);
+  d.setAAD(Buffer.from(String(aad), "utf8"));
+  d.setAuthTag(tag);
+  return JSON.parse(gunzipSync(Buffer.concat([d.update(enc), d.final()])).toString("utf8"));
+}
 
 const file = (tgId) => join(USERS, `${tgId}.json`);
 const cache = new Map();
@@ -187,19 +252,36 @@ const cache = new Map();
  * каждый правил свою копию, и поздняя запись затирала раннюю (пропадало имя, группа или токен); а две записи в один
  * временный файл перемешивались или падали на rename.
  */
+/*
+ * Баг «ошибка чтения файла = новый пользователь» (15 окт 2026): раньше любая ошибка чтения (файл на миг занят антивирусом
+ * или копией — EBUSY/EPERM, BOM после Блокнота) значила «файла нет». ensure() создавал пустую запись и клал её в кэш,
+ * а первая же запись (touchTelegram на каждом /api/me, profile владельца, calToken) затирала настоящий файл: пропадали
+ * токен Moodle, группа, ссылка календаря, журнал. Теперь «нет файла» — только ENOENT (state-file.mjs). Занятый файл —
+ * повторы ≈1 с, затем StateReadError (424): запрос просит повторить, обход пропускает человека, ничего не пишется и ничего
+ * не запоминается — следующий вызов читает файл заново. Испорченный JSON откладывается в «<id>.json.bad-<время>» и дальше
+ * считается отсутствующим: человек входит заново, прежние данные лежат в копии для ручного восстановления.
+ */
 const loading = new Map(); // tgId → идущее чтение файла
+// Файл испорчен и уже отложен в .bad-* (null, а файл есть): до первой записи не перечитываем — иначе каждый обход
+// (materialsTick — раз в 15 с) делал бы новую копию. Отметку снимает save.
+const quarantined = new Set();
 async function load(tgId) {
   if (cache.has(tgId)) return cache.get(tgId);
+  if (quarantined.has(tgId)) return null;
   if (!loading.has(tgId)) {
-    loading.set(tgId, readFile(file(tgId), "utf8").then(JSON.parse).catch(() => null).then((u) => {
+    const p = readJson(file(tgId), { missing: null }).then((u) => {
       if (u && !cache.has(tgId)) cache.set(tgId, u);
-      loading.delete(tgId);
+      else if (!u && existsSync(file(tgId))) quarantined.add(tgId);
       return cache.get(tgId) ?? null;
-    }));
+    }).finally(() => loading.delete(tgId)); // и при ошибке: неудачное чтение не запоминается
+    loading.set(tgId, p);
   }
   return loading.get(tgId);
 }
-/** Запись пользователя для изменения: существующая или новая, но всегда один и тот же объект для всех запросов. */
+/**
+ * Запись пользователя для изменения: существующая или новая, но всегда один и тот же объект для всех запросов.
+ * Новая — только после однозначного «файла нет»: при ошибке чтения load бросает, и сюда дело не доходит.
+ */
 async function ensure(tgId) {
   const u = await load(tgId);
   if (u) return u;
@@ -211,13 +293,11 @@ async function save(u) {
   await mkdir(USERS, { recursive: true });
   u.updatedAt = Date.now();
   cache.set(u.tgId, u);
+  quarantined.delete(u.tgId);
   // Через временный файл: при нехватке места (ENOSPC, уже случалось) прежняя запись с токеном остаётся целой, а не пустой.
-  // Имя временного файла своё на каждую запись, записи одного пользователя идут по очереди.
-  const run = async () => {
-    const tmp = `${file(u.tgId)}.${randomBytes(4).toString("hex")}.tmp`;
-    await writeFile(tmp, JSON.stringify(u, null, 2));
-    await rename(tmp, file(u.tgId));
-  };
+  // Имя временного файла своё на каждую запись, записи одного пользователя идут по очереди. rename с повторами
+  // (state-file.mjs, 15 окт 2026): на Windows занятый на миг прежний файл давал EPERM, и запись терялась.
+  const run = () => writeJsonAtomic(file(u.tgId), u, { space: 2 });
   const q = (writing.get(u.tgId) || Promise.resolve()).catch(() => {}).then(run);
   writing.set(u.tgId, q);
   await q;
@@ -228,7 +308,7 @@ async function save(u) {
 export async function moodleToken(tgId) {
   const u = await load(tgId);
   if (u?.token) return decrypt(u.token);
-  if (tgId === OWNER_ID && !u?.loggedOut) return (await readText(join(homedir(), ".openclaw", "moodle-token.txt"))) || null;
+  if (tgId === OWNER_ID && !u?.loggedOut) return (await readText(join(homedir(), ".openclaw", "moodle-token.txt"))) || null; // занят — ошибка, а не «не вошёл»
   return null;
 }
 
@@ -240,7 +320,7 @@ export async function profile(tgId) {
   if (tgId === OWNER_ID && hasToken && !u?.fullName) {
     try {
       const token = await moodleToken(tgId);
-      const info = await retry(() => mfetch(`${BASE}/webservice/rest/server.php`, { method: "POST", body: new URLSearchParams({ wstoken: token, wsfunction: "core_webservice_get_site_info", moodlewsrestformat: "json" }), signal: AbortSignal.timeout(5000) }).then((x) => x.json()));
+      const info = await retry(() => mfetch(`${BASE}/webservice/rest/server.php`, { method: "POST", body: new URLSearchParams({ wstoken: token, wsfunction: "core_webservice_get_site_info", moodlewsrestformat: "json" }), timeoutMs: 5000 }).then((x) => x.json()));
       if (info.userid) { await save(Object.assign(await ensure(tgId), { moodleUserId: info.userid, fullName: info.fullname, username: info.username })); return profile(tgId); }
     } catch { /* Moodle недоступен — покажем без имени */ }
   }
@@ -251,7 +331,7 @@ export async function profile(tgId) {
     labsAllowed: await labsAllowed(tgId),
     labRequest: u?.labRequest ?? null, isOwner: tgId === OWNER_ID,
     courseOverrides: u?.courseOverrides ?? {},
-    ej: !!u?.ej,
+    ej: !!(u?.ej || u?.ejCred),
     shareRemarks: shares(tgId, u),
     notify: prefsOf(u),
   };
@@ -301,6 +381,41 @@ export async function setCourse(tgId, courseId, active) {
   return u.courseOverrides;
 }
 
+/*
+ * Уточнения «Сессии» самим студентом (просьба владельца, 15 окт 2026: «пусть пользователь сам уточняет, чтобы не
+ * гадать»): какую дисциплину по выбору взял (electives: { "Б1.В.ДВ.01": "Б1.В.ДВ.01.02" }), записан ли на факультатив
+ * (optional: { "ФТД.02": true | false }), что из списка не его — перезачтено или не изучает (hidden: { ключ: true }).
+ * Ключи и значения приходят из приложения — только короткие строки и не больше SESSION_MAX записей каждого вида.
+ */
+const SESSION_KINDS = { elective: "electives", optional: "optional", hidden: "hidden" };
+const SESSION_MAX = 60;
+// Служебные имена объектов («__proto__», «constructor») ключом не бывают: kind «constructor» иначе проходил бы проверку
+// через Object.prototype и записывал мусор (проверка 15 окт).
+const shortKey = (s) => typeof s === "string" && s.length > 0 && s.length <= 160 && !/[\u0000-\u001f]/.test(s) && !(s in Object.prototype) && s !== "__proto__";
+const ownMap = (m) => (m && typeof m === "object" && !Array.isArray(m) ? Object.fromEntries(Object.entries(m).filter(([k]) => shortKey(k))) : {});
+export async function sessionChoices(tgId) {
+  const c = (await load(tgId))?.sessionChoices || {};
+  return { electives: ownMap(c.electives), optional: ownMap(c.optional), hidden: ownMap(c.hidden) };
+}
+/**
+ * value: elective — индекс варианта или null (снова автоматически); optional — true | false | null; hidden — true | null.
+ * «Не моё» (hidden) хранится временем отметки (с 16 окт 2026; раньше — true): с ответом бота о той же дисциплине журнала
+ * решает последнее слово студента (admission.notMineNow).
+ */
+export async function setSessionChoice(tgId, kind, key, value) {
+  const field = Object.hasOwn(SESSION_KINDS, kind) ? SESSION_KINDS[kind] : null;
+  if (!field || !shortKey(key)) throw new Error("Неверное уточнение");
+  if (value !== null && !(kind === "elective" ? shortKey(value) : kind === "optional" ? typeof value === "boolean" : value === true)) throw new Error("Неверное значение");
+  const u = await ensure(tgId);
+  const c = await sessionChoices(tgId);
+  const map = { ...c[field] };
+  if (value === null) delete map[key];
+  else { if (!Object.hasOwn(map, key) && Object.keys(map).length >= SESSION_MAX) throw new Error("Слишком много уточнений"); map[key] = kind === "hidden" ? Date.now() : value; }
+  u.sessionChoices = { ...c, [field]: map };
+  await save(u);
+  return sessionChoices(tgId);
+}
+
 /** Имя в Telegram (из подписанного initData) — чтобы владелец видел, кто просит доступ. Пишем только при изменении. */
 export async function touchTelegram(tgId, tgUser) {
   if (!tgUser?.id) return;
@@ -318,24 +433,48 @@ export async function requestLabAccess(tgId) {
   await save(u);
 }
 
+// Белый список: нет файла — пустой; занят или не читается — StateReadError (424), а не «ни у кого нет доступа».
 async function readAllow() {
   const raw = await readText(ALLOW_FILE);
   const lines = raw ? raw.split(/\r?\n/) : [];
   const comments = lines.filter((l) => l.trim().startsWith("#"));
   const ids = lines.filter((l) => !l.trim().startsWith("#")).join(" ").split(/[\s,;]+/).filter(Boolean).map(Number).filter(Number.isFinite);
+  allowLast = ids; // последнее удачное чтение — см. allowIds
   return { comments, ids };
+}
+/*
+ * 15 окт 2026 (проверка после правки «ошибка чтения = новый пользователь»): строгое чтение белого списка сделало его общей
+ * точкой отказа. profile() зовут почти все пути — /api/me, проверка расписания в каждом обходе уведомлений, лента
+ * календаря, команды бота, рассылка дат экзаменов, — и занятый на секунду lab-allowlist.txt (антивирус, копия, rename
+ * из setLabAccess) давал 424 всем, хотя нужен этот файл только лабам. Теперь помним последний удачно прочитанный список:
+ * labsAllowed и profile при StateReadError берут его (в журнал — не чаще раза в минуту). Ещё ни разу не прочитали (сразу
+ * после запуска) — по-прежнему ошибка: «нет доступа» вслепую показало бы кнопку «Попросить доступ» и прислало бы
+ * владельцу лишний запрос. Правка списка (setLabAccess) и экран владельца (listUsers) читают строго — правка идёт только
+ * поверх свежего удачного чтения, после неудачного ничего не пишется.
+ */
+let allowLast = null, allowToldAt = 0;
+async function allowIds() {
+  try { return (await readAllow()).ids; }
+  catch (e) {
+    if (!isStateReadError(e) || !allowLast) throw e;
+    if (Date.now() - allowToldAt >= 60e3) {
+      allowToldAt = Date.now();
+      console.error(`users: ${ALLOW_FILE} сейчас не читается (${String(e?.cause?.code || e?.message || e).slice(0, 120)}) — доступ к лабам по последнему прочитанному списку`);
+    }
+    return allowLast;
+  }
 }
 
 /** Владелец разрешает или закрывает отчёты пользователю: правим lab-allowlist.txt (комментарии сохраняем). */
 let allowQueue = Promise.resolve(); // правки белого списка — по очереди: две одновременные читали бы один файл и теряли бы чужую правку
 export async function setLabAccess(tgId, allowed) {
+  // Не прочитали файл — не пишем ничего (15 окт 2026: раньше пустое чтение переписывало список одним этим id).
   const run = async () => {
     const { comments, ids } = await readAllow();
     const set = new Set(ids);
     if (allowed) set.add(Number(tgId)); else set.delete(Number(tgId));
-    const tmp = `${ALLOW_FILE}.${randomBytes(4).toString("hex")}.tmp`;
-    await writeFile(tmp, [...comments, ...[...set].map(String)].join("\n") + "\n");
-    await rename(tmp, ALLOW_FILE);
+    await writeTextAtomic(ALLOW_FILE, [...comments, ...[...set].map(String)].join("\n") + "\n");
+    allowLast = [...set]; // записали — запомненный список тот же, что на диске (иначе при занятом файле был бы список до правки)
   };
   allowQueue = allowQueue.catch(() => {}).then(run);
   await allowQueue;
@@ -343,42 +482,75 @@ export async function setLabAccess(tgId, allowed) {
   if (u) { delete u.labRequest; await save(u); }
 }
 
-/** Все известные пользователи (без токенов) — для экрана владельца «Доступ к отчётам». */
+/*
+ * Списки и обходы по всем пользователям (15 окт 2026): ошибка чтения одного файла раньше обрывала цикл для всех —
+ * один занятый users/<id>.json, и уведомления, календарь, экран владельца переставали работать у каждого. Теперь
+ * нечитаемый человек пропускается (с записью в журнал не чаще раза в 10 минут на человека), остальные идут как обычно.
+ * strict — папку users не прочитали (не «нет папки») — ошибка, а не пустой список.
+ */
+async function userIds({ strict = false } = {}) {
+  const names = await readdir(USERS).catch((e) => { if (strict && e?.code !== "ENOENT") throw new StateReadError(USERS, e); return []; });
+  return names.filter((f) => /^\d+\.json$/.test(f)).map((f) => Number(f.slice(0, -5)));
+}
+const skipTold = new Map(); // tgId → когда о его пропуске последний раз писали в журнал
+function skipped(tgId, e) {
+  if (Date.now() - (skipTold.get(tgId) || 0) < 10 * 60e3) return;
+  skipTold.set(tgId, Date.now());
+  console.error(`users ${tgId}: пропущен — ${String(e?.message || e).slice(0, 200)}`);
+}
+
+/** Все известные пользователи (без токенов) — для экрана владельца «Доступ к отчётам». Нечитаемый файл пропускается. */
 export async function listUsers() {
-  const ids = (await readdir(USERS).catch(() => [])).filter((f) => f.endsWith(".json")).map((f) => Number(f.slice(0, -5)));
+  const ids = await userIds();
   const { ids: allow } = await readAllow();
   const out = [];
   for (const id of ids) {
-    const u = await load(id);
-    if (!u) continue;
-    out.push({ tgId: id, tgName: u.tgName || null, tgUsername: u.tgUsername || null, fullName: u.fullName || null, group: u.group || null,
-      loggedIn: !!(await moodleToken(id)), allowed: id === OWNER_ID || allow.includes(id), isOwner: id === OWNER_ID, labRequest: u.labRequest || null, updatedAt: u.updatedAt || null });
+    try {
+      const u = await load(id);
+      if (!u) continue;
+      out.push({ tgId: id, tgName: u.tgName || null, tgUsername: u.tgUsername || null, fullName: u.fullName || null, group: u.group || null,
+        loggedIn: !!(await moodleToken(id)), allowed: id === OWNER_ID || allow.includes(id), isOwner: id === OWNER_ID, labRequest: u.labRequest || null, updatedAt: u.updatedAt || null });
+    } catch (e) { skipped(id, e); }
   }
   return out.sort((a, b) => (b.labRequest || 0) - (a.labRequest || 0) || (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+/** Telegram id всех записей пользователей — строго: непрочитанная папка users — ошибка (для учёта пробных, lab-trial.mjs). */
+export const knownUserIds = () => userIds({ strict: true });
+/** Номер учётной записи Moodle (site_info.userid при входе) или null. Занятый файл — ошибка, а не «не входил». */
+export async function moodleUserIdOf(tgId) {
+  const u = await load(Number(tgId));
+  return u?.moodleUserId ?? null;
 }
 
 /** Вход: логин и пароль → токен Moodle. Пароль дальше этой функции не живёт. */
 export async function login(tgId, username, password) {
   // Ответы здесь маленькие, а мёртвое соединение не ответит никогда — 5 с на попытку, дальше retry() берёт новое соединение.
   const j = await retry(() => mfetch(`${BASE}/login/token.php`, {
-    method: "POST", body: new URLSearchParams({ username, password, service: "moodle_mobile_app" }), signal: AbortSignal.timeout(5000),
-  }).then((r) => r.json().catch(() => ({}))));
+    method: "POST", body: new URLSearchParams({ username, password, service: "moodle_mobile_app" }), timeoutMs: 5000,
+  }).then((r) => r.json().catch(() => ({}))), { attempts: 3 }); // пароль не шлём больше трёх раз: неверный пароль с повторами — путь к блокировке входа
   if (!j.token) throw new Error(j.error || "Moodle не выдал токен");
   const info = await retry(() => mfetch(`${BASE}/webservice/rest/server.php`, {
     method: "POST", body: new URLSearchParams({ wstoken: j.token, wsfunction: "core_webservice_get_site_info", moodlewsrestformat: "json" }),
-    signal: AbortSignal.timeout(5000),
+    timeoutMs: 5000,
   }).then((x) => x.json()));
   if (!info.userid) throw new Error("Токен получен, но профиль Moodle недоступен");
   const token = await encrypt(j.token);
   const u = await ensure(tgId);
+  // Под тем же Telegram вошла другая учётная запись — журнал и пароль прежней забываются: иначе, если журнал новой не
+  // подключится сразу, Doodle продолжал бы входить в журнал прежней её сохранённым паролем.
+  if (u.username && info.username && String(u.username).toLowerCase() !== String(info.username).toLowerCase()) {
+    delete u.ej; delete u.ejCred; delete u.ejCredRejected; delete u.ejCredFails; delete u.ejError; delete u.ejAt;
+  }
   Object.assign(u, { token, moodleUserId: info.userid, fullName: info.fullname, username: info.username });
   delete u.loggedOut;
+  bumpEjEpoch(tgId); // подключение журнала от прежнего входа (могла быть другая учётная запись) уже не запишется
   await save(u);
   return profile(tgId);
 }
 
 /**
- * Вход в электронный журнал (ej.mjs): cookies журнала и MISIS ID — зашифрованно, как токен Moodle. Пароль не хранится.
+ * Вход в электронный журнал (ej.mjs): cookies журнала и MISIS ID — зашифрованно, как токен Moodle.
  * ejAt — когда вход последний раз проверен; ejError — почему не удалось войти (показывается во вкладке «Журнал»).
  */
 export async function ejJar(tgId) {
@@ -386,22 +558,90 @@ export async function ejJar(tgId) {
   if (!u?.ej) return null;
   try { return JSON.parse(await decrypt(u.ej)); } catch { return null; }
 }
-export async function setEj(tgId, jar, error = null) {
+/*
+ * Пароль для журнала (решение владельца, 16 окт 2026: «войти в журнал один раз и всё»). Вход MISIS ID без пароля живёт
+ * ровно 48 ч от ввода пароля и не продлевается (NOTES.md п. 138), поэтому раз в двое суток журнал просил пароль снова.
+ * Теперь почта и пароль хранятся зашифрованно (seal, привязка к tgId: чужому файлу не подставить) и нужны только ej.mjs —
+ * войти заново, когда вход MISIS ID истёк. Наружу — в API, журналы сервера, ответы бота — не отдаются. Удаляются при
+ * выходе, при входе другой учётной записью Moodle и когда MISIS ID их не принял (неверный пароль повторно не шлём:
+ * так недолго заблокировать вход).
+ */
+const credAad = (tgId) => `ej-cred:${tgId}`;
+export async function ejCred(tgId) {
+  const u = await load(tgId);
+  if (!u?.ejCred) return null;
+  try {
+    const c = await unseal(u.ejCred, credAad(tgId));
+    return c?.email && c?.password ? { email: String(c.email), password: String(c.password) } : null;
+  } catch (e) { if (isStateReadError(e)) throw e; return null; } // занятый users.key — ошибка, а не «пароля нет»
+}
+/*
+ * Поколение входа (в памяти): меняется при входе в бот и при выходе. Подключение журнала идёт секунды и в фоне — начатое
+ * до выхода или до входа другой учётной записью, оно свой вход и пароль уже не записывает (setEj с epoch).
+ */
+const ejEpochs = new Map();
+export const ejEpoch = (tgId) => ejEpochs.get(tgId) ?? 0;
+const bumpEjEpoch = (tgId) => ejEpochs.set(tgId, ejEpoch(tgId) + 1);
+/**
+ * cred: { email, password } — запомнить пароль журнала, null — забыть, не передан — не трогать.
+ * epoch — поколение входа на момент начала подключения: сменилось — ничего не пишем (false).
+ */
+export async function setEj(tgId, jar, error = null, cred, { epoch } = {}) {
   const u = await ensure(tgId);
-  if (jar) u.ej = await encrypt(JSON.stringify(jar)); else if (jar === null) delete u.ej;
+  const ej = jar ? await encrypt(JSON.stringify(jar)) : null;
+  const sealed = cred ? await seal({ email: String(cred.email), password: String(cred.password) }, credAad(tgId)) : null;
+  if (epoch !== undefined && epoch !== ejEpoch(tgId)) return false; // проверка — после всех ожиданий, перед правкой
+  if (ej) u.ej = ej; else if (jar === null) delete u.ej;
+  if (sealed) { u.ejCred = sealed; delete u.ejCredRejected; } else if (cred === null) delete u.ejCred;
+  if (sealed || (ej && !error)) delete u.ejCredFails; // новый пароль или удачный вход — счёт неудач с начала
   u.ejAt = Date.now();
   if (error) u.ejError = String(error).slice(0, 200); else delete u.ejError;
   await save(u);
+  return true;
 }
+/**
+ * MISIS ID не принял сохранённый пароль — забыть его. Если за это время пароль уже заменили (человек ввёл новый),
+ * новый не трогаем. true — забыли.
+ */
+export async function dropEjCred(tgId, used, error) {
+  const cur = await ejCred(tgId);
+  if (!cur || cur.email !== used?.email || cur.password !== used?.password) return false;
+  const u = await ensure(tgId);
+  delete u.ejCred; delete u.ejCredFails;
+  u.ejCredRejected = Date.now(); // приложение скажет «сохранённый пароль не подошёл», а не «вход истёк»
+  u.ejAt = Date.now();
+  if (error) u.ejError = String(error).slice(0, 200);
+  await save(u);
+  console.log(`ej ${tgId}: MISIS ID не принял сохранённый пароль — он забыт, нужен новый`); // без пароля и почты
+  return true;
+}
+/**
+ * Вход по сохранённому паролю не завершился, хотя MISIS ID пароль принял (ej.mjs, ACCEPT_FAILS) — посчитать. Счётчик на
+ * диске: перезапуск сервера его не сбрасывает. Пароль за это время заменили — не считаем (0).
+ */
+export async function noteEjCredFail(tgId, used) {
+  const cur = await ejCred(tgId);
+  if (!cur || cur.email !== used?.email || cur.password !== used?.password) return 0;
+  const u = await ensure(tgId);
+  u.ejCredFails = (Number(u.ejCredFails) || 0) + 1;
+  await save(u);
+  return u.ejCredFails;
+}
+/**
+ * connected — журнал подключён или есть пароль, чтобы подключить его самим; saved — пароль сохранён; rejected — MISIS ID
+ * не принял сохранённый пароль (нужен новый).
+ */
 export async function ejState(tgId) {
   const u = await load(tgId);
-  return { connected: !!u?.ej, at: u?.ejAt ?? null, error: u?.ejError ?? null, email: u?.username ?? null };
+  return { connected: !!(u?.ej || u?.ejCred), saved: !!u?.ejCred, rejected: !u?.ejCred && !!u?.ejCredRejected, at: u?.ejAt ?? null, error: u?.ejError ?? null, email: u?.username ?? null };
 }
 
 export async function logout(tgId) {
   const u = await ensure(tgId);
   delete u.token;
   delete u.ej; // выход из бота — выход и из журнала
+  delete u.ejCred; delete u.ejCredRejected; delete u.ejCredFails; // и пароль журнала
+  bumpEjEpoch(tgId); // идущее подключение журнала их уже не вернёт
   // Без флага владельцу «Выйти» ничего не давало: moodleToken() тут же подставлял старый токен OpenClaw, и вход оставался.
   u.loggedOut = true;
   await save(u);
@@ -409,6 +649,33 @@ export async function logout(tgId) {
 }
 
 /** Группа для расписания (подтверждённая пользователем или найденная сама), подгруппа и вариант для титульного листа. */
+/*
+ * Терминал для снимков в отчётах (правило владельца, 5 окт 2026): берётся из методички, а если она молчит — агент
+ * спрашивает студента. Ответ студента запоминается здесь, чтобы не переспрашивать: по курсу (в той же дисциплине вопрос
+ * больше не задаётся полгода) и последний ответ (в другом курсе агент предложит его первым вариантом). То, что среду
+ * назвала методичка, сюда не пишется — это свойство работы, а не предпочтение студента.
+ */
+export const TERMINALS = { powershell: "Windows PowerShell", cmd: "командная строка Windows", wsl: "Linux (Ubuntu в WSL)", linux: "Linux", macos: "Терминал macOS" };
+const TERMINAL_FRESH_MS = 183 * 24 * 3600e3;
+export async function setTerminal(tgId, courseId, value) {
+  if (!Object.hasOwn(TERMINALS, value)) return false;
+  const u = await ensure(tgId);
+  const rec = { value, at: Date.now() };
+  const byCourse = { ...(u.terminal?.byCourse || {}) };
+  if (courseId) byCourse[String(courseId)] = rec;
+  u.terminal = { last: rec, byCourse };
+  await save(u);
+  return true;
+}
+/** Что известно о терминале студента: { value, at, scope: "course" | "other" } или null (ответы старше полугода не в счёт). */
+export async function terminalOf(tgId, courseId) {
+  const t = (await load(tgId))?.terminal;
+  const fresh = (r) => r && Object.hasOwn(TERMINALS, r.value) && Date.now() - r.at < TERMINAL_FRESH_MS;
+  const own = courseId ? t?.byCourse?.[String(courseId)] : null;
+  if (fresh(own)) return { ...own, scope: "course" };
+  return fresh(t?.last) ? { ...t.last, scope: "other" } : null;
+}
+
 /*
  * Название группы: буквы, цифры, пробел и . , ( ) + _ - (в списке МИСИС встречаются «ММТМ-25-11А_Джоте Й.С., Оладимеджи Т.Д.»).
  * Группа попадает в инструкцию агенту рядом с рабочей папкой, поэтому путь или служебный текст в неё вписать нельзя:
@@ -473,26 +740,41 @@ export async function calToken(tgId, { reset = false } = {}) {
   calIndex.set(u.cal.token, tgId);
   return u.cal.token;
 }
-/** Чей это календарь: Telegram id по секрету из ссылки, или null. */
+/**
+ * Чей это календарь: Telegram id по секрету из ссылки, или null. Если секрет не нашёлся, а чей-то файл не прочитался,
+ * — StateReadError (424), а не «не найден»: секрет мог быть как раз в нём, а на 404 сервер считает промах и после
+ * нескольких таких блокирует адрес, с которого календарная программа опрашивает ленту.
+ */
 export async function byCalToken(token) {
   if (!/^[\w-]{20,40}$/.test(String(token || ""))) return null;
   if (calIndex.has(token)) return calIndex.get(token);
-  const ids = (await readdir(USERS).catch(() => [])).filter((f) => f.endsWith(".json")).map((f) => Number(f.slice(0, -5)));
-  for (const id of ids) { const u = await load(id); if (u?.cal?.token) calIndex.set(u.cal.token, id); }
-  return calIndex.get(token) ?? null;
+  let unreadable = null;
+  for (const id of await userIds({ strict: true })) {
+    try { const u = await load(id); if (u?.cal?.token) calIndex.set(u.cal.token, id); }
+    catch (e) { unreadable ??= e; skipped(id, e); }
+  }
+  if (calIndex.has(token)) return calIndex.get(token);
+  if (unreadable) throw isStateReadError(unreadable) ? unreadable : new StateReadError(USERS, unreadable);
+  return null;
 }
 
+/**
+ * Доступ к лабам с агентом. Белый список сейчас не читается — по последнему удачно прочитанному (см. allowIds); ещё ни
+ * разу не прочитали — ошибка (424), а не «нет доступа» (и лишний запрос владельцу).
+ */
 export async function labsAllowed(tgId) {
   if (tgId === OWNER_ID) return true;
-  const list = (await readText(ALLOW_FILE)).split(/\r?\n/).filter((l) => !l.trim().startsWith("#")).join(" ").split(/[\s,;]+/).filter(Boolean).map(Number);
-  return list.includes(Number(tgId));
+  return (await allowIds()).includes(Number(tgId));
 }
 
-/** Все пользователи с токеном (для ежечасных напоминаний). */
+/** Все пользователи с токеном (для ежечасных напоминаний). Нечитаемый пропускается до следующего обхода — см. userIds. */
 export async function allLoggedIn() {
-  const ids = (await readdir(USERS).catch(() => [])).filter((f) => f.endsWith(".json")).map((f) => Number(f.slice(0, -5)));
+  const ids = await userIds();
   if (!ids.includes(OWNER_ID)) ids.push(OWNER_ID);
   const out = [];
-  for (const id of ids) { const t = await moodleToken(id); if (t) out.push({ tgId: id, token: t, overrides: (await load(id))?.courseOverrides ?? {} }); }
+  for (const id of ids) {
+    try { const t = await moodleToken(id); if (t) out.push({ tgId: id, token: t, overrides: (await load(id))?.courseOverrides ?? {} }); }
+    catch (e) { skipped(id, e); }
+  }
   return out;
 }

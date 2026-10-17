@@ -39,6 +39,8 @@ export interface LabJob {
   agent: { status: "question" | "working" | "report" | "blocked"; text?: string } | null;
   /** Проверочный запуск на уже оценённой работе: отчёт делается, но в Moodle не прикрепляется и не отправляется. */
   trial?: boolean;
+  /** Пробный отчёт нового пользователя (lab-trial.mjs) — не путать с trial выше. */
+  viaTrial?: boolean;
   /**
    * Идёт или шло исправление по замечаниям преподавателя: n — какое по счёту, name — имя исправленного файла,
    * delivered — замечания дошли до агента, done — исправленный отчёт уже собран.
@@ -67,12 +69,20 @@ export const API_TIMEOUT_MS = 90_000;
 export const apiHeaders = () => ({ "x-telegram-init-data": tg?.initData ?? "", "ngrok-skip-browser-warning": "1" });
 
 export async function api<T>(path: string, body?: unknown): Promise<T> {
-  const r = await fetch(apiBase() + path, {
-    method: body === undefined ? "GET" : "POST",
-    headers: { ...apiHeaders(), ...(body !== undefined ? { "content-type": "application/json" } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(API_TIMEOUT_MS),
-  });
+  let r: Response;
+  try {
+    r = await fetch(apiBase() + path, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { ...apiHeaders(), ...(body !== undefined ? { "content-type": "application/json" } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+  } catch (e) {
+    // Сетевой сбой — понятным русским текстом, как в syncMoodle (проверка 15 окт): раньше на экран попадали
+    // «Failed to fetch», «Load failed» или «signal timed out».
+    const n = (e as Error).name;
+    throw new Error(n === "TimeoutError" || n === "AbortError" ? "Сервер не ответил вовремя" : e instanceof TypeError ? "Сервер недоступен" : (e as Error).message);
+  }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j as { error?: string }).error || `ошибка ${r.status}`);
   return j as T;
@@ -201,8 +211,12 @@ export const submitOwn = (assignId: string) => api<OwnSubmitResult>(`api/submit/
 /** Электронный журнал МИСИС (ej.misis.ru): подключение и данные (посещаемость и успеваемость). */
 export interface EjState {
   connected: boolean;
-  /** Вход MISIS ID истёк — нужен пароль один раз. */
+  /** Пароля нет (вошли до 16 окт 2026) или MISIS ID не принял сохранённый — нужен пароль от человека. */
   needPassword?: boolean;
+  /** Пароль сохранён: когда вход MISIS ID истечёт, сервер войдёт им сам. */
+  saved?: boolean;
+  /** MISIS ID не принял сохранённый пароль (скорее всего, его сменили) — нужен текущий. */
+  rejected?: boolean;
   at: number | null;
   error: string | null;
   /** Почта MISIS ID (она же логин Moodle). */
@@ -210,6 +224,25 @@ export interface EjState {
   data: EjData | null;
   /** Журнал не ответил при этой загрузке: data — последние удачные данные (если были), здесь — причина. */
   loadError?: string | null;
+  /**
+   * Посещения и баллы из таблиц преподавателей в курсах Moodle — по дисциплинам, о которых журнал не знает (нет в
+   * журнале, нет отметок о посещении или оценок). Приходят и без подключённого журнала. ejId — дисциплина журнала,
+   * к карточке которой это относится; null — отдельная карточка.
+   */
+  sheets?: SheetSubject[] | null;
+}
+export interface SheetSubject {
+  /** ejKnown — сервер сопоставлял с журналом этого семестра: ejId null значит «в журнале нет» (не приклеивать по названию). */
+  id: string; courseId: number; ejId: number | null; ejKnown?: boolean; name: string;
+  /** Процент посещений (были / (были + пропуски)), null — посещений в таблице нет. */
+  attendance: number | null;
+  lessons: { past: number; present: number; absent: number; excused: number; unmarked: number; missedHours: number } | null;
+  absences: { date: string | null; kind: string; n: number | null; hours: number; excused: boolean }[];
+  /** Баллы в процентах шкалы (null — максимум неизвестен) и подробно. */
+  rating: number | null;
+  /** full — таблица на всю дисциплину (шкала как у рейтинга); иначе баллы — только часть или без максимума. */
+  points: { have: number; scale: number | null; left: number | null; parts: { name: string; have: number; max: number }[]; label: string | null; confidence: string; full?: boolean; note: string | null } | null;
+  sheet: SheetSource | null; attendanceSheet: SheetSource | null;
 }
 /** Дисциплина семестра: проценты — как в самом журнале; пропуски и оценки — из журнала дисциплины. */
 export interface EjSubject {
@@ -238,12 +271,126 @@ export interface EjData {
   at: string;
   semester: string | null;
   group: string | null;
+  /** Средние и пропуски — только по subjects (без notMine). */
   summary: { attendance: number | null; rating: number | null; absences: number; missedHours: number };
   subjects: EjSubject[];
+  /**
+   * Дисциплины, которые студент назвал не своими (16 окт 2026): ответ «Нет, не моя» боту или «Не моё» в «Сессии» (from —
+   * где сказано последним). Не в subjects и не в средних; «Вернуть» — ejApi.mine.
+   */
+  notMine?: (EjSubject & { from: "bot" | "session" })[];
 }
 export const ejApi = {
   get: (refresh = false) => api<EjState>(`api/ej${refresh ? "?refresh" : ""}`),
   connect: (password: string) => api<EjState>("api/ej/connect", { password }),
+  /** «Вернуть» не свою дисциплину: снимаются и ответ боту, и «Не моё» в «Сессии»; ответ — журнал заново. */
+  mine: (id: number) => api<EjState>("api/ej/mine", { id }),
+};
+
+/** «Сессия» (GET api/session, admission.mjs): учебный план группы с misis.ru, расписание экзаменов, долги по журналу и Moodle. */
+export interface SessionPeriod { kind: "theory" | "exam" | "holiday" | "practice" | "diploma" | "research" | "other"; label: string; from: string; to: string; weeks: [number, number] }
+export interface SessionInfo { semester: number; course: number; label: string; from: string; to: string; weeks: [number, number]; state: "ahead" | "now" | "past"; days: number }
+export interface SessionSubject {
+  index: string | null; name: string; kind: string;
+  /** Формы контроля в этом семестре («Эк», «ЗаО», «За», «КР») и их названия словами. */
+  controls: string[]; labels: string[];
+  /** Дисциплина по выбору: id группы — студент берёт одну из вариантов. */
+  elective: string | null;
+  /** Ключ для «не моё» (POST api/session/choice). */
+  key: string;
+  /** Все варианты группы по выбору (для выбора самим студентом); null — вариант один. */
+  variants?: { index: string; name: string }[] | null;
+  /** Выбранный вариант определён: сам студент, по журналу или по курсу Moodle. */
+  electiveFrom?: "user" | "journal" | "moodle";
+  /** Какой вариант выбран, неизвестно: показаны все, их столько. */
+  electiveOpen?: number;
+  /** Факультатив, на который студент записан (сам сказал или нашёлся в журнале / Moodle). */
+  attending?: boolean; attendingFrom?: "user" | "journal" | "moodle" | null;
+  exam: boolean; graded: boolean; pass: boolean; coursework: boolean;
+  examDates: { date: string; time: string | null; kind: "exam" | "consult" | "test"; place: string; teacher: string }[];
+  /** Есть ли дисциплина в электронном журнале (по названию). */
+  inJournal: boolean;
+  /**
+   * Баллы рейтинга из 100 (как в журнале): have — есть, left — можно ещё набрать (работы без оценки и не заведённые
+   * контрольные), targets — пороги (на 3/4/5 или «зачёт»): сколько не хватает, набран ли, достижим ли.
+   */
+  score: SessionScore | null;
+  /** red — первый порог уже не набрать оставшимися работами; yellow — есть работа ниже порога. */
+  level: "ok" | "yellow" | "red";
+  /** Справка, когда баллов онлайн нет вовсе (английский): разбивка и пороги из рабочей программы, что с пропусками. */
+  info?: SubjectNote | null;
+  /** Таблица преподавателя в курсе есть, но баллы из неё не взяты — почему (однофамильцы, не прочиталась). */
+  sheetNote?: string | null;
+}
+export interface SubjectNote { scale: number; parts: { name: string; max: number }[]; bands: string; notes: string[]; url: string }
+/** Откуда таблица преподавателя: файл курса Moodle или ссылка в курсе на Яндекс Диск / Google Таблицы. */
+export interface SheetSource {
+  kind: "moodle" | "yandex" | "google";
+  /** Название элемента курса («Журнал»), имя файла, раздел курса, ссылка на элемент в Moodle, когда файл изменён (мс). */
+  title: string | null; file: string | null; section?: string | null; url: string | null; modified: number | null;
+  /** Лист книги со своей строкой, код группы листа, своя ли группа, как нашлась строка (ФИО целиком / имя / инициалы). */
+  sheet?: string | null; group?: string | null; groupRel?: "same" | "other" | "unknown" | null; match?: "fio" | "name" | "initials" | null;
+  /** Какой именно файл (у ссылок со страницы курса url один на несколько таблиц). */
+  ref?: string | null;
+}
+export interface SessionScore {
+  /** ej — электронный журнал (шкала 100); moodle — журнал оценок курса Moodle и его рейтинг-план; sheet — таблица преподавателя в курсе. */
+  source: "ej" | "moodle" | "sheet";
+  /** Максимум баллов дисциплины (100 у журнала; у Moodle — из рейтинг-плана, null — неизвестен). */
+  scale: number | null;
+  have: number; left: number | null; pending: number | null; max: number | null;
+  targets: { key: "3" | "4" | "5" | "pass"; label: string; at: number; need: number; done: boolean; reachable: boolean | null; strict?: boolean }[];
+  failed: string[]; grade: number | null;
+  /** Насколько расчёту можно верить: none — порогов нет, low — журнал оценок не сходится с планом (пороги только текстом). */
+  confidence: "high" | "medium" | "low" | "none";
+  note?: string | null;
+  /**
+   * Только Moodle: сколько работ оценено, какие ещё без оценки (не сдано или не проверено), выставленные итоговые
+   * оценки, сумма максимумов заведённых работ, пороги плана текстом, почему порогов нет (planNote), найден ли план, ссылки.
+   */
+  graded?: number; pendingWorks?: { name: string; max: number }[]; finals?: { name: string; grade: number; max: number }[]; sumMax?: number;
+  planStatus?: "ok" | "pass" | "none" | "unparsed" | "ambiguous"; planBands?: string | null; planPass?: number | null;
+  planNote?: string | null; planFound?: boolean;
+  planUrl?: string | null; gradesUrl?: string | null;
+  /**
+   * Только таблица преподавателя: откуда, по частям (лекции, лабораторные… — набрано из максимума), подпись итогового
+   * столбца (когда максимума нет — что это за баллы), оценка в таблице словом («зачтено», «н/я»), откуда пороги.
+   */
+  sheet?: SheetSource | null; parts?: { name: string; have: number; max: number }[]; totalLabel?: string | null; gradeText?: string | null;
+  thresholdsFrom?: "journal" | "moodle" | "sheet" | null;
+  /** Таблица на всю дисциплину (её максимум — как у рейтинга или рейтинг-плана): только тогда считаются пороги. */
+  full?: boolean;
+}
+export interface SessionView {
+  needGroup?: boolean; group: string | null; course?: number | null; semester?: number | null; today?: string;
+  session?: SessionInfo | null; upcoming?: SessionInfo | null; periods?: SessionPeriod[];
+  program?: { code: string; name: string; institute: string | null; admission: number | null; year: string | null; approved: string | null; url: string } | null;
+  planError?: string | null;
+  exams?: { published: boolean; at: number | null; title: string | null; url: string | null; page: string; checkedAt: number | null };
+  subjects?: SessionSubject[]; counts?: { exam: number; graded: number; pass: number; coursework: number; none: number };
+  /** Факультативы, на которые студент (насколько известно) не записан. */
+  optional?: { key: string; index: string | null; name: string; labels: string[] }[];
+  /** Вне плана группы на этот семестр: пересдачи, академическая разница, дисциплины только из журнала. */
+  extra?: SessionExtra[];
+  /** Скрытое самим студентом («не моё») — чтобы можно было вернуть. */
+  /** Скрытое студентом; from — где сказал «не моё» последним: здесь ("session") или ответом боту о дисциплине журнала ("bot"). */
+  hidden?: { key: string; index: string | null; name: string; labels: string[]; from?: "bot" | "session" }[];
+  /** Загружен ли электронный журнал: без него баллов из журнала нет. */
+  journal?: { state: "ok" | "need_password" | "rejected" | "not_connected" | "error" | "not_loaded" | "other_semester"; at?: string | null; error?: string | null; semester?: string | null };
+  /** Прочитан ли список курсов Moodle (по нему — дисциплины по выбору, академическая разница, пересдачи). */
+  moodle?: { state: "ok" | "not_connected" | "not_loaded" };
+  /** Сколько дисциплин, где первый порог уже не набрать. */
+  risks?: number; journalAt?: string | null; at: number;
+}
+export interface SessionExtra {
+  key: string; name: string; why: "retake" | "earlier" | "journal"; label: string | null; planSemesters: number[] | null; month: string | null;
+  inJournal: boolean; score: SessionScore | null; course: { id: number; name: string; url: string } | null; level: "ok" | "red";
+}
+/** Уточнение самого студента: дисциплина по выбору (value — индекс варианта), факультатив (true/false), «не моё» (true); null — сбросить. */
+export type SessionChoice = { kind: "elective"; key: string; value: string | null } | { kind: "optional"; key: string; value: boolean | null } | { kind: "hidden"; key: string; value: true | null };
+export const sessionApi = {
+  get: () => api<SessionView>("api/session"),
+  choose: (c: SessionChoice) => api<SessionView>("api/session/choice", c),
 };
 
 /** Числовой id задания Moodle из id дедлайна «moodle:assign:123», иначе null. */

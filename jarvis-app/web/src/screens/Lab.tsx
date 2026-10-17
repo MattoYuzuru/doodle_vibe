@@ -1,15 +1,16 @@
 import { AnimatePresence, m, useDragControls } from "framer-motion";
-import { BookOpen, Bot, Check, ExternalLink, FileText, Paperclip, Pencil, Send, Sparkles } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowDown, BookOpen, Bot, Check, ExternalLink, FileText, Paperclip, Pencil, RotateCcw, Send, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { TeacherRemarks } from "../components/Remarks";
 import { RollingNumber } from "../components/RollingNumber";
 import { Tile, TileLabel } from "../components/Tile";
 import { toast } from "../components/Toast";
 import { LabPulse } from "../components/LabPulse";
-import { EmptyState, ProgressBar } from "../components/ui";
+import { EmptyState, ProgressBar, Skeleton } from "../components/ui";
 import { useNav } from "../hooks/useNav";
 import { usePolling } from "../hooks/usePolling";
 import { useMainButton } from "../hooks/useTelegramButtons";
+import { labErrorText, labGate, onLabDenied } from "../lib/labGate";
 import { assignIdOf, feedbackApi, labApi, type Feedback, type LabJob } from "../store/api";
 import { shortName, useAuth } from "../store/auth";
 import { subjectOf, useAppStore } from "../store/useAppStore";
@@ -31,6 +32,16 @@ const DISMISS_Y = 64;
 const time = (ms: number) => new Date(ms).toLocaleTimeString("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit" });
 const mb = (n: number) => `${(n / 1048576).toFixed(1)} МБ`;
 
+/** Скроллер переписки — сам экран стека (StackScreen, overflow-y-auto); если класс когда-нибудь сменится — ближайший предок с прокруткой. */
+function scrollerOf(el: HTMLElement | null): HTMLElement | null {
+  const sc = el?.closest<HTMLElement>(".overflow-y-auto");
+  if (sc) return sc;
+  for (let p = el?.parentElement; p; p = p.parentElement) if (/auto|scroll/.test(getComputedStyle(p).overflowY)) return p;
+  return null;
+}
+/** Переписка прокручена до конца (с запасом): новое сообщение можно показать, не отрывая студента от чтения. */
+const atEnd = (sc: HTMLElement | null) => !sc || sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160;
+
 /** Подзаголовки «Кратко о работе» (их порядок задаёт сервер, lab.mjs BRIEF_PROMPT) — в сообщении выделяются жирным. */
 const BRIEF_HEADS = new Set(["суть работы", "что сделано", "главные результаты", "вывод", "что могут спросить на защите", "что нужно знать"]);
 function BriefText({ text }: { text: string }) {
@@ -43,39 +54,108 @@ function BriefText({ text }: { text: string }) {
  * затем два отдельных подтверждения — «Прикрепить черновик» и «Отправить на проверку».
  */
 export function LabScreen({ id }: { id: string }) {
-  const { deadlines, subjects } = useAppStore();
+  // Селекторы, а не весь стор: каждое обновление стора (синхронизация Moodle) иначе перерисовывало всю переписку.
+  const d = useAppStore((s) => s.deadlines.find((x) => x.id === id));
+  const subjects = useAppStore((s) => s.subjects);
   const profile = useAuth((s) => s.profile);
   const pop = useNav((s) => s.pop);
-  const d = deadlines.find((x) => x.id === id);
   const assignId = assignIdOf(id);
   const [job, setJob] = useState<LabJob | null>(null);
+  // Первый ответ сервера уже был: до него статус неизвестен, и экран не должен показывать «Не начато» (проверка 15 окт).
+  const [loaded, setLoaded] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  // То же, что busy, но сразу: кнопка Telegram и Enter вызывают обработчик раньше, чем React перерисует экран.
+  const busyRef = useRef(false);
   const [err, setErr] = useState("");
-  const endRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null); // скрытый выбор файла для скрепки
   const touchY = useRef(0);
-  // Перетаскивание запускается вручную: с «ручки» над полем и с любого места панели, кроме самого поля (там — курсор и выделение).
+  // Перетаскивание запускается вручную и только при открытой клавиатуре (поле в фокусе): с «ручки» над полем и с любого
+  // места панели, кроме самого поля (там — курсор и выделение).
   const dragControls = useDragControls();
   const barRef = useRef<HTMLDivElement>(null);
+  const [focused, setFocused] = useState(false);
   // Тап по чему угодно, кроме панели ввода, прячет клавиатуру (самый простой способ увидеть всю переписку).
   const tapOutside = (e: React.MouseEvent) => {
     if (document.activeElement === inputRef.current && !barRef.current?.contains(e.target as Node)) { inputRef.current?.blur(); haptic.select(); }
   };
 
+  // Прокрутка переписки (проверка 15 окт): раньше каждое новое сообщение, смена статуса или briefing рывком бросали экран
+  // в самый низ, даже когда студент читал историю выше. Теперь вниз — только если он и так был у низа, при первой загрузке
+  // и после своего действия из панели ввода; иначе — значок «↓ Новые сообщения».
+  // stick — прилипать ли к низу при следующем обновлении; решается до setJob (после рендера scrollHeight уже вырос).
+  const stick = useRef(true);
+  const seen = useRef(false); // состояние уже показывали: первая загрузка всегда к последнему сообщению
+  const [fresh, setFresh] = useState(false); // пришло новое, пока читали выше
+  // Прокручиваем сам экран (контейнер), а не scrollIntoView: тот мог сдвинуть и окно со вкладкой под экраном.
+  const toEnd = (smooth = false) => { const sc = scrollerOf(rootRef.current); sc?.scrollTo({ top: sc.scrollHeight, behavior: smooth ? "smooth" : "auto" }); };
+  // Клавиатура открылась (Android сжимает окно, а scrollTop остаётся прежним) — держим низ переписки, если студент был у низа:
+  // иначе вопрос агента, на который он отвечает, уходит под клавиатуру. iPhone окно не сжимает — там это ничего не делает.
+  const keepEnd = () => { if (document.activeElement === inputRef.current && stick.current) toEnd(); };
+  // Высота поля по тексту: от одной строки до ~6, дальше поле прокручивается само.
+  const fitHeight = (el: HTMLTextAreaElement | null) => { if (!el) return; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; };
+
+  // Счётчик запросов (проверка 15 окт): опрос, ушедший раньше отправки, мог вернуться позже ответа на неё и затереть свежее
+  // состояние — пропадало только что отправленное сообщение, снова появлялось «Ждёт вас», и студент отправлял дубль.
+  const seq = useRef(0);
   const load = useCallback(async () => {
     if (!assignId) return;
-    try { setJob(await labApi.get(assignId)); setErr(""); } catch (e) { setErr((e as Error).message); }
+    const my = ++seq.current;
+    try {
+      const j = await labApi.get(assignId);
+      // Устарел (после него ушёл другой запрос или пришёл ответ на действие) или сейчас идёт действие — его ответ и будет свежим.
+      if (my !== seq.current || busyRef.current) return;
+      stick.current = !seen.current || atEnd(scrollerOf(rootRef.current));
+      if (!seen.current) briefAtFirst.current = j.brief?.at;
+      seen.current = true;
+      setJob(j); setErr(""); setLoaded(true); setDenied(false);
+    } catch (e) {
+      if (onLabDenied((e as Error).message)) setDenied(true); // отказ по доступу — опрос встаёт до «Повторить» (иначе бил бы в 403 вечно)
+      if (my === seq.current && !busyRef.current) setErr(labErrorText((e as Error).message));
+    }
   }, [assignId]);
+  const [denied, setDenied] = useState(false);
+  const retry = () => { haptic.tap(); setErr(""); setDenied(false); void load(); };
 
   // Опрос: пока агент работает (делает лабу или готовит «Кратко о работе») — каждые 3 с, иначе каждые 15 с.
-  usePolling(() => void load(), job?.status === "running" || job?.briefing ? 3000 : 15000);
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [job?.messages?.length, job?.status, job?.briefing]);
+  usePolling(() => void load(), job?.status === "running" || job?.briefing ? 3000 : 15000, !denied);
+  // До отрисовки кадра: при первой загрузке переписка сразу открывается на последнем сообщении, без кадра с её началом.
+  // Пока переписки нет («Не начато», только замечания) — экран остаётся сверху.
+  const chat = (job?.messages?.length ?? 0) > 0;
+  useLayoutEffect(() => {
+    if (!chat) return;
+    if (stick.current) { toEnd(); setFresh(false); } else setFresh(true);
+  }, [job?.messages?.length, job?.status, job?.briefing]);
+  // Значок «Новые» висит, пока студент сам не долистал до низа; слушатель прокрутки — только на это время.
+  useEffect(() => {
+    const sc = fresh ? scrollerOf(rootRef.current) : null;
+    if (!sc) return;
+    const f = () => { if (atEnd(sc)) setFresh(false); };
+    sc.addEventListener("scroll", f, { passive: true });
+    return () => sc.removeEventListener("scroll", f);
+  }, [fresh]);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", keepEnd);
+    window.addEventListener("resize", keepEnd);
+    return () => { vv?.removeEventListener("resize", keepEnd); window.removeEventListener("resize", keepEnd); };
+  }, []);
   // Новое «Кратко о работе» — показываем с начала, а не с конца длинного сообщения (этот эффект идёт после прокрутки вниз).
+  // Само — только если студент был у низа (иначе он читает выше); по кнопке «Показать» — всегда.
   const briefAt = job?.brief?.at;
-  const showBrief = useCallback(() => { if (briefAt) document.getElementById(`brief-${briefAt}`)?.scrollIntoView({ block: "start", behavior: "smooth" }); }, [briefAt]);
-  useEffect(() => { showBrief(); }, [showBrief]);
+  // «Кратко о работе», которое уже было при открытии лабы, — не новое: первая загрузка открывается на последнем
+  // сообщении, а не уводит к старому объяснению (проверка 15 окт).
+  const briefAtFirst = useRef<number | undefined>(undefined);
+  const showBrief = useCallback(() => {
+    const el = briefAt ? document.getElementById(`brief-${briefAt}`) : null, sc = scrollerOf(rootRef.current);
+    if (!el || !sc) return;
+    // Начало сообщения — под верхним отступом экрана (safe-area Telegram), 12 px запаса.
+    const top = sc.scrollTop + el.getBoundingClientRect().top - sc.getBoundingClientRect().top - parseFloat(getComputedStyle(sc).paddingTop) - 12;
+    sc.scrollTo({ top, behavior: "smooth" });
+  }, [briefAt]);
+  useEffect(() => { if (briefAt && briefAt !== briefAtFirst.current && stick.current) showBrief(); }, [showBrief]);
 
   // Отзыв преподавателя и состояние ответа в Moodle — свежим запросом (при открытии и после каждой смены состояния лабы):
   // от него зависит, показывать ли «Исправить отчёт», и что именно произойдёт при замене файла.
@@ -83,19 +163,48 @@ export function LabScreen({ id }: { id: string }) {
   const loadFb = useCallback(() => { if (assignId) void feedbackApi.get(assignId).then(setFb).catch(() => { /* останется то, что пришло с дедлайнами */ }); }, [assignId]);
   useEffect(() => { loadFb(); }, [loadFb, job?.status]);
 
-  const act = async (fn: () => Promise<LabJob>, okMsg?: string) => {
+  // own — своё действие студента (сообщение, «Продолжай», файл, запуск): переписку доводим до низа, где бы он ни читал.
+  const act = async (fn: () => Promise<LabJob>, okMsg?: string, own = false) => {
+    // Второй вызов, пока идёт первый (двойной тап по кнопке Telegram, Enter во время отправки), — не второй запрос агенту.
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
-    try { setJob(await fn()); setErr(""); if (okMsg) toast(okMsg); haptic.success(); }
-    catch (e) { setErr((e as Error).message); haptic.warning(); }
-    finally { setBusy(false); loadFb(); }
+    try {
+      const r = await fn();
+      ++seq.current; // опросы, ушедшие раньше этого ответа, устарели
+      stick.current = own || atEnd(scrollerOf(rootRef.current));
+      seen.current = true;
+      setJob(r); setErr(""); if (okMsg) toast(okMsg); haptic.success();
+    }
+    catch (e) { onLabDenied((e as Error).message); setErr(labErrorText((e as Error).message)); haptic.warning(); }
+    finally { busyRef.current = false; setBusy(false); loadFb(); }
   };
   // trial: работа уже сдана (оценена) — проверочный запуск, агент об этом узнает из инструкции.
-  const start = () => d && assignId && act(() => labApi.start(assignId, { title: d.title, course: subjectOf(subjects, d.subjectId)?.name ?? "", due: d.due, trial: d.status === "done" }), "Агент взялся за работу");
-  const send = () => {
+  // Пробный отчёт (lib/labGate.ts): он один — перед запуском спросить; после запуска профиль обновить (пробный занят).
+  const gate = labGate(profile, assignId);
+  const start = async () => {
+    if (!d || !assignId || busyRef.current) return;
+    if (gate === "trial-offer" && !(await confirmDialog(`Начать пробный отчёт по «${d.title}»? Он один: после запуска другие работы будут закрыты, пока владелец не откроет доступ.`))) return;
+    await act(() => labApi.start(assignId, { title: d.title, course: subjectOf(subjects, d.subjectId)?.name ?? "", due: d.due, trial: d.status === "done" }), "Агент взялся за работу", true);
+    if (gate === "trial-offer") void useAuth.getState().load().catch(() => {});
+  };
+  // Первый ответ на уточняющие вопросы (16 окт, просьба владельца): агент уже написал, а студент после этого ещё не отвечал.
+  // Перед отправкой — «всё ли верно»: недостающий ответ агент переспросит отдельным ходом, это и время, и расход.
+  const firstAnswer = () => {
+    const ms = job?.messages ?? [];
+    const a = ms.findIndex((m) => m.role === "assistant");
+    return status === "waiting" && a >= 0 && !ms.slice(a).some((m) => m.role === "user");
+  };
+  const send = async () => {
     const t = text.trim();
-    if (!t || !assignId) return;
+    if (!t || !assignId || busyRef.current) return;
+    if (firstAnswer() && !(await confirmDialog("Проверьте ответ: вы ответили на все вопросы агента и данные верны? Если чего-то не хватит, агент переспросит, и работа задержится. Отправить?"))) {
+      inputRef.current?.focus();
+      return;
+    }
     setText("");
-    void act(() => labApi.message(assignId, t));
+    if (inputRef.current) inputRef.current.style.height = "";
+    void act(() => labApi.message(assignId, t), undefined, true);
   };
   // Что сейчас в Moodle: свежий ответ сервера, а пока его нет — то, что пришло вместе с дедлайнами.
   const remarks = fb?.remarks ?? d?.remarks ?? [];
@@ -127,7 +236,10 @@ export function LabScreen({ id }: { id: string }) {
       : replacing
         ? `Заменить файл в ответе: удалить ${old}, прикрепить ${file} как черновик? На проверку это не отправляет.`
         : `Прикрепить ${file} к заданию как черновик? На проверку это ещё не отправляет.`;
-    if (await confirmDialog(question)) await act(() => labApi.attach(assignId), noDrafts ? "Работа сдана в Moodle" : replacing ? "Файл в Moodle заменён" : "Черновик прикреплён");
+    if (await confirmDialog(question)) {
+      await act(() => labApi.attach(assignId), noDrafts ? "Работа сдана в Moodle" : replacing ? "Файл в Moodle заменён" : "Черновик прикреплён");
+      void useAppStore.getState().syncMoodle(true); // список работ — сразу с новым статусом
+    }
   };
   // Круг проверки: «Всё хорошо» подтверждает отчёт (после этого появляется прикрепление), «Есть замечания» ставит курсор
   // в поле ввода — правки уйдут агенту, он переделает отчёт и спросит снова.
@@ -148,20 +260,27 @@ export function LabScreen({ id }: { id: string }) {
   const submit = async () => {
     if (!assignId) return;
     haptic.warning();
-    if (await confirmDialog("Отправить работу на проверку преподавателю? После этого файл менять нельзя."))
+    // Синхронизация — только после настоящей отправки, а не после «Отмена» в окне подтверждения (проверка 15 окт).
+    if (await confirmDialog("Отправить работу на проверку преподавателю? После этого файл менять нельзя.")) {
       await act(() => labApi.submit(assignId), "Отправлено на проверку");
+      void useAppStore.getState().syncMoodle(true);
+    }
   };
 
-  const status = job?.status ?? "idle";
+  // null — сервер ещё не ответил (или первый запрос упал): ни «Не начато», ни кнопки «Сделать отчёт», пока это не известно.
+  const status = job?.status ?? (loaded ? "idle" : null);
   // После отправки на проверку диалог закрыт: лишние ходы агента ничего не дадут.
   // «Ошибка» — агент не запустился (или не скачалось условие): писать некому, нужна кнопка «Запустить заново».
   const canReply = status === "waiting" || status === "report" || status === "attached";
+  // Поле убрали вместе с панелью, пока оно было в фокусе (ответил Enter — агент снова работает): React при удалении
+  // узла onBlur не шлёт, и панель вернулась бы с touch-action: none — взмах снизу снова не листал бы переписку.
+  useEffect(() => { if (!canReply) setFocused(false); }, [canReply]);
   // Проверочный запуск (работа уже оценена): отчёт есть, но в Moodle его не прикрепить и не отправить.
   const trial = !!job?.trial;
   const attachLabel = replacing && moodleSub?.status === "submitted" ? "Заменить файл в Moodle" : noDrafts ? "Сдать в Moodle" : replacing ? "Заменить файл в Moodle" : "Прикрепить черновик";
   // Если Moodle не даёт менять ответ, кнопки прикрепления нет вовсе — причина написана в карточке отчёта.
   // Прикрепление — только после того, как студент подтвердил отчёт («Всё хорошо»).
-  const mainLabel = status === "idle" ? "Сделать отчёт" : status === "error" ? "Запустить заново" : trial ? "" : status === "report" ? (canEdit && approved ? attachLabel : "") : status === "attached" ? "Отправить на проверку" : "";
+  const mainLabel = status === null ? "" : status === "idle" ? "Сделать отчёт" : status === "error" ? "Запустить заново" : trial ? "" : status === "report" ? (canEdit && approved ? attachLabel : "") : status === "attached" ? "Отправить на проверку" : "";
   // «Запустить заново» после неудачного исправления повторяет именно исправление, а не начинает лабу с нуля.
   const restart = job?.fix ? fix : start;
   const mainAction = status === "idle" ? start : status === "error" ? restart : trial ? () => {} : status === "report" ? attach : status === "attached" ? submit : () => {};
@@ -170,20 +289,24 @@ export function LabScreen({ id }: { id: string }) {
   if (!d || !assignId) return <EmptyState icon={FileText} title="Это не задание Moodle" text="Отчёт можно делать только для лабораторных, пришедших из Moodle." action="Назад" onAction={pop} />;
 
   return (
-    <div className="flex min-h-full flex-col gap-3" onClick={tapOutside} onTouchStart={(e) => { touchY.current = e.touches[0].clientY; }}
+    // grow, а не min-h-full: экран стека сам растягивает содержимое на всю высоту (flex-обёртка в StackScreen).
+    <div ref={rootRef} className="flex grow flex-col gap-3" onClick={tapOutside} onTouchStart={(e) => { touchY.current = e.touches[0].clientY; }}
       onTouchMove={(e) => { if (e.touches[0].clientY - touchY.current > DISMISS_Y && document.activeElement === inputRef.current) { inputRef.current?.blur(); haptic.select(); } }}>
       <div className="px-1">
-        <p className="flex items-center gap-1.5 text-s font-semibold text-hint"><Sparkles size={14} strokeWidth={2.5} />Лаба с агентом</p>
+        <p className="flex items-center gap-1.5 text-s font-semibold text-hint"><Sparkles size={14} strokeWidth={2.5} />Лаба с агентом
+          {(job?.viaTrial || gate === "trial-offer" || gate === "trial-own") && <span className="rounded-full bg-accent/15 px-2 py-0.5 font-bold text-accent">пробный отчёт</span>}</p>
         <h1 className="font-display mt-1 text-[22px] leading-[1.15] font-extrabold tracking-[-0.02em]">{d.title}</h1>
         <p className="mt-2 flex items-center gap-2 text-s">
-          <span className={`rounded-full px-2.5 py-1 font-bold ${STATUS[status].cls}`}>{status === "running" && job?.revising ? "Исправляет отчёт" : STATUS[status].label}</span>
+          {status ? <span className={`rounded-full px-2.5 py-1 font-bold ${STATUS[status].cls}`}>{status === "running" && job?.revising ? "Исправляет отчёт" : STATUS[status].label}</span>
+            : !err && <span className="h-[26px] w-28 rounded-full bg-raised motion-safe:animate-pulse" />}
           {job?.updatedAt && <span className="text-hint">обновлено {time(job.updatedAt)}</span>}
         </p>
       </div>
 
       {/* Замечания преподавателя из Moodle. Пока агент работает, кнопки нет; после исправления кнопка отправит новые
           замечания (те, что появились после него), а если новых нет — прежние ещё раз. */}
-      <TeacherRemarks remarks={remarks} submission={moodleSub} busy={busy} index={0} onFix={status === "running" ? undefined : fix} />
+      {/* «Исправить» — только тем, кому сервер его разрешит: полный доступ или своя пробная лаба (не до начала пробного). */}
+      <TeacherRemarks remarks={remarks} submission={moodleSub} busy={busy} index={0} onFix={status === "running" || status === null || !(gate === "full" || gate === "trial-own") ? undefined : fix} />
 
       {/* Наверху — итог хода (пока агент работает, прогресс показан карточкой в переписке). */}
       {job && status !== "idle" && status !== "running" && (
@@ -196,6 +319,15 @@ export function LabScreen({ id }: { id: string }) {
         </Tile>
       )}
 
+      {/* До первого ответа сервера — нейтральная заглушка (проверка 15 окт): раньше 0,5–2 с горели «Не начато» и активная
+          «Сделать отчёт», а потом всё резко сменялось перепиской. Первый запрос упал — ошибка и «Повторить». */}
+      {status === null && (err ? (
+        <div className="flex flex-col gap-2">
+          <p className="px-1 text-s font-semibold text-red">{err}</p>
+          <button onClick={retry} className="glass flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl text-m font-bold text-accent"><RotateCcw size={18} strokeWidth={2.5} /> Повторить</button>
+        </div>
+      ) : <Skeleton className="h-36 rounded-[22px]" />)}
+
       {status === "idle" && (
         <Tile index={0} className="min-h-0">
           <TileLabel>Как это работает</TileLabel>
@@ -205,6 +337,8 @@ export function LabScreen({ id }: { id: string }) {
             <span className="font-semibold">{shortName(profile?.moodle?.fullName) || "ФИО из Moodle"}, {profile?.group ?? "группа не выбрана"}, вариант {profile?.variant ?? "не указан"}</span>
             {!profile?.variant && <span className="text-hint"> — агент спросит; можно заранее указать в профиле.</span>}
           </p>
+          {gate === "trial-offer" && <p className="mt-3 text-s leading-[19px] text-hint">Это ваш пробный отчёт: один отчёт по одной работе. После запуска другие работы будут закрыты, пока владелец не откроет доступ.</p>}
+          <p className="mt-3 text-s leading-[19px] text-hint">⚠️ Ранний доступ: агент может ошибаться — проверьте отчёт перед сдачей.</p>
           {!nativeButton && <button onClick={start} disabled={busy} className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent text-m font-bold text-on-accent disabled:opacity-40"><Sparkles size={18} strokeWidth={2.5} /> Сделать отчёт</button>}
         </Tile>
       )}
@@ -216,7 +350,8 @@ export function LabScreen({ id }: { id: string }) {
             {job.messages.map((msg, i) => (
               <m.div key={`${msg.at}-${i}`} id={msg.kind === "brief" ? `brief-${msg.at}` : undefined} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={spring(420, 34)}
                 className={`flex scroll-mt-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[88%] rounded-[18px] px-3.5 py-2.5 text-m leading-[22px] whitespace-pre-wrap ${
+                {/* wrap-anywhere: длинная ссылка или имя файла без пробелов переносится в пузыре, а не уводит экран вбок (проверка 15 окт). */}
+                <div className={`max-w-[88%] rounded-[18px] px-3.5 py-2.5 text-m leading-[22px] whitespace-pre-wrap wrap-anywhere ${
                   msg.role === "user" ? "rounded-br-md bg-accent text-on-accent" : msg.role === "system" ? "glass text-hint text-s" : "glass-tile rounded-bl-md"}`}>
                   {msg.role === "assistant" && <span className="mb-1 flex items-center gap-1 text-[11px] font-bold uppercase tracking-[0.06em] text-hint"><Bot size={12} strokeWidth={2.5} />Doodle · {time(msg.at)}</span>}
                   {msg.kind === "brief" && <span className="mb-1.5 flex items-center gap-1.5 text-s font-bold text-accent"><BookOpen size={15} strokeWidth={2.5} />Кратко о работе</span>}
@@ -270,7 +405,6 @@ export function LabScreen({ id }: { id: string }) {
               </div>
             </div>
           )}
-          <div ref={endRef} />
         </div>
       )}
 
@@ -327,30 +461,52 @@ export function LabScreen({ id }: { id: string }) {
       {status === "error" && !nativeButton && (
         <button onClick={restart} disabled={busy} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent text-m font-bold text-on-accent disabled:opacity-40"><Sparkles size={18} strokeWidth={2.5} /> Запустить заново</button>
       )}
-      {err && <p className="px-1 text-s font-semibold text-red">{err}</p>}
+      {err && status !== null && <p className="px-1 text-s font-semibold text-red">{err}</p>}
+
+      {/* «↓ Новые сообщения» — пока студент читает выше: прилипает к низу экрана (над панелью ввода, если она есть).
+          Высота 0 и -mt-3 — чтобы значок не добавлял места в ленте экрана. */}
+      {fresh && (
+        <div className={`pointer-events-none sticky z-10 -mt-3 flex h-0 items-end justify-center ${canReply ? "bottom-[84px]" : "bottom-3"}`}>
+          <button onClick={() => { haptic.select(); stick.current = true; setFresh(false); toEnd(true); }}
+            className="pointer-events-auto flex min-h-9 items-center gap-1.5 rounded-full bg-accent px-3.5 text-s font-bold text-on-accent shadow-lg">
+            <ArrowDown size={15} strokeWidth={2.5} />Новые сообщения
+          </button>
+        </div>
+      )}
 
       {canReply && (
         <m.div ref={barRef}
-          className="sticky bottom-0 -mx-4 flex gap-2 relative bg-page px-4 pt-4 pb-2 after:absolute after:inset-x-0 after:top-full after:h-[calc(24px+var(--safe-bottom))] after:bg-page after:content-['']" style={{ touchAction: "none" }}
+          // Пока клавиатура закрыта, панель — обычная часть переписки: взмах с неё прокручивает экран (проверка 15 окт: с
+          // touch-action: none экран «залипал» под большим пальцем). Тянуть поле вниз, пряча клавиатуру, — только при фокусе.
+          className="sticky bottom-0 -mx-4 flex flex-wrap items-end gap-2 relative bg-page px-4 pt-4 pb-2 after:absolute after:inset-x-0 after:top-full after:h-[calc(24px+var(--safe-bottom))] after:bg-page after:content-['']" style={{ touchAction: focused ? "none" : "pan-y" }}
           dragListener={false} dragControls={dragControls}
-          onPointerDown={(e) => { if (!(e.target instanceof HTMLInputElement)) dragControls.start(e); }}
+          onPointerDown={(e) => { if (focused && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) dragControls.start(e); }}
           // Поле ввода тянется вниз за пальцем (как клавиатура в Telegram): пока держишь — едет, отпустил раньше — вернулось,
           // утянул в нижнюю зону — клавиатура прячется. Саму клавиатуру веб двигать не умеет, поэтому за палец идёт поле.
           drag="y" dragDirectionLock dragConstraints={{ top: 0, bottom: 0 }} dragElastic={{ top: 0, bottom: 0.7 }} dragMomentum={false}
           onDrag={(_, info) => { if (info.offset.y > DISMISS_Y && document.activeElement === inputRef.current) { inputRef.current?.blur(); haptic.select(); } }}
         >
           <div aria-hidden className="absolute top-1 left-0 right-0 flex h-3 items-center justify-center"><span className="h-1 w-9 rounded-full bg-hint/40" /></div>
-          <input ref={inputRef} value={text} onChange={(e) => setText(e.target.value.slice(0, 1500))} onKeyDown={(e) => { if (e.key === "Enter") send(); }} maxLength={1500}
-            placeholder={reviewing ? (wantFix ? "Что исправить в отчёте?" : "Правки к отчёту или «всё хорошо»") : job?.agent?.status === "question" ? "Ваш ответ агенту" : "Только по лабораторной (или «продолжай»)"} className={`${fieldClass} min-h-12 py-2`} />
+          {status === "waiting" && <p className="w-full px-1 text-s text-hint">Ответьте на все вопросы одним сообщением. Enter — новая строка.</p>}
+          {/* У низа ли студент — замеряем в момент фокуса, пока клавиатура ещё не сжала окно; через 250 мс она уже открыта. */}
+          {/* Многострочное поле (16 окт, жалоба владельца): студенты жали Enter, чтобы ответить на следующий вопрос с новой
+              строки, и ответ уходил наполовину — агент тратил ход и переспрашивал остальное. Теперь Enter — новая строка,
+              отправка — кнопкой (на компьютере ещё Ctrl+Enter). Поле растёт с текстом до ~6 строк, дальше прокручивается. */}
+          <textarea ref={inputRef} value={text} rows={1} enterKeyHint="enter" maxLength={1500}
+            onChange={(e) => { setText(e.target.value.slice(0, 1500)); fitHeight(e.target); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } }}
+            onFocus={() => { setFocused(true); stick.current = atEnd(scrollerOf(rootRef.current)); window.setTimeout(keepEnd, 250); }} onBlur={() => setFocused(false)}
+            placeholder={reviewing ? (wantFix ? "Что исправить?" : "Правки или «всё хорошо»") : status === "waiting" ? "Ваш ответ" : "Сообщение по лабе"}
+            className={`${fieldClass} min-h-12 resize-none py-3 leading-snug`} />
           {/* Скрепка: снимок экрана или файл студента — в папку лабы, агент узнает о нём со следующим сообщением. */}
           <input ref={fileRef} type="file" accept="image/*,.pdf,.txt,.csv,.log,.json,.xlsx,.xls,.docx,.doc,.zip" className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f && assignId) void act(() => labApi.upload(assignId, f), `Файл принят: ${f.name}`); }} />
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f && assignId) void act(() => labApi.upload(assignId, f), `Файл принят: ${f.name}`, true); }} />
           <button onClick={() => { haptic.select(); fileRef.current?.click(); }} disabled={busy} aria-label="Прикрепить снимок или файл" className="glass grid size-12 shrink-0 place-items-center rounded-2xl text-accent disabled:opacity-40"><Paperclip size={20} strokeWidth={2.25} /></button>
           <button onClick={send} disabled={busy || !text.trim()} aria-label="Отправить" className="grid size-12 shrink-0 place-items-center rounded-2xl bg-accent text-on-accent disabled:opacity-40"><Send size={20} strokeWidth={2.25} /></button>
         </m.div>
       )}
       {canReply && job?.agent?.status === "working" && (
-        <button onClick={() => { setText(""); void act(() => labApi.message(assignId, "Продолжай")); }} disabled={busy} className="glass min-h-11 rounded-2xl text-m font-bold text-accent">Продолжай</button>
+        <button onClick={() => { if (busyRef.current) return; setText(""); void act(() => labApi.message(assignId, "Продолжай"), undefined, true); }} disabled={busy} className="glass min-h-11 rounded-2xl text-m font-bold text-accent">Продолжай</button>
       )}
     </div>
   );

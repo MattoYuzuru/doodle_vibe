@@ -5,6 +5,7 @@ import { useLiquidGlass } from "../hooks/useLiquidGlass";
 import { useNav, type Tab } from "../hooks/useNav";
 import { lensDrag, lensProgress } from "../hooks/useTabLens";
 import { useUi } from "../hooks/useUi";
+import { SWIPE_SLOP } from "../lib/edge";
 import { spring } from "../theme/motion";
 import { haptic } from "../telegram/webapp";
 
@@ -24,11 +25,16 @@ const lensSpring = spring(420, 42, 1);
 
 /**
  * Плавающая стеклянная панель (Liquid Glass), только иконки. Под активной вкладкой ездит «линза» с пружиной.
- * Ползунок можно удерживать и вести пальцем: вкладки переключаются по ходу, а лента экранов (App) едет синхронно.
+ * Ползунок можно удерживать и вести пальцем: линза и лента экранов (App) едут за пальцем, подсвечивается иконка под
+ * линзой, а вкладка меняется при отпускании.
  */
 export function TabBar() {
-  const { tab, setTab } = useNav();
-  const { compact, dragging } = useUi();
+  // Только нужные поля (проверка 15 окт): подписка на весь стор перерисовывала панель на каждое открытие экрана.
+  const tab = useNav((s) => s.tab);
+  const setTab = useNav((s) => s.setTab);
+  const compact = useUi((s) => s.compact);
+  const dragging = useUi((s) => s.dragging);
+  const keyboard = useUi((s) => s.keyboard);
   const glassRef = useLiquidGlass<HTMLDivElement>({ radius: Infinity, band: 16, strength: 30 });
   const rowRef = useRef<HTMLDivElement>(null);
   const [cell, setCell] = useState(0);
@@ -59,6 +65,16 @@ export function TabBar() {
   const stretch = useTransform(velocity, [-2500, 0, 2500], [1.08, 1, 1.08]);
   const squash = useTransform(stretch, (s) => 1 / Math.sqrt(s));
 
+  // Вкладка под линзой, пока её ведут пальцем (здесь или свайпом по ленте): сама вкладка меняется только при
+  // отпускании (проверка 15 окт), а подсветку иконки ведём от положения линзы. Перерисовка — только при смене ячейки.
+  const [lit, setLit] = useState(() => tabIndex(tab));
+  const litRef = useRef(lit);
+  useEffect(() => lensProgress.on("change", (p) => {
+    const i = Math.min(Math.max(Math.round(p), 0), TABS.length - 1);
+    if (i !== litRef.current) { litRef.current = i; setLit(i); }
+  }), []);
+  const shownIdx = dragging ? lit : tabIndex(tab);
+
   // Прокрутку в 0 при переключении делает лента экранов (App: TabTrack), выравнивая страницы без прыжка.
   const select = (t: Tab) => {
     if (t === tab) return;
@@ -66,59 +82,77 @@ export function TabBar() {
     setTab(t);
   };
 
-  // Удержание ползунка: линза и лента экранов идут за пальцем, вкладка меняется при пересечении ячейки.
-  const dragRef = useRef<{ start: number; startX: number; moved: boolean } | null>(null);
+  // Удержание ползунка: линза и лента экранов идут за пальцем, вибро — при пересечении ячейки, вкладка — при отпускании.
+  // Как и свайп по ленте (App: TabTrack), жест берём, только когда браузер уже не забрал его под прокрутку: палец ушёл
+  // на SWIPE_SLOP без pointercancel и больше вбок, чем вверх-вниз (проверка 15 окт).
+  const dragRef = useRef<{ x0: number; y0: number; startX: number; moved: boolean; under: number } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
-    dragRef.current = { start: e.clientX, startX: tabIndex(tab) * cell, moved: false };
+    dragRef.current = { x0: e.clientX, y0: e.clientY, startX: tabIndex(tab) * cell, moved: false, under: tabIndex(tab) };
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current;
     if (!d) return;
-    const dx = e.clientX - d.start;
-    if (!d.moved && Math.abs(dx) < 8) return;
+    const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
     if (!d.moved) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_SLOP) return;
+      if (Math.abs(dy) >= Math.abs(dx)) { dragRef.current = null; return; }
       d.moved = true;
       useUi.setState({ dragging: true });
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     }
     const nx = Math.min(Math.max(d.startX + dx, 0), cell * (TABS.length - 1));
     x.jump(nx);
-    const under = TABS[Math.round(nx / cell)].id;
-    if (under !== tab) { haptic.select(); setTab(under); }
+    const under = Math.round(nx / cell);
+    if (under !== d.under) { d.under = under; haptic.select(); }
   };
   const onPointerUp = () => {
     const d = dragRef.current;
     dragRef.current = null;
-    if (d?.moved) { useUi.setState({ dragging: false }); x.set(tabIndex(useNav.getState().tab) * cell); }
+    if (!d?.moved) return;
+    const next = TABS[d.under].id;
+    useUi.setState({ dragging: false });
+    setTab(next);
+    x.set(tabIndex(next) * cell);
+  };
+  // Отмена (браузер забрал жест, пришёл звонок) — ничего не переключаем: линза пружиной возвращается на свою вкладку.
+  const onPointerCancel = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d?.moved) return;
+    useUi.setState({ dragging: false });
+    x.set(tabIndex(useNav.getState().tab) * cell);
   };
 
+  // Открыта клавиатура — панель уезжает вниз и не закрывает поле ввода (проверка 15 окт).
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center px-4" style={{ paddingBottom: "calc(12px + var(--safe-bottom))" }}>
       <m.nav
         ref={glassRef}
         aria-label="Разделы"
-        className="glass pointer-events-auto w-full max-w-[448px] rounded-full"
-        animate={{ scale: dragging ? 1.02 : compact ? 0.92 : 1, y: dragging ? -3 : compact ? 8 : 0 }}
+        aria-hidden={keyboard || undefined}
+        className={`glass glass-float w-full max-w-[448px] rounded-full ${keyboard ? "" : "pointer-events-auto"}`}
+        animate={{ scale: dragging ? 1.02 : compact ? 0.92 : 1, y: keyboard ? 140 : dragging ? -3 : compact ? 8 : 0, opacity: keyboard ? 0 : 1 }}
         transition={lensSpring}
       >
         <div
           ref={rowRef}
           className="relative grid select-none grid-cols-4 p-1.5 touch-pan-y"
-          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
+          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}
         >
           <m.div
             aria-hidden
             className="glass-lens pointer-events-none"
             style={{ inset: "6px auto 6px 6px", width: cell, x: xs, scaleX: stretch, scaleY: squash }}
           />
-          {TABS.map(({ id, label, Icon }) => {
-            const active = tab === id;
+          {TABS.map(({ id, label, Icon }, i) => {
+            const active = shownIdx === i;
             return (
               <button
                 key={id}
                 onClick={() => select(id)}
                 aria-label={label}
-                aria-current={active ? "page" : undefined}
+                aria-current={tab === id ? "page" : undefined}
+                tabIndex={keyboard ? -1 : undefined}
                 className={`relative z-10 grid min-h-[48px] place-items-center rounded-full transition-colors duration-200 ${active ? "text-accent" : "text-hint"}`}
               >
                 <m.span animate={{ scale: active ? (dragging ? 1.2 : 1.12) : 1 }} transition={lensSpring}>

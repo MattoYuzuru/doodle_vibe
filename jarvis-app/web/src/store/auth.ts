@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { tg } from "../telegram/webapp";
 import { api } from "./api";
 import { useJournal } from "./journal";
+import { useSession } from "./session";
 
 /** Профиль пользователя на сервере: вошёл ли в Moodle, группа для расписания, доступ к лабам. */
 export interface Profile {
@@ -14,6 +15,11 @@ export interface Profile {
   /** Номер варианта для титульного листа отчётов (свободный текст, например «04»). */
   variant: string | null;
   labsAllowed: boolean;
+  /**
+   * Пробный отчёт (у кого нет полного доступа): "available" — один пробный положен; объект — пробная лаба по работе id
+   * (closed — владелец закрыл, otherAccount — сейчас вход под другой учёткой Moodle); null — не положен. См. lib/labGate.ts.
+   */
+  labTrial?: "available" | { id: string; title: string | null; at: number; closed?: boolean; otherAccount?: boolean } | null;
   /** Когда пользователь просил доступ к отчётам (null — не просил); isOwner — владелец бота. */
   labRequest: number | null;
   isOwner: boolean;
@@ -27,6 +33,12 @@ export interface Profile {
   /** level: ok — можно всё; start — закрыты новый отчёт, исправление и проверка (100 %); all — и сообщения в начатой работе (125 %); closed — лимит 0. */
   quota?: { percent: number; level?: "ok" | "start" | "all" | "closed" } | null;
 }
+
+/**
+ * Сервер отдаёт полный профиль (как /api/me), но при сбое — запасной, без полей лимита и пробного отчёта. Тогда берём их
+ * из прежнего профиля, иначе пропадало предложение пробного (ревью 16 окт). null с сервера — честное «нет», его не трогаем.
+ */
+const withServerFields = (p: Profile, prev: Profile | null): Profile => ({ ...p, quota: p.quota !== undefined ? p.quota : prev?.quota ?? null, labTrial: p.labTrial !== undefined ? p.labTrial : prev?.labTrial ?? null });
 
 /** «Ким Александр Евгеньевич» → «Ким А. Е.» — так ФИО попадёт на титульный лист. */
 export const shortName = (full?: string | null) => (full ?? "").trim().split(/\s+/).filter(Boolean).map((w, i) => (i ? `${w[0]}.` : w)).join(" ");
@@ -70,16 +82,23 @@ export const useAuth = create<{
   },
   async login(username, password) {
     const p = await api<Profile>("api/login", { username, password });
+    // Вход мог быть другой учётной записью (или после выхода по мёртвому токену, когда копии не стирались): журнал и
+    // «Сессию» прежнего входа на телефоне не держим — иначе при сбое журнала показались бы чужие данные (ревью 16 окт).
+    useJournal.getState().clear();
+    useSession.getState().clear();
     set({ profile: p, status: "ready" });
+    // Запасной ответ входа — без пробного отчёта и лимита; прежние не подставляем (могла войти другая учётка) — перечитать.
+    if (p.labTrial === undefined) void get().load().catch(() => {});
   },
   async logout() {
     const p = await api<Profile>("api/logout", {});
     set({ profile: p });
     useJournal.getState().clear(); // выход из бота — выход и из журнала: его данные на телефоне не оставляем
+    useSession.getState().clear(); // сводка «Сессия» строится по журналу и Moodle — тоже стираем
   },
   async setGroup(group, subgroup) {
     const p = await api<Profile>("api/group", { group, subgroup });
-    set({ profile: p });
+    set({ profile: withServerFields(p, get().profile) });
   },
   async requestLabAccess() {
     await api("api/lab/request", {});
@@ -98,7 +117,7 @@ export const useAuth = create<{
   async setVariant(variant) {
     if (DEMO) { set({ profile: { ...get().profile!, variant: variant || null } }); return; }
     const p = await api<Profile>("api/group", { variant });
-    set({ profile: p });
+    set({ profile: withServerFields(p, get().profile) });
   },
 }));
 

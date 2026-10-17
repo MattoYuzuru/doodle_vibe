@@ -1,10 +1,12 @@
 // Электронный журнал МИСИС (ej.misis.ru): посещаемость и успеваемость студента.
 // Вход — через «MISIS ID» (OpenID Connect, id.misis.ru → форма consent-id.misis.ru → обратно в журнал) теми же почтой
-// и паролем, что в Moodle. Пароль используется только во время входа и нигде не хранится: сохраняются cookies журнала и
-// MISIS ID (зашифрованно, users.mjs). Пока жив вход MISIS ID («Запомнить меня»), устаревший вход в журнал обновляется
-// сам, без пароля. Сервер журнала доступен только с российского адреса — на домашнем роутере для 85.143.106.23
+// и паролем, что в Moodle. Сохраняются cookies журнала и MISIS ID и (с 16 окт 2026, решение владельца) сами почта и
+// пароль — зашифрованно, users.mjs. Пока жив вход MISIS ID («Запомнить меня», ровно 48 ч от ввода пароля), устаревший
+// вход в журнал обновляется по cookies, и пароль никуда не уходит; истёк — сервер входит сохранённым паролем сам, без
+// просьбы к человеку. Сервер журнала доступен только с российского адреса — на домашнем роутере для 85.143.106.23
 // стоит маршрут мимо VPN (NOTES.md п. 70).
 import { mfetch, retry } from "./users.mjs";
+import * as pace from "./moodle-pace.mjs";
 
 export const EJ = "https://ej.misis.ru";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
@@ -37,7 +39,7 @@ function cookieHeader(jar, url) {
 async function req(jar, url, { method = "GET", headers = {}, body } = {}) {
   const ck = cookieHeader(jar, url);
   const r = await mfetch(url, {
-    method, body, redirect: "manual", signal: AbortSignal.timeout(25000),
+    method, body, redirect: "manual", timeoutMs: 25000,
     headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8", "accept-language": "ru-RU,ru;q=0.9", ...(ck ? { cookie: ck } : {}), ...headers },
   });
   for (const sc of r.headers.getSetCookie?.() || []) setCookie(jar, sc, url);
@@ -95,8 +97,12 @@ async function postForm(jar, url, pairs, referer) {
   const r = await req(jar, url, { method: "POST", headers: { origin: new URL(url).origin, referer, "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(pairs).toString() });
   const loc = r.headers.get("location");
   const text = await r.text().catch(() => "");
-  return { status: r.status, loc: r.status >= 300 && r.status < 400 && loc ? new URL(loc, url).href : null, text };
+  return { status: r.status, loc: r.status >= 300 && r.status < 400 && loc ? new URL(loc, url).href : null, text, retryAfter: r.headers.get("retry-after") };
 }
+/** На странице есть поле пароля — это форма входа (или снова она же после отказа). */
+const PASS_INPUT = /<input\b[^>]*\b(?:type|name)\s*=\s*["']?password\b/i;
+/** Секунды из Retry-After (число или дата); нет или не разобрать — null. */
+const retryAfterSec = (v) => { if (!v) return null; const n = Number(v); if (Number.isFinite(n)) return Math.max(0, n); const t = Date.parse(v); return Number.isNaN(t) ? null : Math.max(0, (t - Date.now()) / 1000); };
 
 /** Есть ли у банки живой вход в журнал: /auth/session отдаёт пользователя. */
 export async function sessionUser(jar) {
@@ -108,9 +114,16 @@ export async function sessionUser(jar) {
 
 /**
  * Вход в журнал. С паролем — полный вход через форму MISIS ID; без пароля — «тихий» вход по cookies MISIS ID из банки
- * (если вход MISIS ID ещё жив, форма не показывается). Возвращает { jar, user }; при неудаче — ошибка с понятным текстом.
+ * (если вход MISIS ID ещё жив, форма не показывается). Возвращает { jar, user }; при неудаче — ошибка с понятным текстом
+ * и пометками: passwordSent — пароль уже ушёл в MISIS ID; afterAccept — MISIS ID ответил на пароль перенаправлением (не
+ * отказом), а вход дальше не завершился.
  */
-export async function login({ jar = [], email, password } = {}) {
+export async function login(opts = {}) {
+  const st = { sent: false, accepted: false };
+  try { return await loginFlow(opts, st); }
+  catch (e) { if (e && typeof e === "object") { if (st.sent) e.passwordSent = true; if (st.accepted) e.afterAccept = true; } throw e; }
+}
+async function loginFlow({ jar = [], email, password } = {}, st) {
   // 1. Кнопка «Войти через MISIS ID» в журнале: POST /auth/signin/misis_id → адрес авторизации id.misis.ru (PKCE).
   const start = await retry(() => req(jar, `${EJ}/auth/signin/misis_id`, {
     method: "POST", headers: { origin: EJ, referer: `${EJ}/signin`, "content-type": "application/x-www-form-urlencoded" },
@@ -124,15 +137,35 @@ export async function login({ jar = [], email, password } = {}) {
   let html = await r.text();
   if (/\/auth\/signin\?login_challenge=/.test(url)) {
     if (!password) throw Object.assign(new Error("Нужен пароль: вход MISIS ID истёк"), { code: "need_password" });
+    // Пароль — только в настоящую форму: на месте формы страница ошибки (техработы, 502) — пароль не шлём, иначе ответ на
+    // такой POST сочли бы «неверным паролем» и забыли верный.
+    if (r.status !== 200 || !PASS_INPUT.test(html)) throw new Error(`MISIS ID не показал форму входа (ответ ${r.status}) — попробуйте позже`);
     // 3. Форма входа: скрытый loginChallenge + почта, пароль, «Запомнить меня» — на действие кнопки «Войти» (?/signin).
     const challenge = formFields(html).find(([k]) => k === "loginChallenge")?.[1] || new URL(url).searchParams.get("login_challenge") || "";
+    st.sent = true;
     const post = await postForm(jar, formTarget(html, url, /signin/i), [["loginChallenge", challenge], ["email", email], ["password", password], ["remember", "1"]], url);
+    // 5xx — MISIS ID не работает (техработы, сбой), 429 — просит подождать: пароль тут ни при чём, это не «неверный
+    // пароль» — сохранённый пароль из-за такого ответа не забывается (повтор — после паузы, relogin).
+    // Страница сбоя с блоком ошибки формы или словами об отказе («неверный пароль», «заблокирован») — всё-таки отказ (ниже).
+    const refusal = /class="[^"]*\btext-error\b/i.test(post.text) || /неверн[а-я]* (?:логин|почт|парол)|заблокирован/i.test(post.text);
+    if (!post.loc && (post.status >= 500 || post.status === 429) && !refusal)
+      throw Object.assign(new Error(post.status === 429 ? "MISIS ID просит подождать со входом — попробуйте позже" : `MISIS ID не отвечает (ответ ${post.status}) — попробуйте позже`),
+        post.status === 429 ? { code: "rate_limited", retryAfter: retryAfterSec(post.retryAfter) } : {});
+    // Остальные отказы — как неверный пароль: при сомнении безопаснее попросить пароль у человека, чем повторять неверный.
     if (!post.loc) {
       const msg = pageError(post.text);
       throw Object.assign(new Error(msg ? `MISIS ID: ${msg}` : `MISIS ID не принял почту или пароль (ответ ${post.status})`), { code: "bad_credentials", status: post.status });
     }
+    st.accepted = true;
     ({ r, url } = await follow(jar, post.loc));
     html = await r.text();
+    // Отказ бывает и перенаправлением обратно на форму входа (с любыми параметрами) или на страницу с той же формой (её
+    // скрытое поле loginChallenge), — это тоже «не принял пароль», а не сбой. Ошибиться здесь можно только в безопасную
+    // сторону: пароль попросят у человека заново.
+    if (/\/auth\/signin(?:[?/#]|$)/.test(new URL(url).pathname + new URL(url).search) || /\bname\s*=\s*["']?loginChallenge\b/i.test(html)) {
+      const msg = pageError(html);
+      throw Object.assign(new Error(msg ? `MISIS ID: ${msg}` : "MISIS ID снова показал форму входа — пароль не принят"), { code: "bad_credentials" });
+    }
   }
   // 4. Согласие на доступ журнала к данным MISIS ID (спрашивается при первом входе): форма как есть — скрытый
   // consentChallenge, все области (grantScope; на странице они скрыты и отмечены скриптом), «запомнить» — на «?/allow».
@@ -157,42 +190,146 @@ export async function login({ jar = [], email, password } = {}) {
 /** Публичная часть банки для хранения: только нужные домены, без просроченных. */
 export const keepJar = (jar) => jar.filter((c) => /(^|\.)misis\.ru$/.test(c.domain) && (c.expires === null || c.expires > Date.now()));
 
+/**
+ * Сохранить банку после обычной работы с журналом, если сайт поменял cookies (Auth.js журнала может выдать новую cookie
+ * входа с обновлённым ключом доступа). Раньше сохранялась только банка после входа, а обновления жили лишь в памяти до
+ * перезапуска (проверка 15 окт). before — сохранённая банка на момент начала; если за это время её переписал вход или
+ * подключение журнала, ничего не трогаем.
+ */
+async function keepIfChanged(tgId, jar, before) {
+  const { ejJar, setEj } = await store();
+  const now = JSON.stringify(keepJar(jar));
+  if (now === before) return;
+  // Идёт повторный вход: продлённая cookie старого входа выглядела бы для него чужой правкой, и свежий вход выбросился бы
+  // (находка ревью 16 окт, круг 2). Запрос со старым входом получит «устарел» и присоединится к повторному входу.
+  if (refreshing.has(tgId)) return;
+  if (JSON.stringify(keepJar((await ejJar(tgId)) || [])) !== before) return;
+  await setEj(tgId, keepJar(jar));
+}
+
 /* ---------- вход пользователя бота ---------- */
 // Ленивая загрузка users.mjs-функций хранения, чтобы не было круговой зависимости при старте.
 const store = () => import("./users.mjs");
 
-/** Подключить журнал: почта и пароль MISIS ID (те же, что в Moodle). Пароль дальше этой функции не живёт. */
-export async function connect(tgId, email, password) {
-  const { setEj } = await store();
-  try {
-    const { jar, user } = await login({ email, password });
-    await setEj(tgId, keepJar(jar));
-    return user;
-  } catch (e) {
-    await setEj(tgId, undefined, e.message);
-    throw e;
-  }
+/**
+ * Подключить журнал: почта и пароль MISIS ID (те же, что в Moodle). Удалось — запоминаются и вход, и пароль (для
+ * повторного входа через 48 ч). trusted — пароль только что принял Moodle (вход в бот): тогда он запоминается и при сбое
+ * сети или техработах журнала — журнал подключится сам, когда МИСИС ответит. Пароль, который MISIS ID отверг, не
+ * запоминается никогда.
+ */
+export async function connect(tgId, email, password, { trusted = false } = {}) {
+  const { setEj, ejEpoch } = await store();
+  passFailed.delete(tgId); // новый пароль — прежняя пауза к нему не относится
+  // Пока идёт вход (секунды, при /api/login — в фоне), человек мог выйти или войти другой учётной записью — тогда ничего
+  // не записываем (поколение входа сменилось).
+  const epoch = ejEpoch(tgId);
+  const p = (async () => {
+    try {
+      const { jar, user } = await login({ email, password });
+      await setEj(tgId, keepJar(jar), null, { email, password }, { epoch });
+      return user;
+    } catch (e) {
+      const kept = await setEj(tgId, undefined, e.message, trusted && e.code !== "bad_credentials" ? { email, password } : undefined, { epoch });
+      // Пароль ушёл, а вход сорвался не из-за него (429, техработы): та же пауза, что у повторного входа, — иначе GET /api/ej,
+      // который ждёт это подключение, сразу отправил бы пароль второй раз (находка ревью 16 окт, круг 2).
+      if (kept && e.passwordSent && e.code !== "bad_credentials") pauseAfter(tgId, e);
+      throw e;
+    }
+  })();
+  connecting.set(tgId, p);
+  return p.finally(() => { if (connecting.get(tgId) === p) connecting.delete(tgId); });
 }
+/*
+ * Идущее подключение журнала (tgId → обещание). Сразу после входа в бот приложение открывает вкладки и спрашивает журнал
+ * раньше, чем фоновое подключение что-то сохранило, — и показывало «Подключите журнал, введите пароль» (находка ревью
+ * 16 окт). GET /api/ej ждёт это подключение (server.mjs).
+ */
+const connecting = new Map();
+export const connectingOf = (tgId) => connecting.get(tgId) ?? null;
 
 /**
- * Живая банка пользователя: проверенный вход в журнал; устаревший — обновляется по cookies MISIS ID без пароля.
- * Ошибка с code "need_connect" (журнал не подключён) или "need_password" (вход MISIS ID истёк — нужен пароль один раз).
+ * Живая банка пользователя: проверенный вход в журнал; устаревший — обновляется по cookies MISIS ID, а когда истёк и вход
+ * MISIS ID (48 ч), — сохранённым паролем. Ошибка с code "need_connect" (журнал не подключён) или "need_password" (пароля
+ * нет или MISIS ID его не принял — нужен пароль от человека).
  */
 const refreshing = new Map(); // tgId → идущее обновление (параллельные запросы ждут одного)
+// Пароль ушёл в MISIS ID, но вход не завершился не из-за пароля (техработы, форма поменялась) — следующая попытка с
+// паролем не раньше чем через PASS_RETRY, а до тех пор — та же ошибка: верный пароль блокировкой не грозит, но долбить
+// MISIS ID входами незачем. Сбой сети до формы входа (пароль не ушёл) паузы не ставит.
+const passFailed = new Map(); // tgId → { at, ms, error }
+const PASS_RETRY = Number(process.env.EJ_PASS_RETRY_MS) || 10 * 60 * 1000; // переменная — для стенда
+// 429 — MISIS ID сам просит подождать: пауза втрое длиннее или сколько он просит (Retry-After, не больше 6 ч).
+const pauseAfter = (tgId, e) => passFailed.set(tgId, { at: Date.now(), error: e,
+  ms: e.code === "rate_limited" ? Math.max(PASS_RETRY * 3, Math.min(e.retryAfter ?? 0, 6 * 3600) * 1000) : PASS_RETRY });
+// Сохранённый пароль MISIS ID принимает (перенаправляет дальше), а вход не завершается — столько раз подряд, и пароль
+// забывается: неузнанный отказ (новая страница ошибки) иначе повторялся бы раз в 10 минут бесконечно. Счётчик на диске.
+const ACCEPT_FAILS = 3;
+const sameCred = (a, b) => (!a && !b) || (!!a && !!b && a.email === b.email && a.password === b.password);
 /** fresh — войти заново, даже если /auth/session ещё отвечает (сайт пускает, а его API уже нет: истёк ключ доступа внутри входа). */
 export async function session(tgId, { fresh = false } = {}) {
-  const { ejJar, setEj } = await store();
+  const { ejJar, ejCred } = await store();
   const jar = await ejJar(tgId);
-  if (!jar) throw Object.assign(new Error("Журнал не подключён"), { code: "need_connect" });
-  if (!fresh && await sessionUser(jar)) return jar;
-  if (!refreshing.has(tgId)) {
-    refreshing.set(tgId, (async () => {
-      try { const r = await login({ jar }); await setEj(tgId, keepJar(r.jar)); return r.jar; }
-      catch (e) { if (e.code === "need_password") await setEj(tgId, undefined, "Вход MISIS ID истёк — нужен пароль"); throw e; }
-      finally { refreshing.delete(tgId); }
-    })());
-  }
+  // Банки нет, а пароль есть: при входе в бот журнал не ответил (сеть) — подключаемся сейчас.
+  if (!jar && !(await ejCred(tgId))) throw Object.assign(new Error("Журнал не подключён"), { code: "need_connect" });
+  const before = JSON.stringify(keepJar(jar || []));
+  if (jar && !fresh && await sessionUser(jar)) { await keepIfChanged(tgId, jar, before).catch(() => {}); return jar; }
+  if (!refreshing.has(tgId)) refreshing.set(tgId, relogin(tgId).finally(() => refreshing.delete(tgId)));
   return refreshing.get(tgId);
+}
+async function relogin(tgId) {
+  const { ejJar, ejCred, ejState, setEj, dropEjCred, noteEjCredFail, ejEpoch } = await store();
+  // Банка и пароль читаются здесь, а не до ожидания в session(): пока тот ждал /auth/session, предыдущий вход мог забыть
+  // отвергнутый пароль — его копия ушла бы в MISIS ID второй раз (находка ревью 16 окт).
+  const epoch = ejEpoch(tgId);
+  const jar = await ejJar(tgId), cred = await ejCred(tgId);
+  if (!jar && !cred) throw Object.assign(new Error("Журнал не подключён"), { code: "need_connect" });
+  // Для «поменялось ли сохранённое за время входа» — банка как есть, без отсева истёкших cookies: иначе cookie, истёкшая
+  // во время входа, выглядела бы чужой правкой, и удачный вход выбрасывался.
+  const raw = JSON.stringify(jar || []);
+  const f = passFailed.get(tgId);
+  const wait = !!(cred && f && Date.now() - f.at < f.ms);
+  const usePass = cred && !wait ? cred : null;
+  let r;
+  try {
+    // Сначала по cookies: пока жив вход MISIS ID, форма входа не показывается и пароль никуда не уходит (login шлёт его,
+    // только если MISIS ID показал форму).
+    r = await login({ jar: jar ? [...jar] : [], email: usePass?.email, password: usePass?.password });
+  } catch (e) {
+    if (e.code === "need_password" && wait) throw f.error; // пароль есть, но недавно с ним не вышло — ждём, а не просим пароль
+    if (e.code === "need_password") {
+      // Причину «MISIS ID не принял сохранённый пароль» не затираем общим «вход истёк» — человеку важно знать, что пароль
+      // сменился.
+      if (!(await ejState(tgId)).rejected) await setEj(tgId, undefined, "Вход MISIS ID истёк — нужен пароль", undefined, { epoch });
+      throw e;
+    }
+    if (e.code === "bad_credentials" && usePass) {
+      // Сохранённый пароль не подошёл (сменили пароль, вход заблокирован): забываем его и просим ввести заново —
+      // повторять неверный пароль нельзя.
+      passFailed.delete(tgId);
+      // Пока шёл вход, пароль заменили (человек ввёл новый) или человек вышел — новый пароль не трогаем, просить не о чем.
+      if (!(await dropEjCred(tgId, usePass, `MISIS ID не принял сохранённый пароль (возможно, его сменили): ${e.message}`)))
+        throw new Error("Вход в журнал поменялся, пока шло обновление, — попробуйте ещё раз");
+      throw Object.assign(new Error("MISIS ID не принял сохранённый пароль — нужен новый"), { code: "need_password", cause: e });
+    }
+    if (usePass && e.afterAccept && (await noteEjCredFail(tgId, usePass)) >= ACCEPT_FAILS) {
+      passFailed.delete(tgId);
+      if (await dropEjCred(tgId, usePass, `Вход по сохранённому паролю ${ACCEPT_FAILS} раза подряд не завершился (${e.message}) — введите пароль ещё раз`))
+        throw Object.assign(new Error("Вход по сохранённому паролю не завершается — нужен пароль"), { code: "need_password", cause: e });
+      throw e;
+    }
+    if (usePass && e.passwordSent) pauseAfter(tgId, e);
+    throw e;
+  }
+  passFailed.delete(tgId);
+  // Пока шёл вход, человек мог выйти, подключить журнал заново или войти другой учётной записью — не перетираем.
+  const cur = await ejJar(tgId), curCred = await ejCred(tgId);
+  if (!cur && !curCred) throw Object.assign(new Error("Журнал не подключён"), { code: "need_connect" });
+  if (JSON.stringify(cur || []) !== raw || !sameCred(curCred, cred) || ejEpoch(tgId) !== epoch) {
+    if (cur) return cur;
+    throw new Error("Вход в журнал поменялся, пока шло обновление, — попробуйте ещё раз");
+  }
+  if (!(await setEj(tgId, keepJar(r.jar), null, undefined, { epoch }))) throw new Error("Вход в журнал поменялся, пока шло обновление, — попробуйте ещё раз");
+  return r.jar;
 }
 
 /* ---------- данные журнала ---------- */
@@ -295,7 +432,7 @@ const time = (d) => { const t = Date.parse(d ?? ""); return Number.isNaN(t) ? nu
  * Одна дисциплина. Проценты — как их считает сам журнал (statistic из списка дисциплин); подробности — из журнала
  * дисциплины по тем же правилам, что на его страницах «Посещаемость» и «Успеваемость».
  */
-function subject(item, j, studId, now) {
+export function subject(item, j, studId, now) {
   const st = item?.statistic || {};
   const s = {
     id: item.id,
@@ -303,7 +440,7 @@ function subject(item, j, studId, now) {
     teachers: [...new Set((item.workers || j?.workers || []).map((w) => w?.worker_name || w?.fio).filter(Boolean))],
     attendance: round1(num(st.attendance)), rating: round1(num(st.final_rating)),
     track: round1(num(st.completion_track)), trackInDate: round1(num(st.completion_track_in_date)),
-    control: CONTROL[j?.control_form] ?? null, grade: null, thresholds: null,
+    control: CONTROL[j?.control_form] ?? null, grade: null, thresholds: null, points: null,
     lessons: null, absences: [], works: [], error: null,
   };
   if (!j || j.__error) return { ...s, error: j?.__error || "Журнал дисциплины не загрузился" };
@@ -354,6 +491,16 @@ function subject(item, j, studId, now) {
     for (const w of ws) r += ((num(got.get(w.id)?.mark) ?? 0) / (num(w.scale) || 1)) * ((num(w.hours) || 1) / total) * (imp[t] ?? 0);
   }
   if (s.rating == null && works.length && Number.isFinite(r)) s.rating = round1(r * 100);
+  // Сколько баллов рейтинга (из 100) ещё можно набрать: веса работ без оценки (будущих и пока не проверенных) и вес типа,
+  // у которого работ в журнале ещё нет (контрольные мероприятия, экзамен — их заводят позже). Для «Сессии»: хватит ли
+  // этого до порога 3/4/5 или зачёта.
+  let left = 0, pending = 0;
+  for (const [t, ws] of Object.entries(byType)) {
+    const total = ws.reduce((h, w) => h + (num(w.hours) || 1), 0);
+    for (const w of ws) if (num(got.get(w.id)?.mark) == null) { left += ((num(w.hours) || 1) / total) * (imp[t] ?? 0); pending++; }
+  }
+  for (const [t, v] of Object.entries(imp)) if (v && !byType[t]) left += v;
+  s.points = { left: round1(left * 100), pending };
   // Пороги оценок дисциплины (доли или проценты в журнале) — в процентах рейтинга.
   const cut = (v) => { const x = num(v); return x == null ? null : x > 1 ? x / 100 : x; };
   const [p5, p4, p3] = [cut(j.perfect_mark), cut(j.good_mark), cut(j.fine_mark)];
@@ -367,10 +514,23 @@ function subject(item, j, studId, now) {
   return s;
 }
 
+/**
+ * Сводка семестра по дисциплинам: средние посещаемость и рейтинг, всего пропусков и пропущенных часов. Отдельно — чтобы
+ * пересчитать её без дисциплин, которые студент назвал не своими (admission.journalView, 16 окт 2026).
+ */
+export function summaryOf(subjects) {
+  const avg = (xs) => { const v = xs.filter((x) => typeof x === "number"); return v.length ? round1(v.reduce((a, b) => a + b, 0) / v.length) : null; };
+  return {
+    attendance: avg(subjects.map((s) => s.attendance)),
+    rating: avg(subjects.map((s) => s.rating)),
+    absences: subjects.reduce((n, s) => n + (s.absences?.length || 0), 0),
+    missedHours: subjects.reduce((n, s) => n + (s.lessons?.missedHours || 0), 0),
+  };
+}
+
 function summarize({ path, ctx, list, details }) {
   const now = Date.now(), studId = ctx.studId;
   const subjects = list.map((it, i) => subject(it, details[i], studId, now)).sort((a, b) => a.name.localeCompare(b.name, "ru"));
-  const avg = (xs) => { const v = xs.filter((x) => typeof x === "number"); return v.length ? round1(v.reduce((a, b) => a + b, 0) / v.length) : null; };
   const year = ctx.years.find((y) => y?.id === ctx.academicYearId) ?? details.find((j) => j?.academic_year)?.academic_year;
   const yy = (d) => (time(d) == null ? null : String(new Date(d).getFullYear()).slice(-2));
   const years = [...new Set([yy(year?.start_date), yy(year?.end_date)].filter(Boolean))].join("–");
@@ -379,12 +539,7 @@ function summarize({ path, ctx, list, details }) {
     path,
     semester: SEMESTER[ctx.semester] ? `${SEMESTER[ctx.semester]} семестр${years ? ` ${years} г.` : ""}` : null,
     group: ctx.group ?? list.find((it) => it?.ed_group)?.ed_group?.ed_group_name ?? null,
-    summary: {
-      attendance: avg(subjects.map((s) => s.attendance)),
-      rating: avg(subjects.map((s) => s.rating)),
-      absences: subjects.reduce((n, s) => n + s.absences.length, 0),
-      missedHours: subjects.reduce((n, s) => n + (s.lessons?.missedHours || 0), 0),
-    },
+    summary: summaryOf(subjects),
     subjects,
   };
 }
@@ -428,9 +583,11 @@ async function load(tgId, debugDir) {
     const ctx = { studId, semester: merged.semester ?? null, academicYearId: merged.academic_year_id ?? null, years: merged.filters?.academic_years || [], group: role?.groupName ?? null };
     return { path, ctx, list, details };
   };
+  // Страница и API журнала тоже могут выдать новые cookies — после удачной загрузки банка сохраняется (keepIfChanged).
+  const run = async (opts) => { const jar = await session(tgId, opts); const b = JSON.stringify(keepJar(jar)); const r = await fetchAll(jar); await keepIfChanged(tgId, jar, b).catch(() => {}); return r; };
   let raw;
-  try { raw = await fetchAll(await session(tgId)); }
-  catch (e) { if (e.code !== "expired") throw e; raw = await fetchAll(await session(tgId, { fresh: true })); }
+  try { raw = await run(); }
+  catch (e) { if (e.code !== "expired") throw e; raw = await run({ fresh: true }); }
   if (debugDir) await dump(debugDir, tgId, raw).catch((e) => console.log(`ej dump: ${e.message}`));
   return summarize(raw);
 }
@@ -449,19 +606,27 @@ const BACKOFF = 2 * 60 * 1000;
 const asJournalError = (e) => (/Moodle не отвечает/.test(e?.message || "")
   ? Object.assign(new Error("Журнал МИСИС не отвечает — показаны последние загруженные данные"), { cause: e }) : e);
 export async function journal(tgId, { debugDir, force = false } = {}) {
+  const { ejEpoch } = await store(); // до проверок ниже: между ними и inflight.set ожиданий быть не должно
   const c = cache.get(tgId);
   if (!force && c && Date.now() - c.at < TTL) return c.data;
   const f = failed.get(tgId);
   if (!force && f && Date.now() - f.at < BACKOFF) throw f.error;
-  if (!inflight.has(tgId)) {
-    inflight.set(tgId, load(tgId, debugDir)
-      .then((data) => { cache.set(tgId, { at: Date.now(), data }); failed.delete(tgId); return data; })
-      .catch((e) => { const err = asJournalError(e); if (err.code !== "need_password" && err.code !== "need_connect") failed.set(tgId, { at: Date.now(), error: err }); throw err; })
-      .finally(() => inflight.delete(tgId)));
+  // Человек не присоединяется к загрузке, начатой фоновой проверкой (она идёт по запросу в секунду и может встать на
+  // паузу), — начинает свою. Пауза фона (PausedError) в «журнал не отвечает» не записывается: запрос человека пройдёт.
+  const bg = pace.isBackground(), cur = inflight.get(tgId);
+  if (!cur || (cur.bg && !bg)) {
+    // Поколение входа: человек вышел или вошёл другой учётной записью, пока шла загрузка, — её ответ и ошибку в память не
+    // кладём (иначе после «Выйти» lastGood снова держал бы прежний журнал, а новая учётная запись — чужую ошибку).
+    const epoch = ejEpoch(tgId), same = () => ejEpoch(tgId) === epoch;
+    const p = load(tgId, debugDir)
+      .then((data) => { if (same()) { cache.set(tgId, { at: Date.now(), data }); failed.delete(tgId); } return data; })
+      .catch((e) => { const err = asJournalError(e); if (same() && err.code !== "need_password" && err.code !== "need_connect" && err.name !== "PausedError") failed.set(tgId, { at: Date.now(), error: err }); throw err; })
+      .finally(() => { if (inflight.get(tgId)?.p === p) inflight.delete(tgId); });
+    inflight.set(tgId, { p, bg });
   }
-  return inflight.get(tgId);
+  return inflight.get(tgId).p;
 }
 /** Забыть сохранённый ответ (журнал подключили заново или пользователь вышел). */
-export const forget = (tgId) => { cache.delete(tgId); failed.delete(tgId); };
+export const forget = (tgId) => { cache.delete(tgId); failed.delete(tgId); passFailed.delete(tgId); inflight.delete(tgId); };
 /** Последние удачно загруженные данные (сколько бы им ни было) — показать, пока журнал не отвечает. */
 export const lastGood = (tgId) => cache.get(tgId)?.data ?? null;

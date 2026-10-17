@@ -16,16 +16,20 @@ export function Toast() {
   useEffect(() => {
     if (!msg) return;
     setVisible(true);
-    const t = setTimeout(() => setVisible(false), 1800);
+    // Длинное сообщение висит дольше, чтобы его успели прочитать (проверка 15 окт).
+    const t = setTimeout(() => setVisible(false), Math.min(5000, 1800 + 40 * msg.length));
     return () => clearTimeout(t);
   }, [id, msg]);
+  // Ширина по тексту, но не шире экрана без полей по 16 px; длинный текст переносится (проверка 15 окт): раньше
+  // whitespace-nowrap по центру экрана срезал начало и конец фразы. Скругление 20 px вместо «таблетки»: на двух строках
+  // таблетка становилась овалом, а однострочный тост почти не изменился.
   return (
     <AnimatePresence>
       {visible && (
         <m.div
           key={id}
           role="status"
-          className="glass fixed left-1/2 z-[60] rounded-full px-4 py-2.5 text-s font-bold whitespace-nowrap"
+          className="glass glass-float fixed left-1/2 z-[60] w-max max-w-[calc(100vw-32px)] rounded-[20px] px-4 py-2.5 text-center text-s font-bold text-balance"
           style={{ top: "calc(12px + var(--safe-top))" }}
           initial={{ y: -48, x: "-50%", opacity: 0 }} animate={{ y: 0, x: "-50%", opacity: 1 }} exit={{ y: -48, x: "-50%", opacity: 0 }}
           transition={spring(420, 32)}

@@ -1,25 +1,35 @@
 import { m } from "framer-motion";
 import { CalendarDays, ChevronRight, CircleHelp, Flag, Smartphone } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { ActiveLabs } from "../components/ActiveLabs";
 import { HeroDeadlineCard } from "../components/HeroDeadlineCard";
 import { JournalTile } from "../components/JournalTile";
+import { SessionTile } from "../components/SessionTile";
 import { LessonRow, matchSubject } from "../components/LessonRow";
-import { MoodleDown } from "../components/MoodleDown";
+import { MoodleDown, MoodleFailed, when } from "../components/MoodleDown";
 import { Tile, TileLabel } from "../components/Tile";
 import { Avatar, EmptyState, Skeleton } from "../components/ui";
 import { useNav } from "../hooks/useNav";
 import { useNow } from "../hooks/useNow";
 import { DAY, effectiveDue, formatLongDate, mskParts, todayKey } from "../lib/dates";
+import { useAuth } from "../store/auth";
 import { useSchedule } from "../store/schedule";
-import { subjectOf, useAppStore } from "../store/useAppStore";
+import { subjectOf, useAppStore, useFirstLoad } from "../store/useAppStore";
 import { urgencyOf } from "../theme/urgency";
 import { addToHomeScreen, haptic, homeScreenStatus, telegramUser } from "../telegram/webapp";
 
 /** Главная в стиле бенто: мозаика стеклянных плиток, отвечает на вопрос «что делать сейчас?» */
 export function HomeScreen() {
-  const { status, subjects, deadlines, moodle, pendingCourses } = useAppStore();
-  const { push, setTab } = useNav();
+  // Из сторов — только нужные поля (проверка 15 окт): без селектора Главная перерисовывалась целиком на каждый set
+  // (refresh() делает их 6–7 подряд — как раз в начале «потянуть вниз»), на каждый push/pop и смену вкладки.
+  const { status, subjects, deadlines, moodle, pendingCourses } = useAppStore(useShallow((s) => ({
+    status: s.status, subjects: s.subjects, deadlines: s.deadlines, moodle: s.moodle, pendingCourses: s.pendingCourses,
+  })));
+  const { pending, failed } = useFirstLoad();
+  const authErr = useAuth((s) => s.status === "error");
+  const push = useNav((s) => s.push);
+  const setTab = useNav((s) => s.setTab);
   const now = useNow();
   const user = telegramUser();
   const today = todayKey();
@@ -28,9 +38,11 @@ export function HomeScreen() {
   useEffect(() => { void homeScreenStatus().then(setHomeScreen); }, []);
 
   // Просроченные старше недели на Главной не показываем — они остаются во вкладке «Дедлайны».
-  const open = deadlines
+  // Сортировка зовёт effectiveDue (Intl) на каждое сравнение — пересчитываем только при новых данных или тике часов
+  // (проверка 15 окт), а не на каждую перерисовку.
+  const open = useMemo(() => deadlines
     .filter((d) => d.status === "open" && effectiveDue(d.due) > now - 7 * DAY)
-    .sort((a, b) => effectiveDue(a.due) - effectiveDue(b.due));
+    .sort((a, b) => effectiveDue(a.due) - effectiveDue(b.due)), [deadlines, now]);
   const [hero] = open;
 
   // Цвет свечения фона (вариант glow1) — по срочности ближайшего дедлайна.
@@ -43,9 +55,12 @@ export function HomeScreen() {
   }, [heroUrgency]);
 
   // Пары на сегодня из расписания группы (подгруппа — из профиля); прошедшие определяем по московскому времени.
-  const { forDay, status: schedStatus, data: sched } = useSchedule();
+  const schedStatus = useSchedule((s) => s.status);
+  const sched = useSchedule((s) => s.data);
+  const subgroup = useSchedule((s) => s.subgroup);
   const schedNeedGroup = !!sched?.needGroup || (!!sched && !sched.group);
-  const lessons = forDay(today);
+  // forDay читает стор сам; зависимости — то, от чего зависит ответ (расписание, подгруппа, день).
+  const lessons = useMemo(() => useSchedule.getState().forDay(today), [sched, subgroup, today]);
   const nowP = mskParts(now);
   const nowHM = `${String(nowP.hh).padStart(2, "0")}:${String(nowP.mm).padStart(2, "0")}`;
 
@@ -61,7 +76,8 @@ export function HomeScreen() {
             <p className={`truncate text-[12px] font-semibold ${moodle.status === "error" || moodle.down ? "text-yellow" : "text-hint"}`}>
               {moodle.status === "loading" ? "Moodle · обновляю…"
                 : moodle.down ? "Moodle · не отвечает" // подробности — в плашке ниже
-                : moodle.status === "ok" && moodle.at ? `Moodle · обновлено ${new Date(moodle.at).toLocaleTimeString("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit" })}`
+                // Время чтения данных сервером; не сегодня — с датой (копия с диска после перезапуска бывает вчерашней).
+                : moodle.status === "ok" && moodle.at ? `Moodle · обновлено ${when(moodle.at)}`
                 : `Moodle: ${moodle.error}`}
             </p>
           )}
@@ -78,9 +94,15 @@ export function HomeScreen() {
         <div className="grid grid-cols-2 gap-2.5">
           {/* Moodle не отвечает (сбой у МИСИС): плашка первой, под ней — прежние данные. */}
           <MoodleDown index={0} />
+          {/* Первая загрузка из Moodle ещё идёт или не удалась — не «Все сроки закрыты» (проверка 15 окт). При сбое
+              самого Moodle причину уже объясняет плашка выше. */}
           {hero ? (
             <HeroDeadlineCard deadline={hero} subject={subjectOf(subjects, hero.subjectId)} now={now}
               onOpen={() => push({ name: "deadline", id: hero.id })} />
+          ) : pending ? (
+            <Skeleton className="col-span-2 h-44 rounded-[22px]" />
+          ) : failed ? (
+            !moodle.down && <MoodleFailed index={0} />
           ) : (
             <Tile span={2} index={0}>
               <EmptyState icon={Flag} title="Дедлайнов нет" text="Все сроки закрыты. Добавьте новый, когда появится."
@@ -126,13 +148,19 @@ export function HomeScreen() {
               </div>
             ) : (
               <p className="mt-2 pb-1 text-s font-semibold text-hint">
-                {schedNeedGroup ? "Выберите группу в профиле — и здесь появятся пары" : schedStatus === "loading" || schedStatus === "idle" ? "Загружаю расписание…" : schedStatus === "error" ? "Расписание недоступно" : "Сегодня пар нет"}
+                {/* Сервер не отдал профиль — расписание и не начнёт грузиться: «Загружаю…» висело бы вечно (проверка 15 окт). */}
+                {schedNeedGroup ? "Выберите группу в профиле — и здесь появятся пары"
+                  : schedStatus === "error" || (schedStatus === "idle" && authErr) ? "Расписание недоступно"
+                  : schedStatus === "loading" || schedStatus === "idle" ? "Загружаю расписание…" : "Сегодня пар нет"}
               </p>
             )}
           </Tile>
 
           {/* Электронный журнал: средние посещаемость и рейтинг за семестр, пропуски (на месте прежних заметок). */}
           <JournalTile index={2} />
+
+          {/* Сессия: через сколько дней и её даты по учебному плану, формы контроля семестра, долги; нажатие — экран «Сессия». */}
+          <SessionTile index={3} />
 
           {homeScreen === "missed" && (
             <Tile span={2} index={5} onClick={() => { haptic.tap(); addToHomeScreen(); setHomeScreen("unknown"); }} className="!min-h-0 py-3">

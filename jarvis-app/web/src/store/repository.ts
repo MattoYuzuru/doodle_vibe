@@ -10,4 +10,7 @@ export interface Repository {
   /** Актуальные данные (облако или сервер). null — данных ещё нет. */
   load(): Promise<AppData | null>;
   save(collection: Collection, items: AppData[Collection]): Promise<void>;
+  /** Отметка в хранилище (в Telegram — своя у каждого бота): стоит ли она; поставить. */
+  flag(name: string): Promise<boolean>;
+  setFlag(name: string): Promise<void>;
 }

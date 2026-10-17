@@ -3,9 +3,15 @@
 // Gateway по HTTP; три проверки подряд без ответа (порт при этом принимает соединение) — это зависание: выполняется
 // `openclaw gateway restart`, владельцу уходит сообщение. Если Gateway просто не запущен (в соединении отказано),
 // сторож ничего не делает: его могли остановить намеренно, а после входа в Windows он стартует сам.
+//
+// Агент под своей учётной записью Windows (agent-account.mjs): Gateway — процесс и задача doodle-agent, сервер
+// (владелец, без прав администратора) их перезапустить не может. Тогда перезапуск — запуск задачи Планировщика
+// «Doodle Gateway Restart»: она выполняет `openclaw gateway restart` от имени doodle-agent, а владельцу разрешено
+// только её запускать (права задаёт ops\migrate\agent-account\1-права.ps1).
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { AGENT } from "./agent-account.mjs";
 
 const URL_ = process.env.GATEWAY_URL || "http://127.0.0.1:18789/";
 const EVERY_MS = Number(process.env.GATEWAY_WATCH_MS) || 2 * 60e3;
@@ -20,8 +26,14 @@ async function probe() {
   catch (e) { return e.name === "TimeoutError" || e.name === "AbortError" ? "hung" : "down"; }
 }
 
+/** Чем перезапускать: своим OpenClaw или задачей от имени учётной записи агента. */
+export const restartCommand = (agent = AGENT) => (agent
+  ? [join(process.env.SystemRoot || "C:\\Windows", "System32", "schtasks.exe"), ["/Run", "/TN", agent.restartTask]]
+  : [process.execPath, [OPENCLAW, "gateway", "restart"]]);
+
 const restart = () => new Promise((resolve) => {
-  const p = spawn(process.execPath, [OPENCLAW, "gateway", "restart"], { windowsHide: true });
+  const [cmd, args] = restartCommand();
+  const p = spawn(cmd, args, { windowsHide: true });
   const t = setTimeout(() => p.kill(), 3 * 60e3);
   p.on("close", (code) => { clearTimeout(t); resolve(code); });
   p.on("error", () => { clearTimeout(t); resolve(-1); });
@@ -47,7 +59,7 @@ export function watchGateway({ notify }) {
       console.log(`gateway-watch: перезапуск завершён (код ${code}), состояние: ${after}`);
       await notify(after === "ok"
         ? "🔄 Служба OpenClaw на ПК зависла — Doodle перезапустил её сам, агент снова отвечает. Если лаба в этот момент не запустилась, нажмите в ней «Запустить заново»."
-        : "⚠️ Служба OpenClaw на ПК зависла, автоматический перезапуск не помог. На ПК: openclaw gateway restart").catch(() => {});
+        : `⚠️ Служба OpenClaw на ПК зависла, автоматический перезапуск не помог. На ПК${AGENT ? ` под учётной записью ${AGENT.user}` : ""}: openclaw gateway restart`).catch(() => {});
     } catch (e) { console.error(`gateway-watch: ${e.message || e}`); }
     finally { busy = false; }
   };

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1280px; height: 720px; overflow: hidden; font-family: "Segoe UI", system-ui, sans-serif;
+    background: radial-gradient(circle at 15% 20%, #3d8bff 0%, #2f7bf6 35%, #1a4fc0 100%); color: #fff; position: relative; }
+  .blob { position: absolute; border-radius: 50%; opacity: .14; background: #fff; }
+  .left { position: absolute; left: 80px; top: 0; bottom: 0; width: 640px; display: flex; flex-direction: column; justify-content: center; }
+  .badge { align-self: flex-start; background: rgba(255,255,255,.2); border: 1px solid rgba(255,255,255,.35); border-radius: 999px;
+    padding: 8px 18px; font-size: 20px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; }
+  h1 { font-size: 96px; line-height: 1; font-weight: 800; margin: 24px 0 18px; letter-spacing: -2px; }
+  .sub { font-size: 30px; line-height: 1.3; opacity: .95; white-space: nowrap; }
+  ul { list-style: none; margin-top: 36px; display: grid; gap: 14px; }
+  li { font-size: 25px; display: flex; gap: 16px; align-items: center; }
+  li i { width: 44px; height: 44px; border-radius: 12px; background: rgba(255,255,255,.2); display: grid; place-items: center; flex: none; }
+  li svg { width: 24px; height: 24px; stroke: #fff; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .brand { position: absolute; left: 80px; bottom: 40px; font-size: 22px; font-weight: 600; opacity: .85; }
+  /* телефон */
+  .phone { position: absolute; right: 90px; top: 48px; width: 380px; height: 760px; background: #f2f2f7; border-radius: 52px;
+    border: 12px solid #0d0d10; box-shadow: 0 30px 80px rgba(0,0,0,.35); overflow: hidden; color: #000; transform: rotate(3deg); }
+  .bar { height: 40px; }
+  .title { font-size: 30px; font-weight: 800; padding: 4px 20px 12px; }
+  .seg { margin: 0 16px 14px; background: #e3e3e8; border-radius: 12px; padding: 3px; display: flex; font-size: 16px; font-weight: 600; }
+  .seg div { flex: 1; text-align: center; padding: 7px 0; color: #555; }
+  .seg .on { background: #fff; border-radius: 10px; color: #000; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .card { background: #fff; border-radius: 18px; margin: 0 16px 12px; padding: 14px 16px; }
+  .count { display: flex; align-items: baseline; gap: 8px; }
+  .count b { font-size: 46px; color: #2f7bf6; font-weight: 800; }
+  .count i { font-style: normal; font-size: 17px; color: #555; }
+  .track { height: 8px; background: #e6e6eb; border-radius: 4px; margin-top: 10px; overflow: hidden; }
+  .track div { height: 100%; width: 38%; background: #2f7bf6; border-radius: 4px; }
+  .small { font-size: 13px; color: #888; margin-top: 6px; }
+  .h { font-size: 13px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: .5px; margin: 6px 20px 8px; }
+  .subj { display: flex; justify-content: space-between; font-size: 16px; font-weight: 600; }
+  .tag { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: #e8f0fe; color: #2f7bf6; }
+  .tag.z { background: #e9f8ee; color: #1f9d55; }
+  .pts { font-size: 13px; color: #555; margin-top: 6px; }
+  .mini { height: 6px; background: #e6e6eb; border-radius: 3px; margin-top: 6px; overflow: hidden; }
+  .mini div { height: 100%; background: #2f7bf6; }
+  .mini.g div { background: #1f9d55; }
+</style></head>
+<body>
+  <div class="blob" style="width:420px;height:420px;left:-120px;top:-160px"></div>
+  <div class="blob" style="width:300px;height:300px;left:560px;top:520px"></div>
+
+  <div class="left">
+    <div class="badge">Новое в Doodle</div>
+    <h1>Сессия</h1>
+    <div class="sub">Экзамены, зачёты и баллы — в одном месте</div>
+    <ul>
+      <li><i><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></i>Сколько дней осталось до сессии</li>
+      <li><i><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg></i>Расписание экзаменов вашей группы</li>
+      <li><i><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></i>Сколько баллов нужно на 3, 4 или 5</li>
+      <li><i><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg></i>Напоминания накануне экзамена</li>
+    </ul>
+  </div>
+  <div class="brand">Doodle · Журнал → Сессия</div>
+
+  <div class="phone">
+    <div class="bar"></div>
+    <div class="title">Журнал</div>
+    <div class="seg"><div>Журнал</div><div class="on">Сессия</div></div>
+    <div class="card">
+      <div class="count"><b>82</b><i>дня до зимней сессии</i></div>
+      <div class="track"><div></div></div>
+      <div class="small">5 – 25 января · 3 экзамена, 7 зачётов</div>
+    </div>
+    <div class="h">Дисциплины</div>
+    <div class="card">
+      <div class="subj">Высшая математика <span class="tag">Экзамен</span></div>
+      <div class="pts">42 из 100 · на «5» ещё 44</div>
+      <div class="mini"><div style="width:42%"></div></div>
+    </div>
+    <div class="card">
+      <div class="subj">Программирование <span class="tag z">Зачёт</span></div>
+      <div class="pts">58 из 100 · порог набран</div>
+      <div class="mini g"><div style="width:58%"></div></div>
+    </div>
+    <div class="card">
+      <div class="subj">Физика <span class="tag">Экзамен</span></div>
+      <div class="pts">31 из 100 · на «3» ещё 30</div>
+      <div class="mini"><div style="width:31%"></div></div>
+    </div>
+  </div>
+</body></html>

@@ -3,7 +3,7 @@
 // критерии, теги и последние отзывы. Кэш на сутки по ФИО: страницы дедлайнов открываются часто, а оценки меняются редко.
 const BASE = "https://campusapp.ru";
 const ORG_MISIS = "5fb798fd0753d50006b98885";
-const UA = "Mozilla/5.0 (Jarvis mini app; +https://t.me/Jarvis_kimmm_bot)";
+const UA = "Mozilla/5.0 (Doodle mini app; +https://t.me/Doodle_helper_bot)";
 const CACHE_MS = 24 * 3600 * 1000;
 const cache = new Map(); // fullName → { at, data }
 

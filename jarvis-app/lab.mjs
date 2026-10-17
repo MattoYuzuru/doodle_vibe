@@ -2,19 +2,25 @@
 // хранит переписку и состояние в jobs/<assignId>.json, читает JOB.json из рабочей папки после каждого хода,
 // прикрепляет и отправляет отчёт в Moodle ТОЛЬКО по запросу приложения (после подтверждения студента).
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { copyFile, mkdir, open, readdir, readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assignFeedbackRaw, attachFiles, call as moodleCall, deadlines as moodleDeadlines, stateLine, submissionInfo, submitForGrading } from "./moodle.mjs";
+import { assignFeedbackRaw, attachFiles, call as moodleCall, deadlines as moodleDeadlines, forgetDeadlines, stateLine, submissionInfo, submitForGrading } from "./moodle.mjs";
 import { appButton, labButton, send as tgSend } from "./notify.mjs";
-import { GROUP_NAME, OWNER_ID, mfetch, profile as userProfile, remarksConsent, retry } from "./users.mjs";
+import { afterTurn as guardAfterTurn } from "./guard-watch.mjs";
+import * as quality from "./quality.mjs";
+import { GROUP_NAME, OWNER_ID, TERMINALS, mfetch, profile as userProfile, remarksConsent, retry, setTerminal, terminalOf } from "./users.mjs";
 import { LESSONS_FILE, anonymize, srcOf, writeForLab } from "./lessons.mjs";
 import { groupInfo } from "./official.mjs";
 import { activityOf, creep, recentFiles, resultsSince } from "./activity.mjs";
+import { dockerRule, measureLock, sharedFile } from "./agent-account.mjs";
 import * as usage from "./usage.mjs";
+import * as trial from "./lab-trial.mjs";
+import { diffNotice, diffRules } from "./rules-diff.mjs";
+import { isStateReadError, readJson, readText as readStateText, writeJsonAtomic } from "./state-file.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const JOBS = join(DIR, "jobs");
@@ -105,7 +111,25 @@ const resumeText = (slept) => [
 ].filter(Boolean).join("\n");
 
 const jobFile = (key) => join(JOBS, `${key}.json`);
-const publicJob = ({ busy, dir, usage, lastTurn, stuckAlert, sleptWake, progressFloor, styleSaved, gradeBefore, env, envNote, envStage, envRequest, filesNote, ...job }) => ({ ...job, token: linkToken(job) });
+const publicJob = ({ busy, dir, usage, lastTurn, stuckAlert, sleptWake, progressFloor, styleSaved, gradeBefore, env, envNote, envStage, envRequest, filesNote, resumeNote, trialModel, ...job }) => ({ ...job, token: linkToken(job) });
+// Модель пробной лабы (lab-trial.mjs) — для всех её ходов в сессии лабы; у остальных лаб — обычная модель агента.
+const modelArgs = (job) => (job.trialModel ? ["--model", job.trialModel] : []);
+/**
+ * Ход, который приложение запускает само (продолжение после окружения, после сна ПК, решение владельца об установке):
+ * у пробной лабы — те же проверки, что у сообщения студента (ревью 16 окт: без них агент продолжал на Opus за пределом
+ * расхода и после того, как владелец закрыл пробный). null — можно; иначе причина для чата.
+ */
+async function trialStop(job) {
+  if (!job.viaTrial) return null;
+  try {
+    const a = await trial.access(job.tgId, job.id);
+    if (a.reason === "trial_other_account") return "Пробный отчёт привязан к другой учётной записи Moodle — войдите в неё и напишите агенту.";
+    if (!a.allowed) return "Пробный отчёт закрыт — агент дальше сам не продолжает.";
+    await trial.guard(job.tgId, job.id);
+    return null;
+  } catch (e) { return `${String(e.message || e).replace(/[.\s]+$/, "")}. Агент дальше сам не продолжает.`; }
+}
+const denied = (code) => Object.assign(new Error(code), { status: 403 });
 /*
  * Ссылка на PDF отчёта. Секрет работы (job.token) наружу не выходит: приложение получает подписанную им ссылку со сроком —
  * «<время окончания>.<подпись>», на сутки. Раньше в ссылке стоял сам секрет, и она действовала бессрочно.
@@ -203,28 +227,34 @@ async function save(job) {
   await mkdir(JOBS, { recursive: true });
   // Через временный файл (своё имя на каждую запись): при ENOSPC переписка и секрет отчёта не превращаются в пустой файл.
   // busy в файл не пишем: это состояние процесса; раньше после перезапуска сервера посреди хода задание оставалось
-  // «занятым» навсегда, и на любое сообщение приложение отвечало «Агент ещё работает».
-  const run = async () => {
-    const tmp = `${jobFile(job.key)}.${randomBytes(4).toString("hex")}.tmp`;
-    await writeFile(tmp, JSON.stringify({ ...job, busy: undefined }, null, 2));
-    await rename(tmp, jobFile(job.key));
-  };
+  // «занятым» навсегда, и на любое сообщение приложение отвечало «Агент ещё работает». rename — с повторами (state-file.mjs).
+  const run = () => writeJsonAtomic(jobFile(job.key), { ...job, busy: undefined }, { space: 2 });
   const q = (saving.get(job.key) || Promise.resolve()).catch(() => {}).then(run);
   saving.set(job.key, q);
   await q;
   return job;
 }
 
-/** Задание пользователя tgId по работе id из памяти или файла (после перезапуска сервера «в работе» → «ждёт»). */
+/**
+ * Задание пользователя tgId по работе id из памяти или файла (после перезапуска сервера «в работе» → «ждёт»).
+ * null — только когда файла нет (15 окт 2026): раньше любая ошибка чтения тоже давала null, и «Сделать отчёт» или
+ * «Исправить отчёт» создавали новое задание поверх настоящего — пропадали переписка, отчёт, секрет ссылки, история
+ * исправлений. Теперь занятый файл — повторы, затем StateReadError (startJob/fixJob отвечают ошибкой и ничего не пишут),
+ * а неудачное чтение не запоминается. Испорченный JSON отложен в «<ключ>.json.bad-<время>» и считается отсутствующим.
+ */
 const loadingJobs = new Map(); // ключ → идущее чтение: два одновременных запроса должны получить один и тот же объект
+// "job:<ключ>" | "check:<ключ>": файл испорчен и уже отложен в .bad-* — до новой записи не перечитываем (иначе каждый
+// опрос Главной делал бы новую копию). Новое задание или проверка под этим ключом попадает в память и пишется заново.
+const quarantined = new Set();
 async function load(tgId, id) {
   const key = keyOf(tgId, id);
   if (jobs.has(key)) return jobs.get(key);
+  if (quarantined.has(`job:${key}`)) return null;
   if (!loadingJobs.has(key)) {
-    loadingJobs.set(key, readFile(jobFile(key), "utf8").then(JSON.parse).catch(() => null).then((job) => {
+    loadingJobs.set(key, readJson(jobFile(key), { missing: null }).catch((e) => { loadingJobs.delete(key); throw e; }).then((job) => {
       loadingJobs.delete(key);
       if (jobs.has(key)) return jobs.get(key);
-      if (!job) return null;
+      if (!job) { if (existsSync(jobFile(key))) quarantined.add(`job:${key}`); return null; }
       upgrade(job);
       job.busy = false;
       if (job.status === "running") job.status = "waiting";
@@ -245,15 +275,46 @@ async function load(tgId, id) {
  * свои порты на каждую лабу, а нагрузочные замеры — по одному, через общий файл-замок (см. lab-instruction.md).
  */
 const LAB_PARALLEL = Math.max(1, Number(process.env.LAB_PARALLEL) || 3);
-let activeTurns = 0;
-const waiting = []; // { job, resume }
-async function acquire(job) {
-  if (activeTurns < LAB_PARALLEL) { activeTurns++; return; }
-  await new Promise((resume) => waiting.push({ job, resume }));
+/*
+ * Замер 5 окт 2026 (настоящие агенты, сборка документа и перевод в PDF): три хода разом идут так же быстро, как один
+ * (74–95 с); пять — проходят, но каждый в 2,5 раза дольше, а свободной памяти остаётся 1,7 из 16 ГБ. Поэтому мест три.
+ * Справедливость (просьба владельца — «сколько человек одновременно»):
+ *  - один человек занимает не больше LAB_PER_USER мест (по умолчанию на одно меньше общего числа): третья его работа
+ *    ждёт, а место остаётся другим;
+ *  - короткие ходы («Кратко о работе», проверка своего отчёта) не стоят за часовыми лабами: у них одно своё место
+ *    сверх общих (LAB_SHORT_EXTRA).
+ * В списке ждущих остаются только те, кому сейчас начать нельзя; при освобождении места запускаются все, кому уже можно.
+ */
+const LAB_PER_USER = Math.max(1, Number(process.env.LAB_PER_USER) || Math.max(1, LAB_PARALLEL - 1));
+const LAB_SHORT_EXTRA = Math.max(0, Number(process.env.LAB_SHORT_EXTRA ?? 1) || 0);
+let activeTurns = 0, activeShort = 0;
+const perUser = new Map(); // tgId → сколько его ходов идёт сейчас
+const waiting = []; // { job, short, resume }
+const laneFor = (w) => ((perUser.get(w.job.tgId) || 0) >= LAB_PER_USER ? null
+  : activeTurns < LAB_PARALLEL ? "main" : w.short && activeShort < LAB_SHORT_EXTRA ? "short" : null);
+function occupy(w, lane) {
+  if (lane === "main") activeTurns++; else activeShort++;
+  perUser.set(w.job.tgId, (perUser.get(w.job.tgId) || 0) + 1);
+  return { tgId: w.job.tgId, lane };
 }
-function release() {
-  const next = waiting.shift();
-  if (next) next.resume(); else activeTurns--;
+/** Занять место в очереди агента; возвращает «место», которое потом отдаётся в release(). short — короткий ход. */
+async function acquire(job, { short = false } = {}) {
+  const w = { job, short }, lane = laneFor(w);
+  if (lane) return occupy(w, lane);
+  return new Promise((resume) => waiting.push({ ...w, resume }));
+}
+function release(slot) {
+  if (!slot || slot.freed) return;
+  slot.freed = true;
+  if (slot.lane === "main") activeTurns--; else activeShort--;
+  const left = (perUser.get(slot.tgId) || 1) - 1;
+  if (left > 0) perUser.set(slot.tgId, left); else perUser.delete(slot.tgId);
+  for (let i = 0; i < waiting.length;) {
+    const lane = laneFor(waiting[i]);
+    if (!lane) { i++; continue; }
+    const [w] = waiting.splice(i, 1);
+    w.resume(occupy(w, lane));
+  }
 }
 
 /**
@@ -265,7 +326,8 @@ export async function list(tgId) {
   const ids = (await readdir(JOBS).catch(() => [])).map((f) => own.exec(f)?.[1]).filter(Boolean);
   const out = [];
   for (const id of ids) {
-    const job = await load(tgId, id);
+    // Нечитаемое задание (файл занят) пропускаем до следующего опроса: из-за одного не должны пропадать все плашки.
+    const job = await load(tgId, id).catch((e) => { console.error(`lab ${keyOf(tgId, id)}: не прочитано для Главной — ${e.message || e}`); return null; });
     if (!job || !job.messages.length || Date.now() - (job.updatedAt || 0) > 21 * 86400e3) continue;
     if (job.dismissed) continue; // пользователь сам убрал плашку с Главной (см. dismiss)
     const active = ["running", "waiting", "error", "attached"].includes(job.status) || (job.status === "report" && !job.trial);
@@ -284,13 +346,16 @@ export async function get(tgId, id) {
   // отчёт. Ответа того хода сервер уже не получит — отчёт подбирается по JOB.json, когда студент открывает лабу.
   if (!job.busy && job.status === "waiting" && !picking.has(job.key)) {
     picking.add(job.key);
+    const outbox = [];
     try {
       const meta = await readJobMeta(job.dir);
-      if (meta?.status === "report" && meta.pdf && !job.busy && await takeReport(job, meta, { prevStatus: "waiting", quiet: true })) {
+      if (meta?.status === "report" && meta.pdf && !job.busy && await takeReport(job, meta, { prevStatus: "waiting", quiet: true, outbox })) {
         job.agent = { status: meta.status, text: meta.text };
         await save(job);
       }
     } finally { picking.delete(job.key); }
+    // Отчёт в Telegram уходит после ответа приложению: загрузка PDF не задерживает открытие лабы.
+    for (const send of outbox) void send().catch((e) => console.error(`lab ${job.key}: уведомление не ушло: ${e.message || e}`));
   }
   return liveProgress(job);
 }
@@ -320,7 +385,7 @@ async function download(url, token, dir, filename, size) {
   if (have && size && have.size === size) return name;
   if (have) { const dot = name.lastIndexOf("."); name = dot > 0 ? `${name.slice(0, dot)} (из Moodle)${name.slice(dot)}` : `${name} (из Moodle)`; }
   const full = url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token);
-  const buf = Buffer.from(await retry(() => mfetch(full, { signal: AbortSignal.timeout(60000) }).then((x) => { if (!x.ok) throw new Error(`файл «${name}»: HTTP ${x.status}`); return x.arrayBuffer(); })));
+  const buf = Buffer.from(await retry(() => mfetch(full, { timeoutMs: 60000 }).then((x) => { if (!x.ok) throw new Error(`файл «${name}»: HTTP ${x.status}`); return x.arrayBuffer(); })));
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, name), buf);
   return name;
@@ -350,15 +415,41 @@ async function prepare(job, token) {
   const course2 = await courseMaterials(job, token, job.courseId, a.cmid, files).catch((e) => { console.log(`lab ${job.key}: материалы курса: ${e.message || e}`); return null; });
   const title = await titleInfo(job, course).catch((e) => { console.log(`lab ${job.key}: данные для титульного листа: ${e.message || e}`); return null; });
   await writeStyleForLab(job).catch(() => {});
+  const term = await terminalNote(job).catch(() => "");
+  const texts = await extractTexts(job);
   const due = a.duedate ? new Date(a.duedate * 1000).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }) : "без срока";
   await writeFile(join(job.dir, "ЗАДАНИЕ.md"), [`# ${a.name}`, `Курс: ${course}`, `Срок сдачи: ${due}`,
     cfg.length ? `Ограничения на файлы: ${cfg.join(", ")}` : "", files.length ? `Вложения (лежат в этой же папке): ${files.join(", ")}` : "Вложений у задания нет.",
     course2?.files.length ? `Материалы со страницы курса (папка «${MATERIALS_DIR}»${course2.section ? `; раздел задания — «${course2.section}»` : ""}): ${course2.files.map((f) => `${f.name} (${f.from}: «${f.module}»)`).join(", ")}` : "",
     course2?.links.length ? `Ссылки со страницы курса: ${course2.links.map((l) => `«${l.name}» — ${l.url}`).join("; ")}` : "",
+    textsNote(texts) ? `\n${textsNote(texts)}` : "",
     title ? `
 ${title}` : "",
+    term ? `
+${term}` : "",
     "", "## Условие", htmlToText(a.intro) || "(текста условия нет — смотри вложения)"].filter((x) => x !== "").join("\n") + "\n");
-  return { files, course: course2 };
+  return { files, course: course2, texts };
+}
+
+/*
+ * Текст вложений и материалов курса (PDF, DOCX, HTML) — в tmp\тексты\ до первого хода (16 окт 2026, экономия агента):
+ * раньше агент сам писал скрипты извлечения, на методичку уходило до 9 вызовов модели, каждый с полным контекстом.
+ * Сбой здесь лабу не останавливает: агент тогда извлечёт текст сам, как раньше.
+ */
+const EXTRACT = join(DIR, "assets", "extract_text.py");
+const python = () => [process.env.PYTHON, "C:\\Program Files\\Python312\\python.exe"].find((p) => p && existsSync(p)) || "python";
+async function extractTexts(job) {
+  const r = await run(python(), ["-X", "utf8", EXTRACT, job.dir], { timeoutMs: 120e3 });
+  try {
+    if (r.code !== 0) throw new Error(r.err.trim().split("\n").pop() || `код ${r.code}`);
+    return JSON.parse(r.out);
+  } catch (e) { console.log(`lab ${job.key}: текст материалов: ${e.message || e}`); return []; }
+}
+function textsNote(texts) {
+  const ok = texts.filter((t) => !t.error && t.chars > 0);
+  if (!ok.length) return "";
+  const line = (t) => `- \`${t.file}\` → \`${t.txt}\` (${t.chars} знаков${t.pages ? `, ${t.pages} стр.` : ""}${t.scan ? "; скан — текста почти нет, смотри страницы" : ""})`;
+  return ["## Текст файлов уже извлечён", "Сервер извлёк текст вложений и материалов курса — читай эти файлы, а не извлекай заново. Оформление шаблона, рисунки и таблицы-картинки смотри в исходных файлах.", ...ok.map(line)].join("\n");
 }
 
 /*
@@ -407,6 +498,28 @@ async function titleInfo(job, courseName) {
 }
 
 /*
+ * Терминал для снимков: по методичке, а если она молчит — по ответу студента (правило владельца, 5 окт 2026). Агент
+ * записывает выбор в JOB.json: "terminal" (ключ из TERMINALS) и "terminalFrom" ("методичка" | "студент"). Ответ студента
+ * запоминается в его профиле (users.setTerminal) и в следующих работах подсказывается в ЗАДАНИЕ.md — чтобы не
+ * спрашивать одно и то же в каждой лабе. Выбор по методичке относится к работе и в профиль не идёт.
+ */
+async function terminalNote(job) {
+  const t = await terminalOf(job.tgId, job.courseId);
+  if (!t) return "";
+  const when = new Date(t.at).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" });
+  return ["## Терминал студента", t.scope === "course"
+    ? `В работе по этому курсу студент сам выбрал: ${TERMINALS[t.value]} (${when}). Если методичка этой работы не требует другой среды — делай в ней и не переспрашивай.`
+    : `В работе по другому курсу студент выбирал: ${TERMINALS[t.value]} (${when}). Если методичка этой работы среду не называет — всё равно спроси, но предложи этот вариант первым.`].join("\n");
+}
+async function noteTerminal(job, meta) {
+  const value = String(meta?.terminal || "").toLowerCase();
+  const from = meta?.terminalFrom === "студент" ? "студент" : meta?.terminalFrom === "методичка" ? "методичка" : null;
+  if (!from || !Object.hasOwn(TERMINALS, value) || (job.terminal?.value === value && job.terminal?.from === from)) return;
+  job.terminal = { value, from };
+  if (from === "студент") await setTerminal(job.tgId, job.courseId, value).catch(() => {});
+}
+
+/*
  * Память оформления по курсу (просьба владельца, 3 окт 2026). Агент вместе с отчётом пишет work\report\ОФОРМЛЕНИЕ.md —
  * как оформлен отчёт (поля, шрифт, титульный лист без ФИО, порядок разделов). Когда эту работу в Moodle оценили, сдан
  * именно файл агента и в замечаниях нет претензий к оформлению — описание становится образцом курса
@@ -422,18 +535,26 @@ const OWNER_STYLE = "как в принятых отчётах студента:
 const GOST_STYLE = "по ГОСТ 7.32-2017: Times New Roman 14, межстрочный интервал 1,5, поля — левое 30 мм, правое 15 мм, верхнее и нижнее 20 мм, абзацный отступ 1,25 см, выравнивание по ширине; страницы нумеруются внизу по центру, на титульном листе номер не ставится; заголовки разделов — с абзацного отступа полужирным, структурные элементы (СОДЕРЖАНИЕ, ВВЕДЕНИЕ, ЗАКЛЮЧЕНИЕ, СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ) — прописными по центру, каждый с новой страницы; «Таблица N – Название» над таблицей слева, «Рисунок N – Название» под рисунком по центру; список источников — по ГОСТ Р 7.0.100-2018; десятичная запятая";
 const styleRule = (job) => `если в рабочей папке есть \`${STYLE_FILE}\` — оформление, с которым по этому курсу уже приняли отчёт: повторяй его (поля, шрифт, интервалы, титульный лист, порядок разделов); иначе — ${job.tgId === OWNER_ID ? OWNER_STYLE : GOST_STYLE}`;
 
+// Образцы курса и согласие автора читаются строго (15 окт 2026): «не прочитали» — ошибка, а не «образца нет».
 async function courseStyle(job) {
   if (!job.courseId) return null;
-  const data = await readFile(join(STYLES, `${job.courseId}.json`), "utf8").then(JSON.parse).catch(() => null);
+  const data = await readJson(join(STYLES, `${job.courseId}.json`), { missing: null });
   if (!data?.entries?.length) return null;
   const own = data.entries.find((e) => e.src === srcOf(job.tgId));
   if (own) return own;
-  for (const e of data.entries.slice().sort((a, b) => b.at - a.at)) if ((await remarksConsent(e.tgId).catch(() => null))?.share) return e;
+  for (const e of data.entries.slice().sort((a, b) => b.at - a.at)) if ((await remarksConsent(e.tgId).catch((err) => { if (isStateReadError(err)) throw err; return null; }))?.share) return e;
   return null;
 }
 async function writeStyleForLab(job) {
   const path = join(job.dir, STYLE_FILE);
-  const st = await courseStyle(job).catch(() => null);
+  let st;
+  try { st = await courseStyle(job); }
+  catch (e) {
+    // Не прочитали образец — оставляем прежний файл в папке лабы: удалить его значило бы «образца нет» из-за сбоя чтения.
+    if (!isStateReadError(e)) throw e;
+    console.error(`lab ${job.key}: образец оформления курса не прочитан — ${e.message || e}`);
+    return existsSync(path);
+  }
   if (!st) { await rm(path, { force: true }).catch(() => {}); return false; }
   const when = new Date(st.at).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" });
   // Описание написано агентом в лабе ДРУГОГО студента — для этой лабы это чужой текст: только справка об оформлении.
@@ -443,43 +564,50 @@ async function writeStyleForLab(job) {
 async function saveCourseStyle(job, text) {
   await mkdir(STYLES, { recursive: true });
   const path = join(STYLES, `${job.courseId}.json`);
-  const data = await readFile(path, "utf8").then(JSON.parse).catch(() => ({ courseId: job.courseId, course: job.course, entries: [] }));
+  // Пустой список — только если файла нет (или он испорчен и отложен в .bad-*). Занятый файл — ошибка: иначе запись
+  // стёрла бы принятые образцы других студентов, а у их работ уже стоит styleSaved — сами они больше не появятся.
+  const data = await readJson(path, { missing: () => ({ courseId: job.courseId, course: job.course, entries: [] }) });
   const src = srcOf(job.tgId);
-  data.entries = data.entries.filter((e) => e.src !== src);
+  data.entries = (Array.isArray(data.entries) ? data.entries : []).filter((e) => e.src !== src);
   data.entries.push({ src, tgId: job.tgId, at: Date.now(), title: job.title, text });
   data.course = job.course || data.course;
-  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  await writeFile(tmp, JSON.stringify(data, null, 1));
-  await rename(tmp, path);
+  await writeJsonAtomic(path, data, { space: 1 });
 }
 /**
  * Из обхода сервера (раз в 15 мин, работы пользователя из Moodle): оценённая работа, сданная файлом агента и без
  * замечаний к оформлению, — её ОФОРМЛЕНИЕ.md сохраняется образцом курса. Каждая работа проверяется один раз.
  */
+// 15 окт 2026: каждая работа — в своём try. Раньше ошибка чтения одного задания обрывала цикл, и остальные оценённые
+// работы не проверялись; теперь она пропускается (styleSaved не ставится) и проверится на следующем обходе. ОФОРМЛЕНИЕ.md
+// и ФИО для обезличивания тоже читаются строго: занятый файл — не «файла нет» (иначе навсегда «nofile»), а без ФИО
+// образец ушёл бы в общий файл курса необезличенным.
 export async function noteGrades(tgId, d) {
   for (const x of d?.items || []) {
     const m = /^moodle:assign:(\d+)$/.exec(String(x.id));
     if (!m || x.grade == null) continue;
-    const job = await load(tgId, m[1]);
-    if (!job?.report || job.styleSaved || job.busy) continue;
-    // Оценка ещё с прежнего файла (стояла до прикрепления) — ждём новой оценки или нового отзыва преподавателя.
-    const lastNote = Math.max(0, ...(x.remarks || []).map((r) => r.at || 0));
-    if (job.gradeBefore != null && x.grade === job.gradeBefore && !(lastNote > (job.moodle?.at || 0))) continue;
-    const sent = (x.submission?.files || []).map(String);
-    if (!sent.some((f) => f === job.report.name || (job.fix?.name && f === job.fix.name))) continue; // сдан не файл агента
-    const remarks = (x.remarks || []).map((r) => r.text || "").join("\n");
-    let mark = "remarks";
-    if (!FORMAT_WORDS.test(remarks)) {
-      const text = await readFile(join(job.dir, STYLE_OUT), "utf8").catch(() => null);
-      if (text && job.courseId) {
-        const { fullName = "" } = await remarksConsent(tgId).catch(() => ({}));
-        await saveCourseStyle(job, text.split("\n").map((l) => anonymize(l, fullName)).join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 6000));
-        console.log(`lab ${job.key}: оформление принятой работы сохранено образцом курса ${job.courseId}`);
-        mark = Date.now();
-      } else mark = "nofile";
-    }
-    job.styleSaved = mark;
-    await save(job);
+    try {
+      const job = await load(tgId, m[1]);
+      if (!job?.report || job.styleSaved || job.busy) continue;
+      // Оценка ещё с прежнего файла (стояла до прикрепления) — ждём новой оценки или нового отзыва преподавателя.
+      const lastNote = Math.max(0, ...(x.remarks || []).map((r) => r.at || 0));
+      if (job.gradeBefore != null && x.grade === job.gradeBefore && !(lastNote > (job.moodle?.at || 0))) continue;
+      const sent = (x.submission?.files || []).map(String);
+      if (!sent.some((f) => f === job.report.name || (job.fix?.name && f === job.fix.name))) continue; // сдан не файл агента
+      const remarks = (x.remarks || []).map((r) => r.text || "").join("\n");
+      let mark = "remarks";
+      if (!FORMAT_WORDS.test(remarks)) {
+        const text = await readStateText(join(job.dir, STYLE_OUT));
+        if (text && job.courseId) {
+          const { fullName = "" } = await remarksConsent(tgId);
+          await saveCourseStyle(job, text.split("\n").map((l) => anonymize(l, fullName)).join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 6000));
+          console.log(`lab ${job.key}: оформление принятой работы сохранено образцом курса ${job.courseId}`);
+          mark = Date.now();
+        } else mark = "nofile";
+      }
+      job.styleSaved = mark;
+      void quality.note("graded", job, { format: FORMAT_WORDS.test(remarks) });
+      await save(job);
+    } catch (e) { console.error(`lab ${keyOf(tgId, m[1])}: оценка не обработана, повторю на следующем обходе — ${e.message || e}`); }
   }
 }
 
@@ -570,6 +698,7 @@ async function envInstruction(job, needs, { approved = false } = {}) {
   return tpl.replaceAll("{{TITLE}}", lit(job.title)).replaceAll("{{COURSE}}", lit(job.course)).replaceAll("{{KEY}}", lit(job.key)).replaceAll("{{DIR}}", lit(job.dir))
     .replaceAll("{{NEEDS}}", lit(needs.items.map((i) => `- ${i.name}${i.why ? ` — ${i.why}` : ""}${i.where ? ` (${i.where})` : ""}${i.check ? `; проверка: \`${i.check}\`` : ""}`).join("\n")))
     .replaceAll("{{README}}", lit(TOOLS_README)).replaceAll("{{FREE_GB}}", lit(free))
+    .replaceAll("{{DOCKER_START}}", lit(dockerRule())).replaceAll("{{INSTALL_LOCK}}", lit(sharedFile(".install.lock")))
     .replaceAll("{{WSL_ID}}", lit(job.tgId === OWNER_ID ? "owner" : String(job.tgId)))
     .replaceAll("{{SURNAME}}", lit((job.student?.fullName || "").split(/\s+/)[0].replace(/"/g, "")));
 }
@@ -679,7 +808,13 @@ export async function decideEnv(tgId, id, approve) {
   } else {
     job.envNote = `[Сообщение приложения, не студента.] Владелец ПК отклонил установку: ${names(no)}. Обходись без них: используй замену или сделай то, что возможно без них, и скажи студенту, что именно.`;
     await save(job);
-    if (idle()) { const n = job.envNote; delete job.envNote; void turn(job, `${n}\n\nПродолжай работу.`); }
+    if (idle()) {
+      const stop = await trialStop(job);
+      // Заметку (envNote) turn() приложит сам, если ход действительно начнётся; пока шла проверка, студент мог написать —
+      // тогда turn() не запустится, а заметка уйдёт с его сообщением.
+      if (stop) { push(job, "system", stop); await save(job); }
+      else if (idle()) void turn(job, "Продолжай работу.");
+    }
   }
   return publicJob(job);
 }
@@ -689,13 +824,21 @@ export async function decideEnv(tgId, id, approve) {
  * ради окружения (JOB.json working), после подготовки продолжаем ход сами, студенту ничего писать не нужно.
  */
 async function setupEnv(job, needs, { autoContinue = false, approved = false } = {}) {
+  // Пробная лаба за пределом расхода или закрытая: сессию окружения не запускаем (её расход тоже идёт в лабу). Отметку
+  // «окружение готово» не ставим: когда доступ вернут, следующий ход снова запросит подготовку по тому же списку.
+  const stop = await trialStop(job);
+  if (stop) {
+    push(job, "system", `${approved ? "Разрешённое владельцем пока не поставлено. " : ""}${stop}`);
+    await save(job);
+    return;
+  }
   if (approved) job.envRequest.state = "installing"; // повтор по решению владельца: хеш списка лабы (job.env) не трогаем
   else job.env = { hash: needs.hash, done: false, at: Date.now() };
   job.envStage = `${approved ? "Ставлю разрешённое владельцем" : "Готовлю окружение"}: ${needs.items.slice(0, 4).map((i) => i.name).join(", ")}${needs.items.length > 4 ? "…" : ""}`;
   await save(job);
   const msgFile = join(job.dir, "tmp", `env-${Date.now()}.md`);
   let out;
-  await acquire(job); // место в очереди агента — как у хода лабы
+  const slot = await acquire(job); // место в очереди агента — как у хода лабы
   try {
     await mkdir(dirname(msgFile), { recursive: true });
     await writeFile(msgFile, await envInstruction(job, needs, { approved }));
@@ -710,7 +853,7 @@ async function setupEnv(job, needs, { autoContinue = false, approved = false } =
   } catch (e) {
     out = { note: `Подготовить окружение не удалось (${e.message || e}). Проверь нужные программы сам; что можно поставить без прав администратора (pip --user, npm, docker pull) — поставь, остальное — скажи студенту и предложи замену.`, student: null, owner: null, pending: [] };
     console.error(`lab ${job.key}: окружение: ${e.message || e}`);
-  } finally { release(); }
+  } finally { release(slot); }
   if (approved) job.envRequest.state = "done"; else job.env.done = true;
   job.envStage = null;
   const prefix = approved ? "Владелец разрешил установку, и она выполнена. " : "";
@@ -721,7 +864,12 @@ async function setupEnv(job, needs, { autoContinue = false, approved = false } =
   if (out.owner || ask) await tgSend(OWNER_ID, [out.owner, ask?.text].filter(Boolean).join("\n\n"), undefined, ask?.buttons).catch(() => {});
   await save(job);
   // Ход лабы, пришедший за это время, ждёт в turn() и заберёт заметку сам; иначе продолжаем ход, если агент его ради окружения прервал.
-  if (autoContinue && !job.busy && job.status === "waiting") { const n = job.envNote; delete job.envNote; void turn(job, `${n}\n\nПродолжай работу.`); }
+  if (autoContinue && !job.busy && job.status === "waiting") {
+    const stop2 = await trialStop(job);
+    // envNote turn() приложит сам (см. decideEnv); не начался ход — заметка уйдёт со следующим сообщением студента.
+    if (stop2) { push(job, "system", stop2); await save(job); }
+    else if (!job.busy && job.status === "waiting") void turn(job, "Продолжай работу.");
+  }
 }
 
 const GATEWAY_DOWN = /Gateway not reachable|ECONNREFUSED/i;
@@ -769,6 +917,8 @@ function parseAgentOutput(r) {
     let reply = j.result?.meta?.finalAssistantVisibleText || j.result?.payloads?.map((p) => p.text).filter(Boolean).join("\n\n") || "";
     if (j.status && j.status !== "ok" && !reply) reply = `Агент завершил ход со статусом ${j.status}: ${j.summary || ""}`;
     const am = j.result?.meta?.agentMeta;
+    // Ход с действиями прошёл, а сторож агента ни разу не вызвался — владельцу сообщение (guard-watch.mjs).
+    guardAfterTurn(j.result?.meta?.toolSummary?.tools, Date.now() - (Number(r.ms) || 0), (text) => tgSend(OWNER_ID, text));
     return { delivered: true, accepted: true, reply, why: "", usage: am?.usage || null, last: am?.lastCallUsage || null, calls: j.result?.meta?.toolSummary?.calls ?? null };
   }
   // Не JSON: при коде 0 текст считаем ответом, иначе это сбой запуска.
@@ -789,7 +939,39 @@ async function alertOwner(job) {
  * круг проверки. quiet — подбор отчёта вне хода (см. get): без сообщений, если принимать нечего.
  * Возвращает true, если студенту показан новый отчёт.
  */
-async function takeReport(job, meta, { prevStatus, quiet = false } = {}) {
+/**
+ * Путь готового отчёта пишет агент (JOB.json), а сервер по нему показывает файл студенту и шлёт его в Telegram. Поэтому
+ * принимается только настоящий PDF из папки отчёта этой лабы: иначе подсунутый агенту текст мог бы «показать» любой
+ * файл ПК. Возвращает причину отказа (словами для студента) или null. DOCX вне папки или не DOCX просто не запоминается.
+ */
+async function reportProblem(job, meta, st) {
+  const root = resolve(job.dir, "work", "report").toLowerCase() + sep;
+  const inside = (p) => resolve(String(p)).toLowerCase().startsWith(root);
+  const head = async (p, n) => {
+    const f = await open(p, "r").catch(() => null);
+    if (!f) return "";
+    try { const b = Buffer.alloc(n); const { bytesRead } = await f.read(b, 0, n, 0); return b.subarray(0, bytesRead).toString("latin1"); } finally { await f.close(); }
+  };
+  if (!inside(meta.pdf)) return "файл лежит не в папке work\\report этой работы";
+  if (!/\.pdf$/i.test(meta.pdf) || (await head(meta.pdf, 5)) !== "%PDF-") return "это не PDF (похоже, конвертация не удалась)";
+  if (st.size < 1024) return "файл пустой";
+  if (meta.docx && !(inside(meta.docx) && /\.docx$/i.test(meta.docx) && (await head(meta.docx, 2)) === "PK")) meta.docx = null;
+  return null;
+}
+
+/**
+ * Имя файла с точкой на конце («…Саинов Р.Д.» + «.pdf»): программа сборки и Word пишут «…Р.Д.pdf», а агент называет
+ * «…Р.Д..pdf» (5 окт 2026: студент не получил готовый отчёт — «файл не найден»). Берём тот вариант, что есть на диске.
+ */
+async function existingPath(p) {
+  if (!p || await stat(p).catch(() => null)) return p;
+  for (const alt of [p.replace(/\.\.(pdf|docx)$/i, ".$1"), p.replace(/([^.])\.(pdf|docx)$/i, "$1..$2")]) if (alt !== p && await stat(alt).catch(() => null)) return alt;
+  return p;
+}
+// outbox — список, куда кладётся уведомление в Telegram вместо немедленной отправки (см. turn: уходит после конца хода).
+async function takeReport(job, meta, { prevStatus, quiet = false, outbox = null } = {}) {
+  meta.pdf = await existingPath(meta.pdf);
+  meta.docx = await existingPath(meta.docx);
   const st = await stat(meta.pdf).catch(() => null);
   if (st && job.fix && !job.fix.done && st.mtimeMs < job.fix.at - 2000) {
     // Идёт исправление по замечаниям, а агент показал файл, собранный ещё ДО замечаний: исправленного отчёта нет.
@@ -803,6 +985,14 @@ async function takeReport(job, meta, { prevStatus, quiet = false } = {}) {
     if (quiet) return false;
     job.status = "waiting";
     push(job, "system", `Агент сообщил о готовом отчёте, но файл не найден: ${meta.pdf}`);
+    return false;
+  }
+  const bad = await reportProblem(job, meta, st);
+  if (bad) {
+    if (quiet) return false;
+    console.error(`лаба ${job.key}: отчёт не принят — ${bad}: ${meta.pdf}`);
+    job.status = "waiting";
+    push(job, "system", `Агент сообщил о готовом отчёте, но ${bad}. Напишите «продолжай» — он соберёт отчёт заново.`);
     return false;
   }
   // Новый ли это файл: другой путь или пересобран после прошлого показа. Ответ агента на вопрос по готовому
@@ -821,15 +1011,17 @@ async function takeReport(job, meta, { prevStatus, quiet = false } = {}) {
   job.review = "pending";
   // Что это за отчёт: первый, исправленный по замечаниям преподавателя, по правкам самого студента или просто пересобранный.
   const kind = fixed ? "teacher" : job.revising === "review" ? "review" : prev ? "updated" : "first";
+  if (kind === "review") job.reviewRounds = (job.reviewRounds || 0) + 1; // правки по словам студента — для журнала качества
   const head = { first: "Отчёт готов", teacher: "Отчёт исправлен по замечаниям преподавателя", review: "Отчёт исправлен по вашим замечаниям", updated: "Отчёт обновлён" }[kind];
   push(job, "assistant", `${head} — файл в этом сообщении. Проверьте его, пожалуйста: всё ли правильно и всё ли устраивает?\n\nЕсли да — нажмите «Всё хорошо», и я предложу прикрепить отчёт в Moodle. Если нет — напишите, что ${kind === "first" ? "" : "ещё "}исправить: я переделаю и пришлю снова.`,
     { kind: "report", report: { name: job.report.name, size: st.size, pages: job.report.pages } });
   const size = `${(st.size / 1048576).toFixed(1)} МБ${meta.pages ? `, ${meta.pages} стр.` : ""}`;
-  await notify(job, kind === "first"
+  const send = () => notify(job, kind === "first"
     ? `📄 Отчёт по «${job.title}» готов (${size}). Посмотрите его и ответьте в приложении: всё хорошо или что исправить.`
     : kind === "updated"
       ? `📄 Отчёт по «${job.title}» обновлён (${size}). Посмотрите его и ответьте в приложении: всё хорошо или что исправить.`
       : `✏️ Отчёт по «${job.title}» исправлен ${kind === "teacher" ? "по замечаниям преподавателя" : "по вашим замечаниям"} (${size}). Посмотрите его и ответьте в приложении: всё хорошо или что ещё исправить.`, meta.pdf);
+  if (outbox) outbox.push(send); else await send();
   return true;
 }
 
@@ -854,12 +1046,16 @@ async function turn(job, message, { first = false, fixing = false, resumed = 0 }
   await writeForLab(dir, job.id, job.course, job.courseId).catch(() => {});
   await writeStyleForLab(job).catch(() => {});
   let resume = null; // текст для автоматического продолжения, если ход оборвётся (сон ПК, обрыв связи)
+  // Сообщения в Telegram по итогам хода — после его конца (finally): раньше статус «report» или «waiting» уже был виден
+  // приложению, а busy снимался только после отправки (PDF — секунды, до 2 минут), и «Всё хорошо», «Прикрепить» или
+  // ответ агенту в это окно получали «Агент ещё работает» (стенд, 15 окт 2026).
+  const outbox = [];
   // Идёт подготовка окружения по списку агента (setupEnv): ход ждёт её, чтобы агент сразу получил итог. Ждём до очереди,
   // иначе ход держал бы место, которого ждёт сама подготовка.
   const envJob = envJobs.get(job.key);
   if (envJob) { job.stage = job.envStage || "Готовлю окружение"; await save(job); await envJob.catch(() => {}); }
   if (job.envNote) { message = `${job.envNote}\n\n${message}`; delete job.envNote; }
-  await acquire(job); // ждём своей очереди, если агент занят лабой другого пользователя
+  const slot = await acquire(job); // ждём своей очереди, если агент занят лабой другого пользователя
   const startedAt = Date.now();
   try {
     await mkdir(dirname(msgFile), { recursive: true });
@@ -870,7 +1066,7 @@ async function turn(job, message, { first = false, fixing = false, resumed = 0 }
     let r, res;
     for (let attempt = 1; ; attempt++) {
       r = await openclaw(["agent", "--agent", "files", "--session-key", `agent:files:lab-${job.key}`, "--message-file", msgFile,
-        "--json", "--timeout", String(TURN_TIMEOUT_S), "--thinking", thinking], { timeoutMs: (TURN_TIMEOUT_S + 60) * 1000 });
+        "--json", "--timeout", String(TURN_TIMEOUT_S), "--thinking", thinking, ...modelArgs(job)], { timeoutMs: (TURN_TIMEOUT_S + 60) * 1000 });
       res = parseAgentOutput(r);
       // Повторяем, только если ход точно не начинался (Gateway не ответил на подключение). Если он успел принять ход,
       // повтор запустил бы его второй раз.
@@ -926,6 +1122,7 @@ async function turn(job, message, { first = false, fixing = false, resumed = 0 }
 
     const meta = await readJobMeta(dir);
     job.agent = meta ? { status: meta.status, text: meta.text } : null;
+    await noteTerminal(job, meta);
     // Новый (или изменённый) список программ от агента — после хода готовим окружение (setupEnv), см. ниже.
     const needs = await readNeeds(job).catch(() => null);
     const envPending = !!needs && needs.hash !== job.env?.hash;
@@ -933,13 +1130,13 @@ async function turn(job, message, { first = false, fixing = false, resumed = 0 }
     if (meta?.stage) job.stage = String(meta.stage);
     const short = (s) => { const t = String(s || "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim(); return t.length > 300 ? `${t.slice(0, 300)}…` : t; };
     if (meta?.status === "report" && meta.pdf) {
-      const shown = await takeReport(job, meta, { prevStatus });
+      const shown = await takeReport(job, meta, { prevStatus, outbox });
       // Ход по готовому отчёту закончился, а файл не менялся (агент ответил на вопрос, уточняет правку или не смог
       // пересобрать): сообщаем ответ — иначе студент ждал бы «Отчёт исправлен», который не придёт.
-      if (!shown && job.revising && job.status !== "waiting") await notify(job, `💬 Doodle ответил по лабораторной «${job.title}» (отчёт пока не менялся):\n${short(reply)}`);
+      if (!shown && job.revising && job.status !== "waiting") outbox.push(() => notify(job, `💬 Doodle ответил по лабораторной «${job.title}» (отчёт пока не менялся):\n${short(reply)}`));
     } else {
       job.status = "waiting";
-      if (meta?.status === "blocked") await notify(job, `⛔ Лаба «${job.title}»: нужна ваша помощь.\n${short(meta.text || reply)}`);
+      if (meta?.status === "blocked") outbox.push(() => notify(job, `⛔ Лаба «${job.title}»: нужна ваша помощь.\n${short(meta.text || reply)}`));
       else if (slept && resumed < AUTO_RESUMES) {
         // Ответ пришёл, но ПК за время хода спал, а работа не закончена (ни отчёта, ни вопроса): после сна ход агента
         // обычно обрывается на полуслове. Продолжаем сами — и просим переснять замеры, попавшие на сон.
@@ -954,7 +1151,7 @@ async function turn(job, message, { first = false, fixing = false, resumed = 0 }
         // иначе он не узнает, что агент давно ждёт, пока не откроет приложение. Кнопка открывает чат этой лабы.
         // Вопрос — по JOB.json или по самому ответу (агент не всегда ставит статус question, но заканчивает вопросом).
         const asks = meta?.status === "question" || /\?\s*$/.test(String(reply).trim());
-        await notify(job, `💬 Doodle ждёт ваш ответ по лабораторной «${job.title}».\n${asks ? short(meta?.text || reply) : `${short(reply)}\n\nЧтобы агент продолжил, напишите в чате лабы (можно просто «продолжай»).`}`);
+        outbox.push(() => notify(job, `💬 Doodle ждёт ваш ответ по лабораторной «${job.title}».\n${asks ? short(meta?.text || reply) : `${short(reply)}\n\nЧтобы агент продолжил, напишите в чате лабы (можно просто «продолжай»).`}`));
       }
     }
     if (envPending) envJobs.set(job.key, setupEnv(job, needs, { autoContinue: !resume && !["question", "report", "blocked"].includes(meta?.status) }).finally(() => envJobs.delete(job.key)));
@@ -963,13 +1160,21 @@ async function turn(job, message, { first = false, fixing = false, resumed = 0 }
     job.error = String(e.message || e);
     push(job, "system", `Ошибка: ${job.error}`);
   } finally {
-    release();
+    release(slot);
+    // Автопродолжение пробной лабы — только в пределах её расхода и пока пробный не закрыт (trialStop).
+    // Остановили — статус прежний (готовый или прикреплённый отчёт не теряет кнопок), а пометка о прерванном ходе (сон,
+    // недействительные замеры) уйдёт агенту со следующим сообщением студента (resumeNote, см. message).
+    if (resume) {
+      const stop = await trialStop(job);
+      if (stop) { job.resumeNote = resume; resume = null; job.status = prevStatus === "report" || prevStatus === "attached" ? prevStatus : "waiting"; push(job, "system", stop); }
+    }
     job.busy = false;
     job.turnAt = null;
     if (!resume) job.revising = null; // при автопродолжении исправление ещё идёт
     if (resume) job.status = "running"; // для приложения работа не прерывалась: следующий ход начинается сразу
     await save(job);
     if (resume) void turn(job, resume, { fixing, resumed: resumed + 1 });
+    for (const send of outbox) await send().catch((e) => console.error(`lab ${job.key}: уведомление не ушло: ${e.message || e}`));
   }
 }
 
@@ -1027,7 +1232,10 @@ function newJob(id, meta) {
   return {
     id, tgId, key: keyOf(tgId, id), dir: dirOf(tgId, id), title: plain(meta.title, 200) || `Задание ${id}`, course: plain(meta.course, 200), due: Number(meta.due) || null, student, trial: !!meta.trial,
     status: "running", messages: [], report: null, moodle: null, agent: null, error: null,
-    token: randomBytes(12).toString("hex"), createdAt: Date.now(), updatedAt: Date.now(), busy: false,
+    // busy сразу (16 окт 2026, ревью пробного отчёта): задание попадает в память до подготовки инструкции, и с busy: false
+    // сообщение студента в это окно запускало свой ход, а потом фон запускал первый — два хода в одной сессии, расход вдвое.
+    // Снимает его тот, кто запускает первый ход (startJob, fixJob), или ошибка подготовки.
+    token: randomBytes(12).toString("hex"), createdAt: Date.now(), updatedAt: Date.now(), busy: true,
   };
 }
 
@@ -1037,7 +1245,9 @@ async function instructionFor(job, meta) {
   await mkdir(join(dir, "work", "out"), { recursive: true });
   await mkdir(join(dir, "work", "report"), { recursive: true });
   await mkdir(join(dir, "tmp"), { recursive: true });
-  const tpl = await readFile(join(DIR, "lab-instruction.md"), "utf8");
+  job.reportMode ??= kitFor(job) ? "kit" : "classic";
+  if (job.reportMode === "kit") await writeKitFiles(job).catch((e) => console.log(`kit ${job.key}: ${e.message || e}`));
+  const tpl = await rulesTemplate(job);
   await writeForLab(dir, job.id, job.course, job.courseId).catch(() => {}); // типичные замечания преподавателя (lessons.mjs); обновляется к каждому ходу
   job.instrHash = hashOf(tpl); // какую версию правил агент получил (см. withRulesUpdate)
   const courseWord = (job.course.split(/\s+/).find((w) => w.length > 4) || job.course).replace(/[^\p{L}\p{N}-]/gu, "");
@@ -1046,6 +1256,7 @@ async function instructionFor(job, meta) {
     .replaceAll("{{COURSE_WORD}}", lit(courseWord)).replaceAll("{{DUE}}", lit(job.due ? new Date(job.due).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }) : "не указан"))
     .replaceAll("{{DIR}}", lit(dir))
     .replaceAll("{{STYLE}}", lit(styleRule(job)))
+    .replaceAll("{{STYLE_KIT}}", lit(`профиль «${job.tgId === OWNER_ID ? "МИСИС, Times New Roman 12" : "ГОСТ 7.32, Times New Roman 14"}»; если в рабочей папке есть «${STYLE_FILE}» (оформление, с которым по этому курсу уже приняли отчёт) — приведи style.json к нему`))
     // Лабы в WSL (assets\wsl_lab.py): у владельца ПК — его пользователь Ubuntu, у остальных — свой, по фамилии.
     .replaceAll("{{WSL_ID}}", lit(job.tgId === OWNER_ID ? "owner" : String(job.tgId)))
     .replaceAll("{{SURNAME}}", lit((student.fullName || "").split(/\s+/)[0].replace(/"/g, "")))
@@ -1058,24 +1269,66 @@ async function instructionFor(job, meta) {
     .replaceAll("{{TITLE_PAGE}}", lit(`${student.shortName || "ФИО"}, ${student.group || "группа"}, вариант ${student.variant || "—"} — как подтвердил студент`));
   // Проверочный запуск на уже сданной работе: агент делает всё как в первый раз, но знает, что старый ответ в Moodle трогать нельзя.
   if (meta.trial) instruction += `\n\n## Проверочный запуск\nЭта работа в Moodle уже сдана и оценена; сейчас проверяется сам процесс. Делай всё как в первый раз, готовый отчёт из Moodle не скачивай и не используй. Прикреплять ничего не нужно (это и невозможно: ответ закрыт).`;
+  // Какие правила агент получил (текстом, рядом с instrHash): при их изменении он получит только разницу (withRulesUpdate).
+  await writeFile(rulesFile(job.key), instruction).catch(() => {});
   return instruction;
 }
 const materialsNote = (m) => [
   m.files.length ? `Вложения: ${m.files.map((f) => `\`${f}\``).join(", ")}.` : "Вложений у задания нет.",
   m.course?.files?.length ? `Со страницы курса сервер взял ещё ${m.course.files.length} файл(ов) — они в папке \`${MATERIALS_DIR}\\\`: ${m.course.files.map((f) => `\`${f.name}\``).join(", ")} (список с разделами — в ЗАДАНИЕ.md).` : "",
+  textsNote(m.texts || []) ? "Их текст сервер уже извлёк в `tmp\\тексты\\` (список — в ЗАДАНИЕ.md)." : "",
 ].filter(Boolean).join(" ");
 
 const hashOf = (text) => createHash("sha1").update(text).digest("hex").slice(0, 12);
+/*
+ * Сборка отчёта программой (assets\report_kit.py; 5 окт 2026, просьба владельца «уменьшить расход токенов»). Раньше агент
+ * в каждой лабе писал свой скрипт сборки DOCX и конвертации в PDF — десятки лишних ходов. Теперь он пишет содержание
+ * (report.md), а оформление, титул, оглавление, PDF и проверку делает программа. Включается по ступеням: файл
+ * report-kit.txt рядом с сервером или переменная REPORT_KIT — off (по умолчанию), owner (только лабы владельца), all.
+ * Способ сборки запоминается в работе (job.reportMode) при её запуске: начатые работы идут как начались.
+ */
+const kitMode = () => (process.env.REPORT_KIT || (existsSync(join(DIR, "report-kit.txt")) ? readFileSync(join(DIR, "report-kit.txt"), "utf8") : "off")).trim().toLowerCase();
+const kitFor = (job) => { const m = kitMode(); return m === "all" || (m === "owner" && job.tgId === OWNER_ID); };
+/**
+ * Текст правил для этой работы: общая часть + шаг «собери отчёт» в её способе сборки (lab-report-kit.md или
+ * lab-report-classic.md). Замок замеров и запуск Docker зависят от того, под какой учётной записью работает агент
+ * (agent-account.mjs), и подставляются здесь, до подсчёта версии правил: на ПК, где они не изменились, идущим лабам
+ * правила заново не рассылаются.
+ */
+async function rulesTemplate(job) {
+  const main = await readFile(join(DIR, "lab-instruction.md"), "utf8");
+  const step = await readFile(join(DIR, job.reportMode === "kit" ? "lab-report-kit.md" : "lab-report-classic.md"), "utf8");
+  return main.replace("{{REPORT_STEP}}", () => step.trim()).replaceAll("{{LOCK}}", () => measureLock()).replaceAll("{{DOCKER_START}}", () => dockerRule());
+}
+/** Для сборки программой в папке лабы заранее лежат профиль оформления и данные титульного листа (агент их только уточняет). */
+async function writeKitFiles(job) {
+  const style = join(job.dir, "style.json"), title = join(job.dir, "title.json"), s = job.student || {};
+  if (!existsSync(style)) await copyFile(join(DIR, "assets", "styles", job.tgId === OWNER_ID ? "misis-12.json" : "gost.json"), style);
+  if (!existsSync(title)) await writeFile(title, JSON.stringify({ student: s.shortName || "", group: s.group || "", variant: s.variant || "", course: job.course || "", city: "Москва", year: String(new Date().getFullYear()) }, null, 1));
+}
 /**
  * Правила (lab-instruction.md) агент получает один раз — в первом ходе лабы. Если их поменяли, пока лаба идёт (1 окт 2026:
  * оформление терминала под PowerShell и образец верхней панели), агент в этой лабе о них не знал и на «сделай по
  * образцу» ответил, что образца не видит. Поэтому при первом сообщении после изменения правил к нему один раз
- * прикладываются актуальные правила целиком.
+ * прикладываются актуальные правила.
+ * С 16 окт 2026 (п. 161 NOTES.md) — только изменённые строки (rules-diff.mjs), если сервер помнит, какие правила агент
+ * получил (jobs\<key>.rules.md): правила целиком — 27–37 тыс. знаков, и в ходах с правками они уходили заново, хотя
+ * менялись один-два пункта. Целиком — если прежних правил нет (лаба начата до этого) или изменилось больше половины.
+ * Полный текст в любом случае лежит в tmp\ПРАВИЛА.md рабочей папки — на случай, если агент прежних правил не помнит.
  */
+const rulesFile = (key) => join(JOBS, `${key}.rules.md`);
 async function withRulesUpdate(job, text) {
-  const tpl = await readFile(join(DIR, "lab-instruction.md"), "utf8").catch(() => null);
+  const tpl = await rulesTemplate(job).catch(() => null);
   if (!tpl || job.instrHash === hashOf(tpl)) return text;
-  const rules = (await instructionFor(job, { trial: job.trial })).replaceAll("{{MATERIALS}}", lit("Условие и вложения уже лежат в рабочей папке."));
+  const sent = await readFile(rulesFile(job.key), "utf8").catch(() => null);
+  const cur = await instructionFor(job, { trial: job.trial });
+  const diff = sent ? diffRules(sent, cur) : null;
+  if (diff === "") return text; // поменялось только то, что в текст правил этой лабы не попадает
+  const rules = cur.replaceAll("{{MATERIALS}}", lit("Условие и вложения уже лежат в рабочей папке."));
+  if (diff) {
+    await writeFile(join(job.dir, "tmp", "ПРАВИЛА.md"), rules).catch(() => {});
+    return `${diffNotice(diff.replaceAll("{{MATERIALS}}", "Условие и вложения уже лежат в рабочей папке."))}\n\n---\n${text}`;
+  }
   return `[Сообщение приложения, не студента.] С начала этой лабы правила работы обновились. Ниже — актуальные правила целиком; где они расходятся с прежними, действуй по новым. Отвечать на них не нужно — выполни сообщение студента в конце.\n\n${rules}\n\n---\n${text}`;
 }
 
@@ -1098,17 +1351,32 @@ async function startJob(id, meta) {
   const tgId = Number(meta.tgId) || OWNER_ID;
   let job = await load(tgId, id);
   if (job && job.messages.length && job.status !== "error") return publicJob(job);
+  // Доступ — заново и здесь, внутри очереди пользователя (lab-trial.mjs): полный, своя пробная лаба или право начать пробную.
+  const a = await trial.access(tgId, id);
+  if (!a.allowed && !a.claim) throw denied(a.reason || "labs_not_allowed");
+  const viaTrial = a.via === "trial" || !!a.claim;
+  if (viaTrial) meta = { ...meta, trial: false }; // «проверочный запуск по сданной работе» — только с полным доступом (флаг приходит от клиента)
+  if (a.via === "trial") await trial.guard(tgId, id); // «Запустить заново» пробной лабы — в пределах её расхода
   await usage.guard(tgId, "start", { running: runningOf(tgId, `lab:${keyOf(tgId, id)}`) }); // месячный лимит пользователя (usage.mjs)
   job = newJob(id, meta);
   jobs.set(job.key, job);
   let instruction;
   try { instruction = await instructionFor(job, meta); }
-  catch (e) { job.status = "error"; job.error = `Не удалось подготовить задание: ${e.message || e}`; throw e; } // иначе задание осталось бы «идущим» до перезапуска сервера
+  catch (e) { job.busy = false; job.status = "error"; job.error = `Не удалось подготовить задание: ${e.message || e}`; throw e; } // иначе задание осталось бы «идущим» до перезапуска сервера
+  // Пробный занимается последним из шагов, которые могут отказать: лимит или сбой подготовки его не тратят.
+  let t = a.trial || null;
+  if (a.claim) {
+    try { t = await trial.claim(tgId, id, { title: job.title }); }
+    catch (e) { if (jobs.get(job.key) === job) jobs.delete(job.key); throw e; }
+  }
+  if (viaTrial) { job.viaTrial = true; job.trialModel = t?.model || null; } // полный доступ отмечает сама проверка (trial.stateOf → markFull)
   push(job, "user", "Сделай эту лабораторную и подготовь отчёт. Начни с условия и вопросов.");
   job.busy = true; // пока сервер качает условие, новые сообщения не принимаем
   job.stage = "Скачиваю условие из Moodle";
   job.progress = 2;
-  await save(job);
+  // Запись не удалась (диск, файл занят) — не оставлять задание «идущим» до перезапуска; пробный остаётся за этой работой,
+  // «Запустить заново» его найдёт.
+  try { await save(job); } catch (e) { job.busy = false; job.status = "error"; job.error = `Не удалось сохранить задание: ${e.message || e}`; throw e; }
   void (async () => {
     let materials;
     try { materials = await prepare(job, meta.token); }
@@ -1207,7 +1475,11 @@ function fixSection(job, saved, fresh, round) {
  */
 export async function markRemarks(tgId, id, remarks) {
   if (!remarks?.length) return remarks;
-  const job = await load(tgId, id), fix = job?.fix;
+  // Задание не прочиталось — замечания без пометок (15 окт 2026): из-за одной работы не должен падать весь /api/deadlines.
+  let job;
+  try { job = await load(tgId, id); }
+  catch (e) { console.error(`lab ${keyOf(tgId, id)}: пометки замечаний пропущены — ${e.message || e}`); return remarks; }
+  const fix = job?.fix;
   if (!fix) return remarks;
   const running = job.busy || job.status === "running";
   const old = new Set(fix.keys || []), cur = new Set(fix.delivered || running ? fix.sending || [] : []);
@@ -1227,6 +1499,10 @@ async function fixJob(id, meta) {
   if (!meta.token) throw new Error("Нет входа в Moodle");
   let job = await load(tgId, id);
   if (job?.busy) throw new Error("Агент ещё работает, подождите");
+  // Исправление пробный не занимает: только полный доступ или своя пробная лаба (в пределах её расхода).
+  const a = await trial.access(tgId, id);
+  if (!a.allowed) throw denied(a.claim ? "trial_start_first" : a.reason || "labs_not_allowed");
+  if (a.via === "trial") await trial.guard(tgId, id);
   await usage.guard(tgId, "start", { running: runningOf(tgId, `lab:${keyOf(tgId, id)}`) });
   const fb = await assignFeedbackRaw(meta.token, id);
   if (job?.busy) throw new Error("Агент ещё работает, подождите"); // пока ждали Moodle, студент мог отправить сообщение — второй ход поверх него не запускаем
@@ -1236,17 +1512,25 @@ async function fixJob(id, meta) {
   const prev = fresh ? null : job.fix || null;
   const round = fixRound(fb.remarks, prev);
   const remarks = remarkText(round.send).slice(0, 6000);
-  if (fresh) { job = newJob(id, { ...meta, trial: false }); jobs.set(job.key, job); }
+  if (fresh) {
+    job = newJob(id, { ...meta, trial: false });
+    if (a.via === "trial") { job.viaTrial = true; job.trialModel = a.trial?.model || null; }
+    jobs.set(job.key, job);
+  }
   let instruction = null;
   if (fresh) {
     try { instruction = await instructionFor(job, { ...meta, trial: false }); }
-    catch (e) { job.status = "error"; job.error = `Не удалось подготовить задание: ${e.message || e}`; throw e; } // не оставлять задание «идущим» в памяти
+    catch (e) { job.busy = false; job.status = "error"; job.error = `Не удалось подготовить задание: ${e.message || e}`; throw e; } // не оставлять задание «идущим» в памяти
   }
   const prevFiles = fb.files.map((f) => f.name);
   // keys — замечания, дошедшие до агента в прошлых исправлениях; sending — уходящие сейчас (delivered — когда агент ответил).
   // n — номер исправления; попытка, не дошедшая до агента (сбой запуска), номера не занимает.
+  // Что было до исправления — вернуть, если запись задания не удастся (иначе сданная работа стала бы «ждёт ответа»).
+  const before = fresh ? null : { status: job.status, revising: job.revising ?? null, fix: job.fix, moodle: job.moodle, trial: job.trial, rounds: job.reviewRounds, n: job.messages.length };
   job.fix = { at: Date.now(), n: prev ? prev.n + (prev.delivered ? 1 : 0) : 1, remarks, keys: [...round.known].slice(-300), sending: round.send.map((r) => r.key), delivered: false,
     prevAt: round.prevAt, prevFiles, name: fixedName(prevFiles), done: false };
+  job.reviewRounds = 0;
+  void quality.note("returned", job, { n: job.fix.n, format: FORMAT_WORDS.test(remarks) }); // преподаватель вернул работу; замечания об оформлении?
   if (fb.canEdit) job.trial = false; // Moodle разрешает менять ответ — это уже не «проверочный запуск»
   job.moodle = null; // итог прошлого прикрепления относится к прежнему файлу — под новым отчётом ему не место
   undismiss(job);
@@ -1258,7 +1542,14 @@ async function fixJob(id, meta) {
   job.turnAt = null; // ход агента ещё не начался — пока виден этап сервера
   job.stage = "Скачиваю отзыв и сданный файл из Moodle";
   job.progress = fresh ? 2 : 10;
-  await save(job);
+  try { await save(job); } catch (e) {
+    job.busy = false;
+    if (before) {
+      Object.assign(job, { status: before.status, revising: before.revising, fix: before.fix, moodle: before.moodle, trial: before.trial, reviewRounds: before.rounds });
+      job.messages.length = before.n; // убрать «Исправь отчёт…», которое агенту так и не ушло
+    } else { job.status = "error"; job.error = `Не удалось сохранить задание: ${e.message || e}`; }
+    throw e;
+  }
   void (async () => {
     try {
       const note = fresh ? materialsNote(await prepare(job, meta.token)) : "";
@@ -1310,6 +1601,7 @@ async function approveJob(job, text) {
   push(job, "user", text || "Всё хорошо");
   undismiss(job);
   job.review = "approved";
+  void quality.note("approved", job, { rounds: job.reviewRounds || 0, mode: job.reportMode || "classic" }); // сколько раз студент просил правки до «Всё хорошо»
   push(job, "assistant", job.trial
     ? "Отчёт подтверждён. Это проверочный запуск: работа в Moodle уже оценена, поэтому отчёт туда не прикрепляется."
     : "Отчёт подтверждён. Прикрепить его к заданию в Moodle? Кнопка — ниже, в карточке отчёта. В Moodle ничего не уйдёт, пока вы её не нажмёте и не подтвердите.");
@@ -1379,20 +1671,25 @@ export async function explain(tgId, id) {
   if (briefFresh(job)) return liveProgress(job);
   job.busy = true; // до конца хода другие действия с лабой не принимаются (ставится до проверки лимита — без окна для второго нажатия)
   job.briefing = Date.now();
-  try { await usage.guard(tgId, "message", { running: runningOf(tgId, `lab:${job.key}`) }); await save(job); }
-  catch (e) { job.busy = false; delete job.briefing; throw e; } // и при отказе лимита, и при сбое записи лаба не остаётся «занятой»
+  try {
+    await usage.guard(tgId, "message", { running: runningOf(tgId, `lab:${job.key}`) });
+    if (job.viaTrial) await trial.guard(tgId, id);
+    await save(job);
+  } catch (e) { job.busy = false; delete job.briefing; throw e; } // и при отказе лимита, и при сбое записи лаба не остаётся «занятой»
   void runBrief(job);
   return liveProgress(job);
 }
 
 async function runBrief(job) {
   const msgFile = join(job.dir, "tmp", `brief-${Date.now()}.md`);
-  await acquire(job); // место в очереди агента — как у обычного хода
+  const slot = await acquire(job, { short: true }); // короткий ход: своё место, не за часовыми лабами
+  let sendText = null; // в Telegram — после конца хода (как в turn): пока шла отправка, лаба оставалась «занятой»
   try {
     await mkdir(dirname(msgFile), { recursive: true });
     await writeFile(msgFile, BRIEF_PROMPT);
+    // Та же сессия, что у лабы, — и та же модель: другая модель в сессии перечитала бы весь контекст без кэша.
     const r = await openclaw(["agent", "--agent", "files", "--session-key", `agent:files:lab-${job.key}`, "--message-file", msgFile,
-      "--json", "--timeout", String(BRIEF_TIMEOUT_S), "--thinking", "low"], { timeoutMs: (BRIEF_TIMEOUT_S + 60) * 1000 });
+      "--json", "--timeout", String(BRIEF_TIMEOUT_S), "--thinking", "low", ...modelArgs(job)], { timeoutMs: (BRIEF_TIMEOUT_S + 60) * 1000 });
     const res = parseAgentOutput(r);
     if (!res.delivered) throw new Error(GATEWAY_DOWN.test(r.out + r.err) ? "служба агента на сервере не отвечает" : "связь с агентом оборвалась");
     addUsage(job, res);
@@ -1401,16 +1698,17 @@ async function runBrief(job) {
     push(job, "assistant", text, { kind: "brief" });
     job.brief = { at: job.messages.at(-1).at, report: job.report?.mtime ?? null };
     // То же — в Telegram: перед защитой удобнее перечитать с телефона, не открывая приложение.
-    await notify(job, `📘 Кратко о работе «${job.title}»\n\n${text}`.slice(0, 3900)).catch(() => {});
+    sendText = `📘 Кратко о работе «${job.title}»\n\n${text}`.slice(0, 3900);
   } catch (e) {
     push(job, "system", `Не получилось подготовить объяснение: ${e.message || e}. Нажмите «Кратко о работе» ещё раз.`);
     console.error(`lab ${job.key}: объяснение: ${e.message || e}`);
   } finally {
-    release();
+    release(slot);
     job.busy = false;
     delete job.briefing;
     await save(job);
   }
+  if (sendText) await notify(job, sendText).catch(() => {});
 }
 
 /** Ответ студента агенту. */
@@ -1435,8 +1733,10 @@ export async function message(tgId, id, text) {
   // проскочит второе такое же сообщение (двойное нажатие) и запустит второй ход в той же сессии агента.
   job.busy = true;
   // Начатую лабу можно закончить и чуть сверх лимита (до 125 %); другие идущие работы этого пользователя — в запас.
-  try { await usage.guard(tgId, "message", { running: runningOf(tgId, `lab:${job.key}`) }); }
-  catch (e) { job.busy = false; throw e; }
+  try {
+    await usage.guard(tgId, "message", { running: runningOf(tgId, `lab:${job.key}`) });
+    if (job.viaTrial) await trial.guard(tgId, id); // пробная лаба — в пределах своего расхода (lab-trial.mjs)
+  } catch (e) { job.busy = false; throw e; }
   push(job, "user", t);
   // Пометка для агента о том, что прошлый ход оборвался (например, сон ПК): идёт вместе со следующим сообщением студента.
   // Пометки приложения для агента (оборвавшийся ход, итог подготовки окружения, присланные файлы) идут вместе со следующим сообщением студента.
@@ -1543,6 +1843,8 @@ export async function attach(tgId, id, token) {
   if (!fail && after && !after.files.some((f) => f.name === job.report.name)) fail = "Moodle принял запрос, но файла в ответе нет";
   job.moodle = { text: fail ? `Не удалось прикрепить: ${fail}\n${stateLine(after)}` : stateLine(after), at: Date.now(), ok: !fail };
   if (!fail) {
+    // Дедлайны со старым статусом больше не отдаём: иначе до получаса работа видна несданной и по ней может уйти напоминание.
+    forgetDeadlines(token);
     // Оценка, стоявшая до прикрепления, — за прежний файл: образцом оформления курса она не считается (noteGrades).
     job.gradeBefore = (await moodleDeadlines(token).catch(() => null))?.items?.find((x) => x.id === `moodle:assign:${id}`)?.grade ?? null;
     job.styleSaved = null; // новый файл — его оформление снова ждёт оценки
@@ -1594,7 +1896,7 @@ export async function submit(tgId, id, token) {
   const after = await moodleState(token, id);
   if (!fail && after && after.status !== "submitted") fail = "Moodle принял запрос, но статус ответа не изменился";
   job.moodle = { text: fail ? `Не удалось отправить: ${fail}\n${stateLine(after)}` : stateLine(after), at: Date.now(), ok: !fail };
-  if (!fail) { job.status = "submitted"; push(job, "system", `Отправлено на проверку.\n${stateLine(after)}`); await notify(job, `✅ «${job.title}» отправлена на проверку в Moodle.`); }
+  if (!fail) { forgetDeadlines(token); job.status = "submitted"; push(job, "system", `Отправлено на проверку.\n${stateLine(after)}`); await notify(job, `✅ «${job.title}» отправлена на проверку в Moodle.`); }
   else push(job, "system", `Не удалось отправить: ${fail.slice(0, 300)}\n${stateLine(after)}\nПопробуйте ещё раз.`);
   await save(job);
   return publicJob(job);
@@ -1650,15 +1952,17 @@ const publicCheck = (c) => (c ? { id: c.id, title: c.title, course: c.course, st
 
 async function saveCheck(c) {
   await mkdir(CHECKS, { recursive: true });
-  const tmp = `${checkPath(c.key)}.${randomBytes(4).toString("hex")}.tmp`;
-  await writeFile(tmp, JSON.stringify(c, null, 2));
-  await rename(tmp, checkPath(c.key));
+  await writeJsonAtomic(checkPath(c.key), c, { space: 2 });
 }
+// null — только «файла нет» (или испорчен и отложен в .bad-*); занятый файл — StateReadError (15 окт 2026): иначе новая
+// проверка начиналась бы как первая (n = 1), и агент не сравнивал бы её с прошлыми замечаниями.
 async function loadCheck(tgId, id) {
   const key = keyOf(tgId, id);
   if (checks.has(key)) return checks.get(key);
-  const c = await readFile(checkPath(key), "utf8").then(JSON.parse).catch(() => null);
-  if (!c) return null;
+  if (quarantined.has(`check:${key}`)) return null;
+  const c = await readJson(checkPath(key), { missing: null });
+  if (checks.has(key)) return checks.get(key); // пока читали файл, проверку уже завели в памяти
+  if (!c) { if (existsSync(checkPath(key))) quarantined.add(`check:${key}`); return null; }
   // Сервер перезапускался посреди проверки: ход агента потерян, результата не будет.
   if (c.status === "running") { c.status = "error"; c.error = "Проверка оборвалась: сервер перезапускался. Загрузите отчёт ещё раз."; c.stage = null; }
   checks.set(key, c);
@@ -1743,7 +2047,7 @@ async function runCheck(c, token) {
     // Повторная проверка идёт в той же сессии: агент помнит прошлые замечания и видит, что исправлено.
     await writeFile(msgFile, c.n > 1 ? `[Сообщение приложения.] Студент загрузил новую версию отчёта — проверь её заново по тем же правилам (они ниже целиком). Прошлый результат не дописывай: \`check-result.json\` пиши с нуля по новой версии; в \`summary\` одной фразой скажи, что из прошлых замечаний исправлено.\n\n${instruction}` : instruction);
     await stage("В очереди к агенту");
-    await acquire(job); queued = true;
+    queued = await acquire(job, { short: true });
     await stage("Агент читает отчёт и сверяет с заданием");
     const r = await openclaw(["agent", "--agent", "files", "--session-key", `agent:files:check-${c.key}`, "--message-file", msgFile,
       "--json", "--timeout", String(CHECK_TIMEOUT_S), "--thinking", "medium"], { timeoutMs: (CHECK_TIMEOUT_S + 60) * 1000 });
@@ -1760,7 +2064,7 @@ async function runCheck(c, token) {
     Object.assign(c, { status: "error", stage: null, doneAt: Date.now(), error: `Проверить отчёт не получилось: ${String(e.message || e).slice(0, 300)}. Загрузите файл ещё раз.` });
     console.error(`check ${c.key}: ${e.message || e}`);
   } finally {
-    if (queued) release();
+    release(queued);
     await saveCheck(c).catch(() => {});
   }
 }

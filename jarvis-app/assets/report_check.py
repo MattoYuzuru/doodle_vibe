@@ -130,8 +130,43 @@ def is_struct(text):
     return s in STRUCT
 
 
+MONO_FONTS = ("courier", "consol", "lucidacon", "cascadia", "firacode", "menlo", "monaco", "sourcecode", "terminal", "fixedsys", "mono")
+
+
+def is_mono(name):
+    """Моноширинный шрифт (листинги, код в строке)? По имени шрифта."""
+    n = re.sub(r"[^a-z]", "", (name or "").lower()).replace("monotype", "")
+    return any(k in n for k in MONO_FONTS)
+
+
+def image_text_px(blob):
+    """Размер картинки и высота строки текста на ней в пикселях (None — текста не видно).
+
+    Строки текста — это полосы «чернил», разделённые полосами фона; берём медиану высот невысоких полос. У графика
+    таких полос мало (подписи осей), у снимка терминала — десятки."""
+    import io
+    import numpy as np
+    from PIL import Image
+    im = Image.open(io.BytesIO(blob))
+    w, h = im.size
+    if w * h > 40_000_000:
+        return w, h, None
+    a = np.asarray(im.convert("L"), dtype=np.int16)
+    ink = np.abs(a - int(np.bincount(a.ravel(), minlength=256).argmax())) > 60  # фон — самый частый тон
+    rows = ink.sum(axis=1) > max(2, w * 0.004)
+    runs, n = [], 0
+    for r in list(rows) + [False]:
+        if r:
+            n += 1
+        elif n:
+            runs.append(n)
+            n = 0
+    small = [x for x in runs if 5 <= x <= 60]
+    return w, h, (float(statistics.median(small)) if len(small) >= 3 else None)
+
+
 # ---------- PDF ----------
-def pdf_facts(path, out_dir, render=True):
+def pdf_facts(path, out_dir, render=True, detail=False):
     import pymupdf
     doc = pymupdf.open(path)
     facts = {"pages": doc.page_count}
@@ -139,10 +174,12 @@ def pdf_facts(path, out_dir, render=True):
     left, right, topm, bottom = [], [], [], []
     justified = ragged = 0
     pages_text, captions_fig, captions_tab, headings, page_numbers, images, tables, empty = [], [], [], [], [], [], [], []
+    det = {"lines": [], "fonts": Counter(), "sizes": Counter(), "page_sizes_mm": []}  # подробности для report_kit (detail=True)
     for pno, page in enumerate(doc, 1):
         W, H = page.rect.width, page.rect.height
         if pno == 1:
             facts["page_size_mm"] = [mm(W), mm(H)]
+        det["page_sizes_mm"].append([mm(W), mm(H)])
         d = page.get_text("dict")
         lines_all = []
         img = sum(1 for b in d["blocks"] if b["type"] == 1 and (b["bbox"][2] - b["bbox"][0]) > 50 and (b["bbox"][3] - b["bbox"][1]) > 50)
@@ -168,6 +205,14 @@ def pdf_facts(path, out_dir, render=True):
                 size = max(spans, key=lambda s: len(s["text"]))["size"]
                 bold = sum(len(s["text"]) for s in spans if s["flags"] & 16 or "Bold" in s["font"]) > len(text) / 2
                 item = {"text": text, "x0": x0, "x1": x1, "y0": y0, "y1": y1, "size": size, "bold": bold, "base": spans[0]["origin"][1]}
+                is_pn = bool(re.fullmatch(r"[-–— ]*\d{1,4}[-–— ]*", text) and (y0 > H * 0.9 or y1 < H * 0.08))
+                if detail:  # строка целиком и её часть без моноширинных кусков (код в строке), шрифты основного текста
+                    plain = [s for s in spans if not is_mono(s["font"])]
+                    det["lines"].append({"page": pno, "text": text, "plain": "".join(s["text"] for s in plain).strip(), "y": round(y0, 1), "page_number": is_pn,
+                                         "mono": sum(len(s["text"]) for s in plain) < len("".join(s["text"] for s in spans)) / 2})
+                    for s in ([] if is_pn else plain):
+                        det["fonts"][norm_font(s["font"])] += len(s["text"])
+                        det["sizes"][round(s["size"] * 2) / 2] += len(s["text"])
                 # номер страницы: одиночное число в верхних 8 % или нижних 10 % листа
                 if re.fullmatch(r"[-–— ]*\d{1,4}[-–— ]*", text) and (y0 > H * 0.9 or y1 < H * 0.08):
                     cx = (x0 + x1) / 2
@@ -244,6 +289,8 @@ def pdf_facts(path, out_dir, render=True):
     facts["title_page"] = title_facts(pages_text[0] if pages_text else "")
     facts["words"] = len(re.findall(r"[А-Яа-яЁёA-Za-z]{2,}", full))
     facts.update(text_facts(pages_text))
+    if detail:
+        facts["detail"] = {"lines": det["lines"], "fonts": top(det["fonts"]), "sizes": top(det["sizes"]), "page_sizes_mm": det["page_sizes_mm"]}
     with open(os.path.join(out_dir, "report.txt"), "w", encoding="utf-8") as f:
         for i, t in enumerate(pages_text, 1):
             f.write(f"=== Страница {i} ===\n{t.strip()}\n\n")
@@ -259,7 +306,7 @@ def pdf_facts(path, out_dir, render=True):
 
 
 # ---------- DOCX ----------
-def docx_facts(path, out_dir):
+def docx_facts(path, out_dir, detail=False):
     import docx
     from docx.shared import Length
     d = docx.Document(path)
@@ -284,10 +331,24 @@ def docx_facts(path, out_dir):
             v = next((getattr(s.font, attr) for s in chain(par.style) if getattr(s.font, attr) is not None), None)
         return v
 
+    # Word после сохранения пишет выравнивание словами «start»/«end» (вместо left/right) — python-docx таких не знает
+    # и падает (5 окт 2026: проверка отчёта остановилась на «has no XML mapping for 'end'»). Читаем такое значение сами.
+    JC = {"start": 0, "left": 0, "center": 1, "end": 2, "right": 2, "both": 3, "distribute": 3}
+
+    def fmt_attr(fmt, attr):
+        try:
+            return getattr(fmt, attr)
+        except Exception:
+            if attr != "alignment":
+                raise
+            jc = fmt._element.find(".//{*}jc") if getattr(fmt, "_element", None) is not None else None
+            val = jc.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val") if jc is not None else None
+            return JC.get(val)
+
     def eff_par(par, attr):
-        v = getattr(par.paragraph_format, attr)
+        v = fmt_attr(par.paragraph_format, attr)
         if v is None:
-            v = next((getattr(s.paragraph_format, attr) for s in chain(par.style) if getattr(s.paragraph_format, attr) is not None), None)
+            v = next((fmt_attr(s.paragraph_format, attr) for s in chain(par.style) if fmt_attr(s.paragraph_format, attr) is not None), None)
         return v
 
     # шрифт и кегль по умолчанию из docDefaults (когда ни в прогоне, ни в стиле не задано)
@@ -393,9 +454,128 @@ def docx_facts(path, out_dir):
     facts.update(text_facts([text]))
     for ex in facts["decimal_point_numbers"]["examples"]:
         ex.pop("page", None)
+    if detail:
+        facts["detail"] = docx_detail(d, eff_font, eff_par, dflt_font, dflt_size)
     with open(os.path.join(out_dir, "report.txt"), "w", encoding="utf-8") as f:
         f.write(text + "\n")
     return facts
+
+
+TITLE_SCAN = 80  # титульную часть ищем среди первых стольких элементов тела
+
+
+def docx_detail(d, eff_font, eff_par, dflt_font, dflt_size):
+    """Подробные измерения для сборщика отчётов (report_kit check): каждый абзац, раздел, таблица и рисунок.
+
+    В facts.json не попадают (docx_facts(..., detail=True) кладёт их в ключ detail только по просьбе)."""
+    from docx.shared import Length
+    from docx.text.paragraph import Paragraph
+    from docx.text.run import Run
+    W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    body = d.element.body
+    kids = list(body.iterchildren())
+    tag = lambda el: el.tag.split("}")[1]
+
+    def style_of(p):
+        try:
+            st = p.style
+            return (st.style_id or "", (st.name or "").lower()) if st is not None else ("", "")
+        except Exception:
+            return "", ""
+
+    def par(p, attr):
+        try:
+            return eff_par(p, attr)
+        except Exception:  # значение, которого python-docx не знает
+            return None
+
+    # Граница титульной части: разрыв страницы или раздела (включительно), абзац «с новой страницы», заголовок,
+    # абзац сборщика (стиль RK…), «СОДЕРЖАНИЕ/ОГЛАВЛЕНИЕ/ВВЕДЕНИЕ» (не включая).
+    end, title_section = None, False
+    for k, child in enumerate(kids[:TITLE_SCAN]):
+        if tag(child) != "p":
+            continue
+        p = Paragraph(child, d)
+        sid, name = style_of(p)
+        word = re.sub(r"[\s.:]+$", "", p.text.strip()).upper()
+        if sid.startswith("RK") or name.startswith(("heading", "заголовок")) or par(p, "page_break_before") or word in ("СОДЕРЖАНИЕ", "ОГЛАВЛЕНИЕ", "ВВЕДЕНИЕ"):
+            end = k
+            break
+        if child.find(f"{W}pPr/{W}sectPr") is not None:
+            end, title_section = k + 1, True
+            break
+        if any(br.get(W + "type") == "page" for br in child.iter(W + "br")):
+            end = k + 1
+            break
+    if end is None:  # границы нет: короткий документ — титул целиком, длинный — без титульной части
+        end = len(kids) if len(kids) <= TITLE_SCAN else 0
+
+    # межстрочный интервал по умолчанию из docDefaults (когда ни в абзаце, ни в стилях не задан)
+    dflt_spacing = 1.0
+    sp = d.styles.element.find(f".//{W}docDefaults/{W}pPrDefault/{W}pPr/{W}spacing")
+    if sp is not None and sp.get(W + "line") and sp.get(W + "lineRule", "auto") == "auto":
+        dflt_spacing = round(int(sp.get(W + "line")) / 240, 2)
+    ALIGN = {None: "left", 0: "left", 1: "center", 2: "right", 3: "justify"}
+    pars, tables = [], []
+    for k, child in enumerate(kids):
+        kind = tag(child)
+        if kind not in ("p", "tbl"):
+            continue
+        for pel in child.iter(W + "p"):
+            p = Paragraph(pel, d)
+            text, plain, fonts, sizes = [], [], Counter(), Counter()
+            for rel in pel.iter(W + "r"):
+                r = Run(rel, p)
+                s = r.text
+                if not s:
+                    continue
+                try:
+                    font, sz = eff_font(r, p, "name") or dflt_font, eff_font(r, p, "size")
+                except Exception:
+                    font, sz = dflt_font, None
+                text.append(s)
+                fonts[font or ""] += len(s)
+                sizes[round(sz.pt * 2) / 2 if sz is not None else dflt_size or 0] += len(s)
+                if not is_mono(font):
+                    plain.append(s)
+            text = "".join(text)
+            if not text.strip():
+                continue
+            sid, name = style_of(p)
+            ls, fi, al = par(p, "line_spacing"), par(p, "first_line_indent"), par(p, "alignment")
+            pars.append({"k": k, "text": text, "plain": "".join(plain), "style": sid, "style_name": name, "table": kind == "tbl", "title": k < end,
+                         "mono": len("".join(plain)) < len(text) / 2, "fonts": dict(fonts), "sizes": dict(sizes),
+                         "spacing": round(float(ls), 2) if isinstance(ls, float) else (f"{ls.pt} пт" if ls is not None else dflt_spacing),
+                         "indent_mm": round(fi.mm, 1) if fi is not None else 0.0, "align": ALIGN.get(int(al) if al is not None else None, "other")})
+        if kind == "tbl":
+            cap = child.find(f"{W}tblPr/{W}tblCaption")
+            t = {"k": k, "title": k < end, "caption": cap.get(W + "val") if cap is not None else "", "cells": 0, "empty": 0, "decimal_point": 0, "decimal_point_examples": []}
+            for tc in child.iter(W + "tc"):
+                vm = tc.find(f"{W}tcPr/{W}vMerge")
+                if vm is not None and vm.get(W + "val") != "restart":
+                    continue  # продолжение объединённой ячейки
+                s = "".join(x.text or "" for x in tc.iter(W + "t")).strip()
+                t["cells"] += 1
+                if not s and not any(tag(x) in ("drawing", "pict", "oMath") for x in tc.iter() if isinstance(x.tag, str)):
+                    t["empty"] += 1
+                if re.fullmatch(r"-?\d+\.\d+", s):
+                    t["decimal_point"] += 1
+                    if len(t["decimal_point_examples"]) < 5:
+                        t["decimal_point_examples"].append(s)
+            tables.append(t)
+    L = lambda v: round(Length(v).mm, 1) if v is not None else None
+    sections = [{"page_mm": [L(s.page_width), L(s.page_height)], "left": L(s.left_margin), "right": L(s.right_margin), "top": L(s.top_margin), "bottom": L(s.bottom_margin),
+                 "landscape": bool(s.orientation), "title": title_section and i == 0} for i, s in enumerate(d.sections)]
+    images = []
+    for dr in list(body.iter(W + "drawing"))[:80]:
+        ext, blip = dr.find(".//{*}extent"), dr.find(".//{*}blip")
+        try:
+            w, h, tp = image_text_px(d.part.related_parts[blip.get(R + "embed")].blob)
+            images.append({"width_mm": round(int(ext.get("cx")) / 36000, 1), "px": [w, h], "text_px": tp})
+        except Exception:
+            continue  # связанный файл, векторная картинка, фигура без изображения
+    return {"title_end": end, "sections": sections, "pars": pars, "tables": tables, "images": images}
 
 
 def docx_to_pdf(path, out_pdf):

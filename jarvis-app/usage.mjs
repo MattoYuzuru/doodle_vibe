@@ -20,19 +20,23 @@
 // лабу, исправление и проверку отчёта нельзя начать, когда месяц израсходован на 100 %; сообщения в уже идущей лабе
 // принимаются до 125 %, чтобы начатую работу можно было закончить. Владельца лимиты не касаются.
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { copyFile, mkdir, readFile, readdir, rename, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AGENT_CHAT_TRANSCRIPTS, AGENT_TRANSCRIPTS } from "./agent-account.mjs";
+import { StateReadError, readJson as readStateJson, readText as readStateText, writeJsonAtomic } from "./state-file.mjs";
 import { OWNER_ID } from "./users.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const STORE = process.env.USAGE_STORE_DIR || join(DIR, "usage"); // переменная — только для тестов
 const DATA = join(STORE, "data.json"), LIMITS = join(STORE, "limits.json"), PRICES = join(STORE, "prices.json");
 // Папка журналов Claude CLI для рабочей папки агента: путь, в котором всё, кроме букв и цифр, заменено на «-».
-// Журналы главного агента OpenClaw (чат бота в Telegram) — соседняя папка; в лимиты не входят (см. scan).
-export const CHAT_TRANSCRIPTS = process.env.USAGE_CHAT_TRANSCRIPTS_DIR || join(homedir(), ".claude", "projects", join(homedir(), ".openclaw", "workspace").replace(/[^A-Za-z0-9]/g, "-"));
-export const TRANSCRIPTS = process.env.USAGE_TRANSCRIPTS_DIR || join(homedir(), ".claude", "projects", join(homedir(), ".openclaw", "workspace-files").replace(/[^A-Za-z0-9]/g, "-"));
+// Журналы главного агента OpenClaw (чат бота в Telegram) — соседняя папка; в лимиты не входят (см. scan). Обе — в
+// профиле той учётной записи Windows, под которой работает агент (agent-account.mjs): у отдельной учётки doodle-agent
+// серверу открыто чтение только этих журналов (ops\migrate\agent-account\1-права.ps1). Нет доступа — папка «не
+// существует», и расход считается по ответам OpenClaw (record).
+export const CHAT_TRANSCRIPTS = process.env.USAGE_CHAT_TRANSCRIPTS_DIR || AGENT_CHAT_TRANSCRIPTS;
+export const TRANSCRIPTS = process.env.USAGE_TRANSCRIPTS_DIR || AGENT_TRANSCRIPTS;
 const SCAN_EVERY = 60e3;
 const SOFT = 1, HARD = 1.25; // доля лимита: новая работа — до 100 %, сообщения в идущей — до 125 %
 
@@ -64,12 +68,11 @@ async function readJson(p, fallback) {
     }
   }
 }
-let tmpSeq = 0;
+// Своё имя временного файла у каждой записи (две одновременные не мешают друг другу) и rename с повторами: на Windows
+// занятый на миг прежний файл давал EPERM, и запись итогов терялась (state-file.mjs, 15 окт 2026).
 async function writeJson(p, v) {
   await mkdir(STORE, { recursive: true });
-  const tmp = `${p}.${process.pid}.${++tmpSeq}.tmp`; // своё имя у каждой записи: две одновременные не мешают друг другу
-  await writeFile(tmp, JSON.stringify(v, null, 1));
-  await rename(tmp, p);
+  await writeJsonAtomic(p, v, { space: 1 });
 }
 
 let prices = null;
@@ -207,18 +210,28 @@ export function parseTranscript(text, { mtime = 0 } = {}) {
 }
 
 const PARSER = 5; // версия разбора: журналы, разобранные прежней версией, перечитываются (пока Claude CLI их не удалил)
-let data = null, scannedAt = 0, scanning = null;
+/*
+ * Итоги по журналам (data.json). 15 окт 2026: раньше ЛЮБАЯ ошибка считалась порчей — файл, занятый дольше ~0,2 с,
+ * откладывался (а если rename не удавался — перезаписывался без копии) и подменялся пустым, и пустой результат жил
+ * в кэше до перезапуска: пропадали итоги по журналам, которые Claude CLI уже удалил, и manual-записи, лимиты переставали
+ * срабатывать. Теперь занятый файл — повторы и ошибка (summary/guard получат её, guard ответит текстом), в кэш ничего
+ * не кладётся. Испорченный JSON — копия data.json.bad-<время> (state-file.mjs), JSON не того вида — копия data.json.bad;
+ * не удалось сделать копию — ошибка, с пустого не начинаем. Итоги — производные от журналов: дальше собираются заново.
+ */
+let data = null, dataLoading = null, scannedAt = 0, scanning = null;
 async function load() {
   if (data) return data;
-  try { data = await readJson(DATA, { files: {}, manual: [] }); }
-  catch (e) {
-    // Итоги — производные от журналов: испорченный файл откладываем и собираем заново по тем журналам, что ещё есть.
-    console.log(`usage: data.json не читается (${e.message || e}) — отложен как data.json.bad, итоги собираются заново`);
-    await rename(DATA, `${DATA}.bad`).catch(() => {});
-    data = { files: {}, manual: [] };
-  }
-  data.files ||= {}; data.manual ||= [];
-  return data;
+  dataLoading ??= (async () => {
+    let d = await readStateJson(DATA, { missing: () => ({ files: {}, manual: [] }) });
+    if (!d || typeof d !== "object" || Array.isArray(d)) {
+      try { await copyFile(DATA, `${DATA}.bad`); } catch (e) { throw new StateReadError(DATA, e); }
+      console.log("usage: в data.json не то (не объект) — отложен как data.json.bad, итоги собираются заново");
+      d = { files: {}, manual: [] };
+    }
+    d.files ||= {}; d.manual ||= [];
+    return (data ??= d);
+  })().finally(() => { dataLoading = null; });
+  return dataLoading;
 }
 
 /**
@@ -311,9 +324,13 @@ function validLimits(s) {
   return true;
 }
 async function limits({ repair = false } = {}) {
+  // Файл занят или не читается — не порча (15 окт 2026): ошибка уходит наверх как есть, и даже сохранение лимита
+  // владельцем (repair) файл не трогает. Раньше временная блокировка в этот момент стирала лимиты всех пользователей и
+  // отметки о предупреждениях. Владелец увидит ошибку и нажмёт ещё раз; студенту guard ответит понятным текстом.
+  const text = await readStateText(LIMITS);
   let stored;
   try {
-    stored = await readJson(LIMITS, {});
+    stored = text === null ? {} : JSON.parse(text);
     if (!validLimits(stored)) throw new Error("в файле неверные значения");
     // Файл без пометки unit считается старым долларовым; если в него вручную вписали токены, после пересчёта выйдет
     // немыслимое число (то есть «лимита нет») — такой файл тоже считаем испорченным.
@@ -325,8 +342,9 @@ async function limits({ repair = false } = {}) {
     // с понятным текстом (guard), владелец видит это на своём экране; сохранение лимита владельцем (repair)
     // откладывает испорченный файл как limits.json.bad и начинает заново.
     if (!repair) throw Object.assign(new Error(`Файл лимитов usage/limits.json не читается (${e.message || e})`), { limitsBroken: true });
+    // Испорченный файл не удалось отложить (занят) — с пустого не начинаем: иначе он был бы перезаписан без копии.
+    try { await rename(LIMITS, `${LIMITS}.bad`); } catch (re) { if (re?.code !== "ENOENT") throw new StateReadError(LIMITS, re); }
     console.log(`usage: limits.json не читается (${e.message || e}) — отложен как limits.json.bad, лимиты задаются заново`);
-    await rename(LIMITS, `${LIMITS}.bad`).catch(() => {});
     stored = { repaired: true };
   }
   const l = { default: null, users: {}, alerted: {}, ...(stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {}) };

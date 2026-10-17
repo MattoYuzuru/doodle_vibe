@@ -1,7 +1,18 @@
 // Проверка счётчика «узел МИСИС не отвечает» (users.mjs netHealth) без Moodle: поддельный сервер на этом ПК.
 // Запуск: MOODLE_DIRECT=0 MOODLE_DOWN_STREAK=3 MOODLE_DOWN_AFTER_MS=300 node health-test.mjs
 import { createServer } from "node:http";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+
+// Счётчики и паузы ограничителя — во временную папку (15 окт 2026): без этого тест писал в usage\moodle-load.json
+// живого сервера. Переменные из строки запуска выше — значениями по умолчанию, чтобы тест можно было запустить и без них.
+process.env.MOODLE_PACE_DIR ??= mkdtempSync(join(tmpdir(), "health-test-"));
+process.env.MOODLE_DIRECT ??= "0";
+process.env.MOODLE_DOWN_STREAK ??= "3";
+process.env.MOODLE_DOWN_AFTER_MS ??= "300";
+process.env.MOODLE_PACE ??= "0"; // без пауз очереди: с паузой 150 мс между запросами три сбоя растягивались дольше порога 300 мс
 
 const users = await import(pathToFileURL("C:/Users/User/moodle-work/jarvis-app/users.mjs").href);
 let fails = 0;

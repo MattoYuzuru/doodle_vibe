@@ -20,6 +20,7 @@ const CACHE_DIR = join(DIR, "cal-cache");
 const BASE_FILE = join(DIR, "calendar-base.txt");
 const WEEKS = 6;                 // пары: текущая неделя и пять следующих (ближние три — с переносами «Дневача»)
 const TTL = 10 * 60e3;           // одну ленту пересобираем не чаще раза в 10 минут
+const CAL_DATA_MS = 2 * 3600e3;  // дедлайны для ленты: уже прочитанные не старше этого — без нового чтения Moodle (см. collect)
 const DAY = 864e5;
 
 /** Постоянный адрес для подписки («https://….ngrok-free.dev») или "" — тогда подписки нет. */
@@ -105,8 +106,13 @@ async function collect(tgId) {
   const token = await users.moodleToken(tgId);
   if (token) {
     try {
-      moodle.setOverrides(token, await users.courseOverrides(tgId));
-      const d = await moodle.deadlines(token);
+      moodle.setOverrides(token, await users.courseOverrides(tgId), tgId);
+      // Опрос подписки (раз в час у каждого) идёт в очереди людей, наравне с открывающими приложение (15 окт 2026):
+      // уже прочитанное моложе 2 часов (и копия с диска после перезапуска) годится — сданная работа просто повисит
+      // событием чуть дольше. Старше — читаем, а если Moodle не ответил, берём то, что есть.
+      const have = moodle.staleDeadlines(token);
+      const d = have && Date.now() - (have.updated || 0) < CAL_DATA_MS ? have
+        : await moodle.deadlines(token, false, { allowDisk: true }).catch((e) => { if (have) return have; throw e; });
       const course = new Map(d.courses.map((c) => [c.id, c.short || c.name]));
       const open = d.items.filter((x) => x.status === "open" && x.due && x.due > Date.now() - 7 * DAY);
       for (const x of open) events.push(deadlineEvent(x, course.get(x.courseId)));

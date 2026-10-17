@@ -142,6 +142,13 @@ export async function groups() {
   return [...(await current()).groups.values()].map((g) => g.group);
 }
 
+/**
+ * Буквенные основы групп из уже загруженного расписания (БИСТ, БПИ, БИВТ…) — без загрузки, синхронно. Для
+ * moodle-plan.mjs: «КР№1 БПИ-24-3,4» — работа другой группы, а «ИДЗ-24», «COVID-19», «UTF-16» — просто названия работ.
+ * Расписание ещё не загружено — пустое множество.
+ */
+export const groupPrefixes = () => new Set([...state.groups.keys()].map((g) => g.split("-")[0]));
+
 // ---------- даты ----------
 const DAY = 864e5;
 const parseD = (s) => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10));

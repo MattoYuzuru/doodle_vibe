@@ -119,11 +119,13 @@ export function Teachers({ courseId, title = "Преподаватели", index
                 <m.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={spring(420, 34)} className="overflow-hidden">
                   {t.email && <p className="mt-1 text-s text-hint">{[t.role, t.email].filter(Boolean).join(" · ")}</p>}
                   {c.criteria.length > 0 && (
+                    // Подпись — до 45 % строки, полосе — не меньше 48 px (проверка 15 окт): с подписью w-44 на 320 px полосе
+                    // оставалось 28 px, и 4,2 от 4,8 было не отличить.
                     <div className="mt-3 flex flex-col gap-1.5">
                       {c.criteria.map((k) => (
                         <div key={k.title} className="flex items-center gap-3 text-s">
-                          <span className="w-44 shrink-0 truncate text-hint">{k.title}</span>
-                          <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-raised"><span className="block h-full rounded-full bg-yellow" style={{ width: `${Math.max(0, Math.min(100, (k.value / 5) * 100))}%` }} /></span>
+                          <span className="w-[45%] max-w-44 shrink-0 truncate text-hint">{k.title}</span>
+                          <span className="h-1.5 min-w-12 flex-1 overflow-hidden rounded-full bg-raised"><span className="block h-full rounded-full bg-yellow" style={{ width: `${Math.max(0, Math.min(100, (k.value / 5) * 100))}%` }} /></span>
                           <span className="w-7 text-right font-bold tabular">{fmt(k.value)}</span>
                         </div>
                       ))}
@@ -200,8 +202,8 @@ export function TeacherPlaque({ courseId }: { courseId: number }) {
                     <div className="mt-3 flex flex-col gap-1.5">
                       {cur.campus.criteria.map((k) => (
                         <div key={k.title} className="flex items-center gap-3 text-s">
-                          <span className="w-44 shrink-0 truncate text-hint">{k.title}</span>
-                          <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-raised"><span className="block h-full rounded-full bg-yellow" style={{ width: `${Math.max(0, Math.min(100, (k.value / 5) * 100))}%` }} /></span>
+                          <span className="w-[45%] max-w-44 shrink-0 truncate text-hint">{k.title}</span>
+                          <span className="h-1.5 min-w-12 flex-1 overflow-hidden rounded-full bg-raised"><span className="block h-full rounded-full bg-yellow" style={{ width: `${Math.max(0, Math.min(100, (k.value / 5) * 100))}%` }} /></span>
                           <span className="w-7 text-right font-bold tabular">{fmt(k.value)}</span>
                         </div>
                       ))}

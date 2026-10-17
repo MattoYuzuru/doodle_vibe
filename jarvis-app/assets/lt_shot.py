@@ -32,7 +32,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from win_shot import shot  # noqa: E402
 
 EXE = r"C:\Users\User\moodle-work\tools\ltspice\LTspice.exe"
-LOCK = r"C:\Users\User\moodle-work\.ltshot.lock"
+# Замок снимков — в общей папке агента moodle-work\agent-shared, если она есть (агент под своей учётной записью Windows
+# в корень moodle-work писать не может, см. ops\migrate\УЧЁТКА-АГЕНТА.md), иначе в корне moodle-work, как раньше.
+_WORK = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_SHARED = os.path.join(_WORK, "agent-shared")
+LOCK = os.path.join(_SHARED if os.path.isdir(_SHARED) else _WORK, ".ltshot.lock")
 OFFSCREEN = (-4000, 100)
 ANALYSES = [("tran", "Transient Analysis"), ("ac", "AC Analysis"), ("dc", "DC transfer characteristic"), ("noise", "Noise Spectral Density - (V/Hz½ or A/Hz½)"),
             ("tf", "Transfer Function"), ("op", "Operating Point")]

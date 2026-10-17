@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as bots from "./bots.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const LOG = join(DIR, "tunnel.log");
@@ -13,12 +14,15 @@ const CURRENT = join(DIR, "current-url.txt");
 const OPENCLAW = join(process.env.APPDATA || join(homedir(), "AppData", "Roaming"), "npm", "node_modules", "openclaw", "openclaw.mjs");
 const OWNER = "945210206";
 const MENU_TEXT = "Doodle";
-const BOT_TOKEN = await readFile(join(DIR, "bot-token.txt"), "utf8").then((t) => t.replace(/^﻿/, "").trim()).catch(() => "");
+const BOT_TOKEN = bots.hasBot; // есть ли токен основного бота (сам токен — только в bots.mjs)
 // Telegram хранит адрес со слэшем на конце — сравниваем без него.
 const norm = (u) => (u || "").replace(/[/]+$/, "");
 
-function notify(text) {
-  return new Promise((resolve) => {
+/** Сообщение владельцу: самим ботом; пока ботом пользуется и OpenClaw (до переезда) — запасной путь через него. */
+async function notify(text) {
+  const r = await bots.call("sendMessage", { chat_id: Number(OWNER), text, disable_web_page_preview: true });
+  if (r.ok || bots.ownBot()) return;
+  await new Promise((resolve) => {
     const p = spawn(process.execPath, [OPENCLAW, "message", "send", "--channel", "telegram", "--target", OWNER, "-m", text], { windowsHide: true });
     const t = setTimeout(() => p.kill(), 60e3);
     p.on("close", () => { clearTimeout(t); resolve(); });
@@ -26,12 +30,10 @@ function notify(text) {
   });
 }
 
+/** Вызов Bot API. Отказ Telegram — исключение с его текстом; сбой сети — «fetch failed» (повторяется на следующем тике). */
 async function botApi(method, body) {
-  const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout(20000),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!j.ok) throw new Error(j.description || `HTTP ${r.status}`);
+  const j = await bots.call(method, body);
+  if (!j.ok) throw new Error(j.network ? "fetch failed" : j.description || "нет ответа");
   return j.result;
 }
 

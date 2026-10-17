@@ -202,6 +202,12 @@ check("перехватчик: на секрет отвечает отказом
     `cat ~/moodle-work/users/5001/777/ЗАДАНИЕ.md`,                                   // своя папка через ~
     `cd ${LAB}; grep -rn "TODO" work`,                                               // рекурсивный поиск в своей папке
     `python ${LAB}\\work\\x.py --out ${LAB}\\work\\out`,
+    // -enc у других программ — не PowerShell (16 окт, лаба 31667: pdftotext без -enc теряет кириллицу)
+    `pdftotext -enc UTF-8 -layout ${LAB}\\metod.pdf ${LAB}\\tmp\\metod.txt`,
+    `iconv -f cp1251 -t utf-8 a.txt > b.txt; ffmpeg -i a.wav -ec 1 b.wav`,
+    `powershell -NoProfile -Command "pdftotext -enc UTF-8 a.pdf a.txt"`,          // -enc внутри текста -Command
+    `pwsh -c pdftotext -e UTF-8 a.pdf; pdftotext -enc UTF-8 b.pdf`,
+    `powershell -ExecutionPolicy Bypass -File ${LAB}\\work\\run.ps1 -enc UTF-8`,
   ];
   const brokeTricks = all(okTricks, (c) => !sh(c) && !sh(c, "Bash"));
   check("уловки-проверки не задевают обычную работу лабы (pip -r в своей папке, ~ на свою папку, grep по своей папке)", brokeTricks.length === 0, brokeTricks.join(" || "));
@@ -238,6 +244,11 @@ check("перехватчик: на секрет отвечает отказом
     `Get-ChildItem env:`,
     `iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('dHlwZQ==')))`,
     `powershell -EncodedCommand dAB5AHAAZQA=`,
+    `powershell -enc dAB5AHAAZQA=`, `pwsh -e dAB5AHAAZQA=`, `powershell.exe -NoP -ec dAB5AHAAZQA=`, `pwsh -EncodedC dAB5AHAAZQA=`,
+    `powershell -ExecutionPolicy Bypass -en dAB5AHAAZQA=`, `cmd /c "powershell /enc dAB5AHAAZQA="`,
+    `C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -enco dAB5AHAAZQA=`, `& pwsh.exe –ec dAB5AHAAZQA=`,
+    `Start-Process powershell -ArgumentList '-enc','dAB5AHAAZQA='`, `pdftotext -enc UTF-8 a.pdf; powershell -e dAB5AHAAZQA=`,
+    `x -encodedcommand dAB5AHAAZQA=`,
     `cmd /c mklink /J ${LAB}\\x C:\\Users\\User\\OPENCL~1`,
   ];
   const leaked = all(trickCommands, (c) => sh(c) && sh(c, "Bash"));

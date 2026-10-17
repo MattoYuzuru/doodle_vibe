@@ -17,20 +17,22 @@ export function HeroDeadlineCard({ deadline, subject, now, onOpen }: {
   const overdue = effectiveDue(deadline.due) <= now;
 
   return (
+    // Нажатие — CSS :active с задержкой входа, как у Tile (проверка 15 окт): whileTap сжимал карточку на каждом
+    // pointerdown, в том числе в начале взмаха.
     <m.button
       onClick={onOpen}
       initial={{ opacity: 0, y: 16, scale: 0.96 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ ...spring(380, 30), delay: stagger(0) }}
-      whileTap={{ scale: 0.975 }}
-      className="relative col-span-2 block w-full overflow-hidden rounded-[22px] p-4 text-left text-white shadow-lg shadow-black/20"
+      className="relative col-span-2 block w-full overflow-hidden rounded-[22px] p-4 text-left text-white shadow-lg shadow-black/20 transition-[scale] duration-150 ease-out active:scale-[0.975] active:delay-75"
       style={{ background: heroGradient[u] }}
     >
-      {/* кольца, как в варианте B, медленно «дышат»; блик пробегает по карточке при появлении */}
-      <m.span aria-hidden className="pointer-events-none absolute -top-24 -right-16 size-56 rounded-full border border-white/15"
-        animate={{ scale: [1, 1.06, 1] }} transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }} />
-      <m.span aria-hidden className="pointer-events-none absolute -top-16 -right-8 size-40 rounded-full border border-white/15"
-        animate={{ scale: [1, 1.1, 1] }} transition={{ duration: 6, repeat: Infinity, ease: "easeInOut", delay: 0.6 }} />
+      {/* кольца, как в варианте B, медленно «дышат»; блик пробегает по карточке при появлении.
+          Кольца — CSS-анимация (index.css: hero-ring-a/b), а не framer (проверка 15 окт): scale framer считал в JS
+          на каждом кадре и перерисовывал карточку даже на другой вкладке; transform в @keyframes ведёт композитор,
+          а на скрытой вкладке, в облегчённом режиме и при «уменьшить движение» кольца стоят. */}
+      <span aria-hidden className="hero-ring-a pointer-events-none absolute -top-24 -right-16 size-56 rounded-full border border-white/15" />
+      <span aria-hidden className="hero-ring-b pointer-events-none absolute -top-16 -right-8 size-40 rounded-full border border-white/15" />
       <m.span aria-hidden className="pointer-events-none absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-white/20 to-transparent"
         initial={{ x: "-120%" }} animate={{ x: "280%" }} transition={{ duration: 0.9, delay: 0.25, ease: "easeOut" }} />
 

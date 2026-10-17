@@ -1,5 +1,5 @@
-import { CircleAlert, CircleCheck, FileSearch, FileUp, Info, LoaderCircle, ThumbsUp } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { CircleAlert, CircleCheck, FileSearch, FileUp, Info, LoaderCircle, RotateCcw, ThumbsUp } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Tile, TileLabel } from "../components/Tile";
 import { toast } from "../components/Toast";
 import { EmptyState } from "../components/ui";
@@ -35,10 +35,14 @@ export function CheckScreen({ id }: { id: string }) {
   const [now, setNow] = useState(Date.now());
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
+  // Загрузка — отдельной функцией: после ошибки первого запроса (сервер просыпается, туннель не ответил) экран больше не
+  // заходит в тупик с одной красной строкой — есть «Повторить» (проверка 15 окт).
+  const reload = useCallback(() => {
     if (!assignId) return;
-    checkApi.get(assignId).then(setSt).catch((e) => setErr((e as Error).message));
+    setErr("");
+    checkApi.get(assignId).then((s) => { setSt(s); setErr(""); }).catch((e) => setErr((e as Error).message));
   }, [assignId]);
+  useEffect(() => { reload(); }, [reload]);
   // Пока проверка идёт — опрос раз в 5 секунд и счётчик времени.
   const running = st?.status === "running";
   useEffect(() => {
@@ -53,7 +57,7 @@ export function CheckScreen({ id }: { id: string }) {
     if (!/\.(pdf|docx)$/i.test(file.name)) { haptic.warning(); toast("Нужен отчёт в формате PDF или DOCX"); return; }
     if (file.size > MAX_UPLOAD_BYTES) { haptic.warning(); toast("Файл больше 20 МБ — сожмите рисунки и попробуйте ещё раз"); return; }
     setSending(true);
-    try { setSt(await checkApi.start(assignId, file)); setNow(Date.now()); haptic.success(); }
+    try { setSt(await checkApi.start(assignId, file)); setErr(""); setNow(Date.now()); haptic.success(); }
     catch (e) { haptic.warning(); toast((e as Error).message); }
     finally { setSending(false); }
   };
@@ -76,7 +80,14 @@ export function CheckScreen({ id }: { id: string }) {
       </div>
       <input ref={fileRef} type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; void upload(f); }} />
-      {err && err !== "labs_not_allowed" && <p className="px-1 text-s font-semibold text-red">{err}</p>}
+      {err && err !== "labs_not_allowed" && (
+        <>
+          <p className="px-1 text-s font-semibold text-red wrap-anywhere">{err}</p>
+          <button onClick={() => { haptic.tap(); reload(); }} className="glass flex min-h-12 items-center justify-center gap-2 rounded-2xl text-m font-bold text-accent">
+            <RotateCcw size={18} strokeWidth={2.5} /> Повторить
+          </button>
+        </>
+      )}
 
       {(!st || st.status === "idle") && !err && (
         <>
@@ -105,7 +116,7 @@ export function CheckScreen({ id }: { id: string }) {
       {st?.status === "error" && (
         <>
           <Tile index={0} className="!min-h-0 py-3">
-            <p className="flex items-start gap-2 text-m font-semibold text-red"><CircleAlert size={18} strokeWidth={2.25} className="mt-0.5 shrink-0" />{st.error}</p>
+            <p className="flex items-start gap-2 text-m font-semibold text-red wrap-anywhere"><CircleAlert size={18} strokeWidth={2.25} className="mt-0.5 shrink-0" />{st.error}</p>
           </Tile>
           {picker("Загрузить отчёт ещё раз", true)}
         </>
@@ -118,7 +129,8 @@ export function CheckScreen({ id }: { id: string }) {
               <span className={`rounded-full px-3 py-1 text-s font-bold ${VERDICT[r.verdict].cls}`}>{VERDICT[r.verdict].text}</span>
               <span className="truncate text-[12px] font-semibold text-hint">{st.doneAt ? when(st.doneAt) : ""}</span>
             </div>
-            <p className="mt-2.5 text-m leading-[21px]">{r.summary}</p>
+            {/* wrap-anywhere: длинный путь, ссылка или имя файла в выводах агента переносятся, а не уводят экран вбок (проверка 15 окт). */}
+            <p className="mt-2.5 text-m leading-[21px] wrap-anywhere">{r.summary}</p>
             <p className="mt-2 truncate text-s text-hint">{st.file.name}{st.n > 1 ? ` · проверка № ${st.n}` : ""}</p>
           </Tile>
 
@@ -130,9 +142,9 @@ export function CheckScreen({ id }: { id: string }) {
                 <TileLabel className={`px-1 pt-1 ${LEVEL[lv].color}`}>{LEVEL[lv].title} · {list.length}<span className="pl-1.5 font-semibold normal-case tracking-normal text-hint">{LEVEL[lv].hint}</span></TileLabel>
                 {list.map((x, i) => (
                   <Tile key={`${lv}${i}`} index={i + 1} className="!min-h-0 py-3">
-                    {(x.where || x.area) && <p className="text-[12px] font-bold uppercase tracking-wide text-hint">{[x.where, x.area].filter(Boolean).join(" · ")}</p>}
-                    <p className="mt-1 text-m leading-[21px]">{x.what}</p>
-                    {x.fix && <p className="mt-1.5 flex items-start gap-1.5 text-s leading-[18px] font-semibold text-accent"><CircleCheck size={15} strokeWidth={2.5} className="mt-0.5 shrink-0" />{x.fix}</p>}
+                    {(x.where || x.area) && <p className="text-[12px] font-bold uppercase tracking-wide text-hint wrap-anywhere">{[x.where, x.area].filter(Boolean).join(" · ")}</p>}
+                    <p className="mt-1 text-m leading-[21px] wrap-anywhere">{x.what}</p>
+                    {x.fix && <p className="mt-1.5 flex items-start gap-1.5 text-s leading-[18px] font-semibold text-accent wrap-anywhere"><CircleCheck size={15} strokeWidth={2.5} className="mt-0.5 shrink-0" />{x.fix}</p>}
                   </Tile>
                 ))}
               </div>
@@ -145,13 +157,13 @@ export function CheckScreen({ id }: { id: string }) {
           {r.good.length > 0 && (
             <Tile index={2} className="!min-h-0 py-3">
               <TileLabel className="flex items-center gap-1.5 text-green"><ThumbsUp size={13} strokeWidth={2.5} />Что хорошо</TileLabel>
-              <ul className="mt-1.5 flex flex-col gap-1">{r.good.map((g, i) => <li key={i} className="text-s leading-[18px]">— {g}</li>)}</ul>
+              <ul className="mt-1.5 flex flex-col gap-1 wrap-anywhere">{r.good.map((g, i) => <li key={i} className="text-s leading-[18px]">— {g}</li>)}</ul>
             </Tile>
           )}
           {r.unchecked.length > 0 && (
             <Tile index={3} className="!min-h-0 py-3">
               <TileLabel className="flex items-center gap-1.5"><Info size={13} strokeWidth={2.5} />Что проверить не удалось</TileLabel>
-              <ul className="mt-1.5 flex flex-col gap-1">{r.unchecked.map((g, i) => <li key={i} className="text-s leading-[18px] text-hint">— {g}</li>)}</ul>
+              <ul className="mt-1.5 flex flex-col gap-1 wrap-anywhere">{r.unchecked.map((g, i) => <li key={i} className="text-s leading-[18px] text-hint">— {g}</li>)}</ul>
             </Tile>
           )}
           {picker("Проверить исправленный отчёт", false)}

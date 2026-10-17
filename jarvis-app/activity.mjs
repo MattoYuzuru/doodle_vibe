@@ -4,15 +4,17 @@
 //   — какие файлы агент пишет в папке лабы (вывод команд, рисунки, отчёт, заметки) — «Сейчас: … · 20 с назад»;
 //   — держит ли он замок замеров (.measure.lock) или ждёт его у другого студента;
 //   — идёт ли команда этой лабы (в командной строке процесса — папка лабы, проект lab-<ключ> или --key <ключ>);
+//     когда агент работает под своей учётной записью Windows (agent-account.mjs), командных строк его процессов сервер
+//     не видит — тогда команда берётся из журнала Claude CLI этой лабы: вызов Bash/PowerShell без результата ещё идёт;
 //   — давно ли кончился сон сервера, после которого ход продолжился сам.
 // Отсюда же — «ползущий» процент: каждый новый результат (файл вывода, рисунок, файл отчёта) после последней записи
 // агента даёт +1 %, но не дальше следующей отметки агента. Число движется, только когда работа правда идёт.
 import { spawn } from "node:child_process";
-import { readFile, readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { open, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { AGENT, AGENT_TRANSCRIPTS, measureLock } from "./agent-account.mjs";
+import { whoIn, whoOf } from "./usage.mjs";
 
-const LOCK = process.env.LAB_LOCK_FILE || join(homedir(), "moodle-work", ".measure.lock"); // переменная — только для тестов
 /** Отметки процента из lab-instruction.md: агент пишет одну из них (или промежуточную). */
 export const MILESTONES = [5, 15, 25, 40, 60, 75, 90, 100];
 const ACTIVE_MS = Number(process.env.LAB_ACTIVE_MS) || 2 * 60e3; // было действие — «работает»
@@ -75,9 +77,10 @@ export function creep(base, results) {
 }
 
 async function lockInfo() {
-  const st = await stat(LOCK).catch(() => null);
+  const lock = measureLock(); // LAB_LOCK_FILE — только для тестов
+  const st = await stat(lock).catch(() => null);
   if (!st || Date.now() - st.mtimeMs > LOCK_FRESH_MS) return null;
-  const buf = await readFile(LOCK).catch(() => Buffer.alloc(0));
+  const buf = await readFile(lock).catch(() => Buffer.alloc(0));
   // Замок пишет агент: PowerShell мог сохранить его в UTF-16 или с меткой BOM.
   const text = (buf.includes(0) ? buf.toString("utf16le") : buf.toString("utf8")).replace(/^﻿/, "").trim();
   return { key: text, at: st.mtimeMs };
@@ -110,7 +113,83 @@ export function busyCommand(lines, job) {
   const re = new RegExp(`(${esc(dir)}|${esc(dir.replace(/\\/g, "/"))})(?![\\w])|lab-${esc(String(job.key).toLowerCase())}(?![\\w])|--key ${esc(String(job.key).toLowerCase())}(?![\\w])`);
   const hit = lines.find((l) => { const s = l.toLowerCase(); return !s.includes("openclaw") && !s.includes("get-ciminstance") && re.test(s); });
   if (!hit) return null;
-  return /\bk6\b/i.test(hit) ? "идёт нагрузочный тест" : /docker/i.test(hit) ? "выполняется команда docker на стенде" : "выполняется долгая команда";
+  return commandWhat(hit);
+}
+const commandWhat = (cmd) => (/\bk6\b/i.test(cmd) ? "идёт нагрузочный тест" : /docker/i.test(cmd) ? "выполняется команда docker на стенде" : "выполняется долгая команда");
+
+/**
+ * Вызовы инструментов в тексте журнала Claude CLI, на которые ещё нет результата: [{ name, text }] — text — команда
+ * Bash/PowerShell (или входные данные другого инструмента). Учитываются только вызовы не раньше since (начало хода):
+ * оборванный прошлый ход не должен выглядеть идущей командой. Неполная первая строка хвоста просто пропускается.
+ */
+export function pendingTools(text, since = 0) {
+  const calls = new Map();
+  for (const line of String(text).split("\n")) {
+    if (!line.trim()) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    for (const c of Array.isArray(e?.message?.content) ? e.message.content : []) {
+      if (c?.type === "tool_use" && c.id && (Date.parse(e.timestamp || "") || 0) >= since) calls.set(c.id, { name: String(c.name || ""), text: String(c.input?.command ?? JSON.stringify(c.input ?? {})) });
+      else if (c?.type === "tool_result" && c.tool_use_id) calls.delete(c.tool_use_id);
+    }
+  }
+  return [...calls.values()];
+}
+
+// Журналы агента лаб (папка в профиле его учётной записи; LAB_TRANSCRIPTS_DIR — только для тестов).
+const JOURNALS = process.env.LAB_TRANSCRIPTS_DIR || AGENT_TRANSCRIPTS;
+// Начало журнала — с запасом: первая инструкция сервера (правила лабы целиком) в журнале занимает 40–50 КБ.
+const HEAD = 256 * 1024, TAIL = 256 * 1024;
+async function readPart(path, start, len) {
+  const fh = await open(path, "r");
+  try { const buf = Buffer.alloc(len); const { bytesRead } = await fh.read(buf, 0, len, start); return buf.subarray(0, bytesRead).toString("utf8"); }
+  finally { await fh.close(); }
+}
+const owners = new Map(); // журнал → чья это работа (по началу журнала; начало файла не меняется)
+async function ownerOf(path) {
+  if (owners.has(path)) return owners.get(path);
+  const head = await readPart(path, 0, HEAD).catch(() => "");
+  // Как в учёте расхода: по подписи «Рабочая папка» в первой инструкции сервера, иначе — по папке в действиях модели.
+  let first = null;
+  const own = [];
+  for (const line of head.split("\n")) {
+    let x;
+    try { x = JSON.parse(line); } catch { continue; }
+    if (first === null && x.type === "user") { const c = x.message?.content; first = typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => b?.text || "").join("\n") : ""; }
+    if (x.type === "assistant") own.push(line);
+  }
+  const w = whoOf(first);
+  if (!w.tgId) return whoIn(own); // по действиям модели — не запоминаем: журнал ещё растёт
+  if (owners.size > 500) owners.clear();
+  owners.set(path, w);
+  return w;
+}
+/**
+ * Какая команда сейчас идёт в журнале этой лабы (агент под своей учётной записью — процессов его серверу не видно).
+ * Смотрим журналы, менявшиеся с начала хода и относящиеся к этой работе, — последнее незавершённое действие.
+ */
+export async function journalBusy(job, since, dir = JOURNALS) {
+  const check = String(job.key || "").startsWith("check-");
+  for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (!e.isFile() || !e.name.endsWith(".jsonl")) continue;
+    const path = join(dir, e.name);
+    const st = await stat(path).catch(() => null);
+    if (!st || st.mtimeMs < since - 60e3) continue;
+    const who = await ownerOf(path);
+    if (!who?.tgId || who.tgId !== Number(job.tgId) || String(who.id) !== String(job.id) || (who.kind === "check") !== check) continue;
+    const tail = await readPart(path, Math.max(0, st.size - TAIL), Math.min(st.size, TAIL)).catch(() => "");
+    const call = pendingTools(tail, since - 60e3).pop();
+    if (call) return /^(Task|Agent)$/.test(call.name) ? "работает помощник агента" : commandWhat(call.text);
+  }
+  return null;
+}
+const journalCache = new Map(); // ключ лабы → { at, what }: журналы перечитываем не чаще раза в 30 с
+async function journalCommand(job, since) {
+  const c = journalCache.get(job.key);
+  if (c && Date.now() - c.at < PROC_CACHE_MS) return c.what;
+  const what = await journalBusy(job, since).catch(() => null);
+  journalCache.set(job.key, { at: Date.now(), what });
+  return what;
 }
 
 /**
@@ -132,7 +211,7 @@ export async function activityOf(job, { now = Date.now() } = {}) {
   const lock = await lockInfo();
   if (lock?.key === job.key) return { state: "long", what: "идут замеры нагрузки", at, alerted: false };
   if (lock?.key) return { state: "long", what: "ждёт очереди на замеры: их сейчас делает другой студент", at, alerted: false };
-  const cmd = busyCommand(await processLines(), job);
+  const cmd = AGENT ? await journalCommand(job, since) : busyCommand(await processLines(), job);
   if (cmd) return { state: "long", what: cmd, at, alerted: false };
   if (now - at < STUCK_MS) return { state: "long", what: "думает или выполняет долгую команду", at, alerted: false };
   return { state: "stuck", what: last ? describe(last.rel) : null, at, alerted: job.stuckAlert === job.turnAt };

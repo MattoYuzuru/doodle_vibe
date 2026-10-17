@@ -15,6 +15,8 @@ export const useJournal = create<{
   error?: string;
   load(refresh?: boolean): Promise<void>;
   connect(password: string): Promise<void>;
+  /** «Вернуть» дисциплину, которую студент назвал не своей (в боте или в «Сессии»): сервер снимает обе отметки. */
+  restore(id: number): Promise<void>;
   clear(): void;
 }>((set, get) => ({
   st: read(),
@@ -41,6 +43,13 @@ export const useJournal = create<{
     await ejApi.connect(password);
     set({ status: "idle" });
     await get().load(true);
+  },
+  // Ошибку не глотаем: экран покажет её. Журнал не ответил — сервер отдаёт прошлые данные с причиной: их и показываем.
+  async restore(id) {
+    const st = await ejApi.mine(id);
+    const data = st.data ?? (st.connected ? get().st?.data ?? null : null);
+    set({ st: { ...st, data }, status: st.loadError ? "error" : "ok", error: st.loadError || undefined });
+    if (!st.loadError) write(st);
   },
   clear() { set({ st: null, status: "idle", error: undefined }); write(null); },
 }));

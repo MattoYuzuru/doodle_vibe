@@ -1,5 +1,4 @@
 // Даты. Все сроки показываем по Москве: так же их показывает Moodle МИСИС.
-const TZ = "Europe/Moscow";
 const MONTHS_GEN = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
 const MONTHS_SHORT = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 const WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"];
@@ -9,12 +8,16 @@ export const HOUR = 3600e3;
 export const DAY = 24 * HOUR;
 
 type Parts = { y: number; m: number; d: number; hh: number; mm: number };
-const fmt = new Intl.DateTimeFormat("ru-RU", {
-  timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-});
+/**
+ * Москва — фиксированный UTC+3 с 26.10.2014, перевода часов нет; если его вернут — вернуть Intl.DateTimeFormat
+ * с timeZone "Europe/Moscow". Проверка 15 окт: formatToParts стоил ~3,6 мкс на вызов, а сортировки и группировки трёх
+ * вкладок делали их ~1500 на каждое обновление стора; сдвиг на 3 часа в 25 раз быстрее и совпадает с Intl на всех
+ * датах с 2020 года.
+ */
+const MSK_OFFSET = 3 * HOUR;
 export function mskParts(ms: number): Parts {
-  const p = Object.fromEntries(fmt.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
-  return { y: +p.year, m: +p.month, d: +p.day, hh: +p.hour, mm: +p.minute };
+  const d = new Date(ms + MSK_OFFSET);
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), hh: d.getUTCHours(), mm: d.getUTCMinutes() };
 }
 
 /** Ключ дня в Москве: "2026-09-30". */
@@ -51,6 +54,12 @@ export function formatLongDate(key: string) {
   const d = new Date(keyToUtc(key));
   const w = WEEKDAYS[weekdayIdx(key)];
   return `${w[0].toUpperCase()}${w.slice(1)}, ${d.getUTCDate()} ${MONTHS_GEN[d.getUTCMonth()]}`;
+}
+
+/** «Пн, 20 окт» — короткая дата для строк, где место дорого (проверка 15 окт: «Ближайшие занятия» на 360 px). */
+export function formatShortDate(key: string) {
+  const d = new Date(keyToUtc(key));
+  return `${WEEKDAYS_SHORT[weekdayIdx(key)]}, ${d.getUTCDate()} ${MONTHS_SHORT[d.getUTCMonth()]}`;
 }
 
 /** Обратный отсчёт: «4 д 12 ч», «5 ч 20 мин», «просрочено 1 д». */

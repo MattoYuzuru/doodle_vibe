@@ -5,12 +5,16 @@ import { toast } from "../components/Toast";
 import { EmptyState } from "../components/ui";
 import { useNav } from "../hooks/useNav";
 import { api } from "../store/api";
-import { haptic } from "../telegram/webapp";
+import { confirmDialog, haptic } from "../telegram/webapp";
 
 interface User {
   tgId: number; tgName: string | null; tgUsername: string | null; fullName: string | null; group: string | null;
   loggedIn: boolean; allowed: boolean; isOwner: boolean; labRequest: number | null; updatedAt: number | null;
+  /** Пробный отчёт (lab-trial.mjs): "available" — положен; объект — пробная лаба; "used" — уже пользовался или закрыт; null — нет. */
+  trial?: "available" | "used" | { id: string; title: string | null; at: number; closed?: boolean } | null;
 }
+const trialLabel = (t: User["trial"]) =>
+  t === "available" ? "Пробный отчёт доступен" : t && typeof t === "object" ? (t.closed ? "Пробный закрыт" : `Пробный: ${t.title ? `«${t.title.length > 40 ? `${t.title.slice(0, 40)}…` : t.title}»` : `работа ${t.id}`}, ${new Date(t.at).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}`) : null;
 
 /** Экран владельца: кто может делать отчёты с агентом (белый список), кто просит доступ. Переключатель пишет lab-allowlist.txt. */
 export function AccessScreen() {
@@ -28,6 +32,14 @@ export function AccessScreen() {
       setUsers(r.users);
       toast(!u.allowed ? `Отчёты открыты: ${u.tgName ?? u.fullName ?? u.tgId}` : `Отчёты закрыты: ${u.tgName ?? u.fullName ?? u.tgId}`);
     } catch (e) { haptic.warning(); toast((e as Error).message); }
+    finally { setBusy(null); }
+  };
+  // Закрыть пробный отчёт, не трогая белый список (раньше было только «включить → выключить»: на миг полный доступ и сообщение ✅).
+  const closeTrial = async (u: User) => {
+    if (!(await confirmDialog(`Закрыть пробный отчёт для ${u.tgName ?? u.fullName ?? u.tgId}? Начатая пробная лаба тоже закроется.`))) return;
+    setBusy(u.tgId); haptic.select();
+    try { const r = await api<{ users: User[] }>("api/access", { tgId: u.tgId, closeTrial: true }); setUsers(r.users); toast("Пробный закрыт"); }
+    catch (e) { haptic.warning(); toast((e as Error).message); }
     finally { setBusy(null); }
   };
 
@@ -53,6 +65,13 @@ export function AccessScreen() {
               <p className="truncate text-s text-hint">{[u.fullName, u.group].filter(Boolean).join(" · ") || "в Moodle не входил"} · id {u.tgId}</p>
               {u.labRequest && !u.allowed && <TileLabel className="mt-1 text-yellow normal-case tracking-normal">Просит доступ</TileLabel>}
               {!u.loggedIn && <TileLabel className="mt-1 normal-case tracking-normal">Вышел из Moodle</TileLabel>}
+              {!u.allowed && trialLabel(u.trial) && (
+                <p className="mt-1 flex flex-wrap items-center gap-x-2 text-s text-hint">{trialLabel(u.trial)}
+                  {(u.trial === "available" || (typeof u.trial === "object" && u.trial && !u.trial.closed)) && (
+                    <button onClick={() => closeTrial(u)} disabled={busy === u.tgId} className="font-bold text-red disabled:opacity-50">Закрыть</button>
+                  )}
+                </p>
+              )}
             </div>
             <button onClick={() => toggle(u)} disabled={busy === u.tgId} role="switch" aria-checked={u.allowed} aria-label="Отчёты с агентом"
               className={`relative h-8 w-14 shrink-0 rounded-full transition-colors disabled:opacity-50 ${u.allowed ? "bg-accent" : "bg-raised"}`}>
@@ -62,6 +81,7 @@ export function AccessScreen() {
         </Tile>
       ))}
       <p className="px-2 text-s text-hint">То же самое можно сделать на ПК в файле lab-allowlist.txt — по одному Telegram id в строке.</p>
+      <p className="px-2 text-s text-hint">Новым пользователям положен один пробный отчёт (на Opus 5.5). Модель, предел расхода и выключатель — в lab-trial.json на ПК.</p>
     </div>
   );
 }

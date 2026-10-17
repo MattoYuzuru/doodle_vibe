@@ -27,7 +27,13 @@ import vt  # noqa: E402
 
 DISTRO = os.environ.get("WSL_DISTRO", "Ubuntu")
 COLS, ROWS = 120, 50
-MAP_FILE = os.path.join(os.path.expanduser("~"), "moodle-work", "wsl-users.json")
+# Список tgId → пользователь Linux лежит в moodle-work, а она — на три уровня выше этого файла
+# (moodle-work\jarvis-app\assets\wsl_lab.py), а не в домашней папке: агент может работать под своей учётной записью
+# Windows (doodle-agent, ops\migrate\УЧЁТКА-АГЕНТА.md), и домашняя папка у него другая. Там же есть общая папка
+# агента agent-shared (в корень moodle-work ему писать нельзя) — тогда список в ней.
+WORK = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SHARED = os.path.join(WORK, "agent-shared")
+MAP_FILE = os.environ.get("WSL_USERS_FILE") or os.path.join(SHARED if os.path.isdir(SHARED) else WORK, "wsl-users.json")
 TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя", ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f",
                                                     "kh", "ts", "ch", "sh", "shch", "", "y", "", "e", "yu", "ya"]))
 
