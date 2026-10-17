@@ -1,5 +1,5 @@
 import { AnimatePresence, m } from "framer-motion";
-import { CalendarDays, GraduationCap, Moon, Plus, Sun, UserRound, X } from "lucide-react";
+import { Feather, Moon, Smartphone, Sparkles, Sun, UserRound, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useNav } from "../hooks/useNav";
@@ -11,7 +11,8 @@ import { plural } from "../lib/journal";
 import { useJournal } from "../store/journal";
 import { useSchedule } from "../store/schedule";
 import { useAppStore } from "../store/useAppStore";
-import { haptic, setScheme } from "../telegram/webapp";
+import { lite, setLite } from "../lib/perf";
+import { addToHomeScreen, haptic, homeScreenStatus, setScheme } from "../telegram/webapp";
 import { TABBAR_H } from "./TabBar";
 
 /*
@@ -152,7 +153,7 @@ function lines(c: Ctx): string[] {
       "Объясни тему мне. Если смог объяснить сове — точно понял.",
       "Повтори конспект 10 минут перед сном. Мозг доделает остальное, пока ты спишь.",
       "Закрой лишние вкладки. Я вижу, их там много.",
-      "Зажми меня подольше — откроется быстрое меню. Там и тёмная тема есть.",
+      "Зажми меня подольше — откроется быстрое меню: тема, лёгкий режим, профиль.",
     ];
   }
 }
@@ -223,6 +224,8 @@ export function OwlAssistant() {
   const hoverRef = useRef<number | null>(null);
   const press = useRef<{ x: number; y: number; long: boolean; timer: number } | null>(null);
   const suppressClick = useRef(false);
+  const [homeScreen, setHomeScreen] = useState<string | null>(null);
+  useEffect(() => { if (menu) void homeScreenStatus().then(setHomeScreen); }, [menu]);
 
   const p = mskParts(now);
   const night = p.hh >= 23 || p.hh < 5;
@@ -375,13 +378,14 @@ export function OwlAssistant() {
   const bottom = `calc(${TABBAR_H + 12}px + var(--safe-bottom))`;
 
   // Быстрое меню по зажатию совы: кнопки дугой слева-сверху. Можно, не отпуская палец, довести до кнопки и отпустить,
-  // а можно отпустить и нажать кнопку. Задач в меню нет — их убрали и из прежнего «+» по просьбе владельца.
+  // а можно отпустить и нажать кнопку. Только то, чего нет во вкладках (дедлайн, план и журнал убраны по просьбе владельца):
+  // профиль, тема, облегчённый режим (с перезапуском) и ярлык на экран телефона — если Telegram умеет и ярлыка ещё нет.
   const items = [
-    { key: "deadline", label: "Дедлайн", Icon: Plus, run: () => push({ name: "deadline-form" }) },
-    { key: "plan", label: "План", Icon: CalendarDays, run: () => setTab("plan") },
-    { key: "journal", label: "Журнал", Icon: GraduationCap, run: () => { setJournalView("journal"); setTab("journal"); } },
     { key: "profile", label: "Профиль", Icon: UserRound, run: () => push({ name: "profile" }) },
     { key: "theme", label: dark ? "Светлая" : "Тёмная", Icon: dark ? Sun : Moon, run: () => setScheme(dark ? "light" : "dark") },
+    { key: "lite", label: lite ? "Обычный режим" : "Лёгкий режим", Icon: lite ? Sparkles : Feather, run: () => setLite(!lite) },
+    ...(homeScreen === "missed" || homeScreen === "unknown"
+      ? [{ key: "home", label: "На экран", Icon: Smartphone, run: () => { addToHomeScreen(); setHomeScreen("added"); } }] : []),
   ];
   const R = 140;
   const spot = (i: number) => { const a = Math.PI - (i / (items.length - 1)) * (Math.PI / 2); return { x: R * Math.cos(a), y: -R * Math.sin(a) }; };

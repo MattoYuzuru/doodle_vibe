@@ -28,6 +28,12 @@ const slowFresh = stored === "slow" || (!!slowAt && Date.now() - Number(slowAt[1
 export const lite = stored === "on" || slowFresh || (stored !== "off" && (weakHardware || reducedMotion));
 if (lite) document.documentElement.classList.add("lite");
 
+/** Ручной выбор из меню совы. Режим читается при запуске во многих местах, поэтому после выбора — перезапуск страницы. */
+export function setLite(on: boolean) {
+  save(KEY, on ? "on" : "off");
+  location.reload();
+}
+
 /*
  * Замер плавности (проверка 15 окт). Раньше кадры мерились 0,8–4,8 с после запуска, когда никто не листает и кадры
  * пустые, — почти всегда выходило «fast», и это записывалось навсегда. Теперь меряем только во время прокрутки (и 150 мс
