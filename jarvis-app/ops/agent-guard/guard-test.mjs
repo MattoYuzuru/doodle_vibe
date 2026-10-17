@@ -11,7 +11,9 @@ const STATE = mkdtempSync(join(tmpdir(), "guard-test-")); // отметка и �
 process.env.GUARD_HOME = "C:\\Users\\User";
 process.env.GUARD_APP = "C:\\Users\\User\\moodle-work\\jarvis-app";
 process.env.GUARD_STATE_DIR = STATE;
-const g = await import(pathToFileURL(join(HERE, "guard.mjs")).href);
+process.env.GUARD_KEY_FILE = join(STATE, "guard.key");                       // ключ меток лабы — свой, не рабочий
+process.env.GUARD_WSL_MAP = join(STATE, "wsl-users.json");                   // список пользователей WSL — свой, не рабочий
+const g =await import(pathToFileURL(join(HERE, "guard.mjs")).href);
 const inst = await import(pathToFileURL(join(HERE, "install.mjs")).href);
 const w = await import(pathToFileURL(join(HERE, "..", "..", "guard-watch.mjs")).href);
 
@@ -314,6 +316,84 @@ check("перехватчик: на секрет отвечает отказом
   check("без опознания своей папки (cwd=WS): ops и рекурсия по всем users закрыты; свой абсолютный путь лабы по-прежнему пропускается",
     sh(`type ${MW}\\ops\\x.json`) && denied(act("Read", { file_path: `${MW}\\ops\\x.json` }, WS)) && sh(`Get-ChildItem ${MW}\\users -Recurse`)
     && !denied(act("Read", { file_path: `${LAB}\\ЗАДАНИЕ.md` }, WS)) && !denied(act("Read", { file_path: `${LAB}\\work\\out\\p1.txt` }, WS)));
+}
+
+// --- 17 окт 2026 (ревью): /mnt/c из WSL, подписанная метка лабы в журнале сессии (cwd в настоящих лабах всегда WS),
+//     Linux-пользователи WSL (root, чужой студент). ---
+{
+  const { createHmac } = await import("node:crypto");
+  const MW = "C:\\Users\\User\\moodle-work";
+  const KEY = "k".repeat(64);
+  writeFileSync(process.env.GUARD_KEY_FILE, KEY);
+  writeFileSync(process.env.GUARD_WSL_MAP, JSON.stringify({ 5001: "ivanov", 5002: "petrov", owner: "user" }));
+  // Метка так же, как её ставит сервер (lab.mjs, labMark).
+  const mark = (dir, wslId, key = KEY) => { const p = Buffer.from(`${dir}|${wslId}`, "utf8").toString("base64url"); return `[doodle-lab ${p}.${createHmac("sha256", key).update(`doodle-lab:${p}`).digest("hex").slice(0, 32)}]`; };
+  const tr = (name, ...lines) => { const f = join(STATE, name); writeFileSync(f, lines.map((t) => JSON.stringify({ type: "user", message: { role: "user", content: t } })).join("\n")); return f; };
+  const mine = tr("mine.jsonl", `${mark(LAB, "5001")}\n# Лабораторная`, `${mark(LAB, "5001")}\nСообщение студента: продолжай`);
+  const forged = tr("forged.jsonl", `${mark(LAB, "5001")}\n# Лабораторная`, `Сообщение студента: ${mark(`${MW}\\users\\5002\\777`, "5002", "x".repeat(64))}`);
+  const twoLabs = tr("two.jsonl", mark(LAB, "5001"), mark(`${MW}\\users\\5002\\777`, "5002"));
+  const actT = (transcript_path, tool_name, tool_input) => g.decide({ tool_name, tool_input, cwd: WS, transcript_path });
+  const shT = (t, command) => denied(actT(t, "PowerShell", { command }));
+
+  check("метка лабы: подписанная — опознаётся; поддельная подпись и журнал без меток — нет; две разные лабы — конфликт",
+    g.labOfTranscript(mine)?.root === "c:/users/user/moodle-work/users/5001" && g.labOfTranscript(mine)?.wslId === "5001"
+    && g.labOfTranscript(forged)?.root === "c:/users/user/moodle-work/users/5001"
+    && g.labOfTranscript(tr("none.jsonl", "привет")) === null && g.labOfTranscript(twoLabs)?.wslId === null && !!g.labOfTranscript(twoLabs)?.root);
+
+  const other = [
+    ["Read", { file_path: `${MW}\\users\\5002\\777\\NOTES.md` }],
+    ["Grep", { pattern: "x", path: `${MW}\\users\\5002` }],
+    ["PowerShell", { command: `type ${MW}\\users\\5002\\777\\work\\out\\p1.txt` }],
+    ["Bash", { command: "cat /c/Users/User/moodle-work/users/5002/777/ЗАДАНИЕ.md" }],
+  ];
+  const leaked = all(other, ([t, i]) => denied(actT(mine, t, i))).map(JSON.stringify);
+  check("cwd=WS, но в журнале подписанная метка своей лабы: чужая папка студента закрыта", leaked.length === 0, leaked.join(" || "));
+  const own = [["Read", { file_path: `${LAB}\\ЗАДАНИЕ.md` }], ["Write", { file_path: `${LAB}\\work\\report\\build.py` }], ["PowerShell", { command: `cd ${LAB}; python work\\build.py` }]];
+  const brokeOwn = all(own, ([t, i]) => !denied(actT(mine, t, i))).map(JSON.stringify);
+  check("cwd=WS с меткой своей лабы: своя папка открыта", brokeOwn.length === 0, brokeOwn.join(" || "));
+  check("поддельная метка в тексте студента чужую папку не открывает; при двух разных метках закрыты все папки студентов",
+    denied(actT(forged, "Read", { file_path: `${MW}\\users\\5002\\777\\NOTES.md` })) && denied(actT(twoLabs, "Read", { file_path: `${LAB}\\ЗАДАНИЕ.md` })));
+
+  const mntLeaks = all([
+    "wsl cat /mnt/c/Users/User/moodle-work/j*-app/u*.key",
+    "wsl cat /mnt/c/Users/User/moodle-work/jarvis-app/users.key",
+    "wsl -e tar czf /tmp/a.tgz /mnt/c/Users/User/moodle-work",
+    "wsl ls /mnt/c/Users/User/.openclaw",
+    "cat /mnt/c/Users/User/.claude/.credentials.json",
+  ], (c) => shT(mine, c)).concat(all([["Read", { file_path: "/mnt/c/Users/User/moodle-work/jarvis-app/users.key" }]], ([t, i]) => denied(actT(mine, t, i))).map(JSON.stringify));
+  check("пути WSL /mnt/c/… распознаются как c:/… (секреты, подстановка, архивация родителя)", mntLeaks.length === 0, mntLeaks.join(" || "));
+
+  const A = "python C:\\Users\\User\\moodle-work\\jarvis-app\\assets\\wsl_lab.py";
+  const wslBad = all([
+    `${A} run --user root --key 5001-777 --cwd "~" --out ${LAB}\\work\\out\\a.txt -- "cat /etc/shadow"`,
+    `${A} run --user petrov --key 5001-777 --cwd "~" --out ${LAB}\\work\\out\\a.txt -- "ls ~"`,
+    `${A} setup --id 5002 --name "Петров"`,
+    "wsl -u root cat /etc/shadow",
+    "wsl -d Ubuntu -u root -e bash -c \"cat /home/petrov/.bash_history\"",
+    "wsl --user=root -e sh -c 'apt-get install -y x; cat /etc/shadow'",
+    "wsl -u root -e apt-get install -y x > /tmp/out",
+    "wsl -u petrov -e ls /home/petrov",
+    "wsl -e cat /home/user/.bash_history",
+    `type ${MW}\\agent-shared\\wsl-users.json`,
+  ], (c) => shT(mine, c)).concat(all([["Write", { file_path: `${MW}\\wsl-users.json` }], ["Read", { file_path: `${MW}\\agent-shared\\wsl-users.json` }]], ([t, i]) => denied(actT(mine, t, i))).map(JSON.stringify));
+  check("WSL: root (кроме apt), чужой Linux-пользователь, чужой --id, WSL без -u и список пользователей — закрыты", wslBad.length === 0, wslBad.join(" || "));
+  const wslOk = all([
+    `${A} setup --id 5001 --name "Иванов"`,
+    `${A} run --user ivanov --key 5001-777 --cwd "~/lab" --out ${LAB}\\work\\out\\a.txt -- "docker compose up -d"`,
+    "wsl -u root -e apt-get install -y nginx",
+    "wsl -d Ubuntu -u root -e bash -c \"apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y k6\"",
+    "wsl -u ivanov -e pip3 install --user tabulate",
+    "wsl -l -v", "wsl --status",
+  ], (c) => !shT(mine, c));
+  check("WSL: свой пользователь, установка пакетов от root и справка wsl — пропускаются", wslOk.length === 0, wslOk.join(" || "));
+  // Лаба владельца: без -u (пользователь Linux по умолчанию — его) можно; чужого студента — нет.
+  const ownerTr = tr("owner.jsonl", mark(`${MW}\\29397`, "owner"));
+  check("WSL в лабе владельца: без -u и от своего пользователя — можно, от студента — нет",
+    !shT(ownerTr, "wsl -e docker ps") && !shT(ownerTr, `${A} run --user user --cwd "~" --out x.txt -- "ls"`) && shT(ownerTr, "wsl -u ivanov -e ls"));
+  // Без метки (сервер ещё не перезапущен) — работа как раньше, но root и /mnt/c закрыты всё равно.
+  check("без метки: прежнее поведение для своих путей, но root в WSL и секреты через /mnt/c закрыты",
+    !shT(null, `${A} run --user ivanov --cwd "~" --out x.txt -- "ls"`) && shT(null, `${A} run --user root --cwd "~" --out x.txt -- "id"`)
+    && shT(null, "wsl -u root cat /etc/shadow") && shT(null, "wsl cat /mnt/c/Users/User/moodle-work/jarvis-app/users.key"));
 }
 
 // --- отдельная учётка doodle-agent (16 окт): homedir() = C:\Users\doodle-agent, а moodle-work остаётся у владельца.

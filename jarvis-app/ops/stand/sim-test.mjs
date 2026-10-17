@@ -18,6 +18,10 @@ const N = Number(process.argv[2] || 25);
 const PAR = Number(process.env.SIM_PARALLEL || 1);
 let fails = 0;
 const check = (name, cond, extra = "") => { if (!cond) fails++; console.log((cond ? "PASS" : "FAIL") + "  " + name + (extra ? "  | " + extra : "")); };
+// Подписанная метка лабы для сторожа агента (lab.mjs labMark, 17 окт 2026) — в конце каждого сообщения агенту. Проверки
+// текста сообщений смотрят на само сообщение, без метки; что метка есть — отдельная проверка (сон ПК посреди хода).
+const MARK_TAIL = /\n\n\[doodle-lab [A-Za-z0-9_-]+\.[0-9a-f]{32}\][^\n]*$/;
+const unmark = (t) => (t == null ? t : String(t).replace(MARK_TAIL, ""));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- копия сервера с подменёнными адресами ----------
@@ -603,7 +607,7 @@ try {
   check("отчёты уходят в Telegram документом — каждому свой, с подписью", docsOf(fa).some((d) => /780/.test(decodeURIComponent(d.name || "")) && /готов|исправлен/.test(d.caption || "")) && docsOf(fc).some((d) => /782/.test(decodeURIComponent(d.name || ""))) && tgDocs.every((d) => labUsers.includes(d.chat_id)) && !tgDocs.some((d) => d.chat_id === 945210206), `документов ${tgDocs.length}: ${tgDocs.map((d) => d.chat_id + ":" + decodeURIComponent(d.name || "")).join(", ").slice(0, 300)}`);
   // --- Сон ПК посреди хода (1 окт 2026: закрыли крышку ноутбука на 71 минуту). Сон подделан файлом, ход «умирает» по метке.
   const cnt = (uid, aid) => Number(read(`${AGENT_LOG}.agent_files_lab-${uid}-${aid}.count`) || 0);
-  const lastTurnOf = (uid, aid) => readdirSync(join(labDir(uid, aid), "tmp")).filter((f) => f.startsWith("turn-")).sort().map((f) => read(join(labDir(uid, aid), "tmp", f))).at(-1);
+  const lastTurnOf = (uid, aid) => readdirSync(join(labDir(uid, aid), "tmp")).filter((f) => f.startsWith("turn-")).sort().map((f) => unmark(read(join(labDir(uid, aid), "tmp", f)))).at(-1);
   // 1) ход оборвался без ответа: сервер сам продолжает, студент ничего не нажимает
   writeFileSync(AGENT_LOG + ".diemid", "1");
   writeFileSync(FAKE_SLEEP, JSON.stringify({ from: Date.now(), to: Date.now() + 4500 }));
@@ -611,6 +615,8 @@ try {
   const sl1 = await waitJob(fc, 780);
   check("сон ПК посреди хода: агент продолжает сам, отчёт получен, в чате честная строка о сне без «отправьте ещё раз»", sl1.status === "report" && cnt(fc, 780) === 2 && sl1.messages.some((m) => m.role === "system" && /уходил в сон \(с \d\d:\d\d до \d\d:\d\d\)/.test(m.text) && /продолжает сам/.test(m.text)) && !sl1.messages.some((m) => /не дошло|не запустился/.test(m.text)) && sl1.messages.filter((m) => m.role === "user").length === 1, `${sl1.status}, вызовов ${cnt(fc, 780)}: ${sl1.messages.map((m) => m.role + ":" + m.text.slice(0, 50)).join(" | ")}`);
   const resumeMsg = lastTurnOf(fc, 780);
+  { const raw = readdirSync(join(labDir(fc, 780), "tmp")).filter((f) => f.startsWith("turn-")).sort().map((f) => read(join(labDir(fc, 780), "tmp", f)));
+    check("каждое сообщение агенту лабы заканчивается подписанной меткой лабы для сторожа (guard.mjs labOfTranscript)", raw.length > 0 && raw.every((t) => MARK_TAIL.test(t)), `сообщений ${raw.length}`); }
   check("сон ПК: агенту при продолжении сказано, что ход оборвался из-за сна и замеры этого времени надо переснять", resumeMsg.includes("[Сообщение приложения, не студента.]") && /ПК был в спящем режиме с \d\d:\d\d до \d\d:\d\d/.test(resumeMsg) && resumeMsg.includes("пересними") && !resumeMsg.includes("tok-u"), resumeMsg.slice(0, 160));
   { // Терминал для снимков: ответ студента (JOB.json лабы 782) запомнен и подсказан в следующей работе того же курса.
     const uFile = (id) => { try { return JSON.parse(readFileSync(join(SIM, "users", `${id}.json`), "utf8")); } catch { return {}; } };
@@ -695,7 +701,7 @@ try {
   check("свой PDF: ответ другого студента по той же работе не тронут", !other.files.some((f) => /Мой отчёт|Итог/.test(f.name)), JSON.stringify(other.files));
 
   // Правила поменялись, пока лаба идёт: с первым сообщением после этого агент получает их целиком — и только один раз.
-  const lastTurnOf2 = (uid, aid) => readdirSync(join(labDir(uid, aid), "tmp")).filter((f) => f.startsWith("turn-")).sort().map((f) => read(join(labDir(uid, aid), "tmp", f))).at(-1);
+  const lastTurnOf2 = (uid, aid) => readdirSync(join(labDir(uid, aid), "tmp")).filter((f) => f.startsWith("turn-")).sort().map((f) => unmark(read(join(labDir(uid, aid), "tmp", f)))).at(-1);
   const rulesFile = join(SIM, "lab-instruction.md");
   writeFileSync(rulesFile, read(rulesFile) + "\n- НОВОЕ ПРАВИЛО ДЛЯ ТЕСТА: образец лежит в assets.\n");
   await api(fbU, "/api/lab/777/message", { text: "сделай по образцу" });

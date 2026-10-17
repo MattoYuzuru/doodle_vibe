@@ -2,7 +2,7 @@
 // хранит переписку и состояние в jobs/<assignId>.json, читает JOB.json из рабочей папки после каждого хода,
 // прикрепляет и отправляет отчёт в Moodle ТОЛЬКО по запросу приложения (после подтверждения студента).
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, open, readdir, readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
@@ -25,6 +25,25 @@ import { isStateReadError, readJson, readText as readStateText, writeJsonAtomic 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const JOBS = join(DIR, "jobs");
 const WORK = join(homedir(), "moodle-work");
+/*
+ * Метка лабы для сторожа агента (17 окт 2026, ревью; ops\agent-guard\guard.mjs, labOfTranscript). Рабочая папка сессии
+ * агента — всегда workspace-files, поэтому, чья это лаба, сторож узнаёт по подписанной метке в журнале сессии: ею
+ * заканчивается каждое сообщение сервера агенту. Подпись — HMAC-SHA256 ключом guard.key (папка приложения агенту закрыта),
+ * поэтому текст студента и файлы метку не подделают. Формат менять только вместе с guard.mjs (MARK_RE, markSig).
+ */
+const GUARD_KEY = join(DIR, "guard.key");
+let guardKey = null;
+function labMark(dir, tgId) {
+  try {
+    if (!guardKey) {
+      if (!existsSync(GUARD_KEY)) writeFileSync(GUARD_KEY, randomBytes(32).toString("hex"), { flag: "wx" });
+      guardKey = readFileSync(GUARD_KEY, "utf8").trim();
+    }
+  } catch (e) { if (e?.code === "EEXIST") return labMark(dir, tgId); console.error(`guard.key: ${e.message || e}`); return ""; }
+  const payload = Buffer.from(`${dir}|${Number(tgId) === OWNER_ID ? "owner" : String(Number(tgId))}`, "utf8").toString("base64url");
+  // В конце сообщения, а не в начале: по началу (заголовок «# …») учёт расхода узнаёт, чья работа (usage.mjs HEADER).
+  return `\n\n[doodle-lab ${payload}.${createHmac("sha256", guardKey).update(`doodle-lab:${payload}`).digest("hex").slice(0, 32)}] (служебная метка приложения — не обращай внимания)`;
+}
 const OPENCLAW = join(process.env.APPDATA || join(homedir(), "AppData", "Roaming"), "npm", "node_modules", "openclaw", "openclaw.mjs");
 const TURN_TIMEOUT_S = 3600;
 const MAX_PDF = 10 * 1024 * 1024;
@@ -804,7 +823,7 @@ export async function decideEnv(tgId, id, approve) {
     const needs = { hash: `approved:${r.id}`, items: ok.map((x) => ({ name: x.name, why: [x.how, x.source, x.size].filter(Boolean).join(", "), check: "", where: "" })) };
     if (no.length) job.envNote = `[Сообщение приложения, не студента.] Владелец отклонил установку: ${names(no)} — обходись без них (замена или то, что можно сделать без них).`;
     await save(job);
-    envJobs.set(job.key, setupEnv(job, needs, { approved: true, autoContinue: idle() }).finally(() => envJobs.delete(job.key)));
+    envJobs.set(job.key, setupEnv(job, needs, { approved: true, autoContinue: idle() }).catch((e) => console.error(`lab ${job.key}: окружение сорвалось: ${e?.message || e}`)).finally(() => envJobs.delete(job.key)));
   } else {
     job.envNote = `[Сообщение приложения, не студента.] Владелец ПК отклонил установку: ${names(no)}. Обходись без них: используй замену или сделай то, что возможно без них, и скажи студенту, что именно.`;
     await save(job);
@@ -841,7 +860,7 @@ async function setupEnv(job, needs, { autoContinue = false, approved = false } =
   const slot = await acquire(job); // место в очереди агента — как у хода лабы
   try {
     await mkdir(dirname(msgFile), { recursive: true });
-    await writeFile(msgFile, await envInstruction(job, needs, { approved }));
+    await writeFile(msgFile, (await envInstruction(job, needs, { approved })) + labMark(job.dir, job.tgId));
     const r = await openclaw(["agent", "--agent", "files", "--session-key", `agent:files:env-${job.key}`, "--message-file", msgFile,
       "--json", "--timeout", String(ENV_TIMEOUT_S), "--thinking", "low"], { timeoutMs: (ENV_TIMEOUT_S + 60) * 1000 });
     const res = parseAgentOutput(r);
@@ -1029,7 +1048,28 @@ async function takeReport(job, meta, { prevStatus, quiet = false, outbox = null 
  * Один ход агента: сообщение → ответ; затем читаем JOB.json и обновляем состояние. first — ход с инструкцией,
  * fixing — ход с замечаниями преподавателя (после ответа агента замечания считаются доставленными).
  */
-async function turn(job, message, { first = false, fixing = false, resumed = 0 } = {}) {
+async function turn(job, message, opts) {
+  // Ход никогда не бросает наружу (17 окт 2026, ревью): его зовут как void turn(…), и необработанный отказ промиса
+  // (запись задания не удалась — нет места, файл занят антивирусом) завершал бы весь процесс сервера со всеми идущими
+  // лабами, а пережившее задание оставалось бы «занятым» (busy) до перезапуска.
+  const prevStatus = job.status;
+  const mine = !job.busy; // busy, поставленный не этим вызовом, не трогаем
+  try { await turnBody(job, message, opts); }
+  catch (e) {
+    console.error(`lab ${job.key}: ход сорвался: ${e?.stack || e}`);
+    if (!mine || !job.busy) return;
+    job.busy = false;
+    job.turnAt = null;
+    job.revising = null;
+    job.status = prevStatus === "report" || prevStatus === "attached" ? prevStatus : opts?.first ? "error" : "waiting";
+    job.error = `Сбой на сервере: ${e?.message || e}`;
+    push(job, "system", `${job.error}. ${opts?.first ? "Нажмите «Запустить заново»." : "Отправьте сообщение ещё раз."}`);
+    await save(job).catch((e2) => console.error(`lab ${job.key}: не сохранилось после сбоя хода: ${e2?.message || e2}`));
+  }
+}
+const saveQuiet = (job, what) => save(job).catch((e) => console.error(`lab ${job.key}: ${what}: запись не удалась: ${e?.message || e}`));
+
+async function turnBody(job, message, { first = false, fixing = false, resumed = 0 } = {}) {
   if (job.busy) return;
   const prevStatus = job.status;
   job.busy = true;
@@ -1059,7 +1099,7 @@ async function turn(job, message, { first = false, fixing = false, resumed = 0 }
   const startedAt = Date.now();
   try {
     await mkdir(dirname(msgFile), { recursive: true });
-    await writeFile(msgFile, message);
+    await writeFile(msgFile, message + labMark(dir, job.tgId));
     // Короткие уточнения (ответы на вопросы, «продолжай») идут с низким уровнем размышлений — дешевле; серьёзная работа — medium.
     const thinking = message.length < 200 && job.messages.length > 1 ? "low" : "medium";
     // Сессия агента — своя на пользователя и работу (ключ задания), чтобы переписки разных людей не смешивались.
@@ -1154,7 +1194,7 @@ async function turn(job, message, { first = false, fixing = false, resumed = 0 }
         outbox.push(() => notify(job, `💬 Doodle ждёт ваш ответ по лабораторной «${job.title}».\n${asks ? short(meta?.text || reply) : `${short(reply)}\n\nЧтобы агент продолжил, напишите в чате лабы (можно просто «продолжай»).`}`));
       }
     }
-    if (envPending) envJobs.set(job.key, setupEnv(job, needs, { autoContinue: !resume && !["question", "report", "blocked"].includes(meta?.status) }).finally(() => envJobs.delete(job.key)));
+    if (envPending) envJobs.set(job.key, setupEnv(job, needs, { autoContinue: !resume && !["question", "report", "blocked"].includes(meta?.status) }).catch((e) => console.error(`lab ${job.key}: окружение сорвалось: ${e?.message || e}`)).finally(() => envJobs.delete(job.key)));
   } catch (e) {
     job.status = "waiting";
     job.error = String(e.message || e);
@@ -1172,7 +1212,7 @@ async function turn(job, message, { first = false, fixing = false, resumed = 0 }
     job.turnAt = null;
     if (!resume) job.revising = null; // при автопродолжении исправление ещё идёт
     if (resume) job.status = "running"; // для приложения работа не прерывалась: следующий ход начинается сразу
-    await save(job);
+    await saveQuiet(job, "конец хода"); // не бросаем из finally: иначе пропали бы и продолжение, и уведомления
     if (resume) void turn(job, resume, { fixing, resumed: resumed + 1 });
     for (const send of outbox) await send().catch((e) => console.error(`lab ${job.key}: уведомление не ушло: ${e.message || e}`));
   }
@@ -1386,7 +1426,7 @@ async function startJob(id, meta) {
       job.status = "error";
       job.error = `Не удалось получить условие из Moodle: ${e.message || e}`;
       push(job, "system", `${job.error}. Нажмите «Запустить заново».`);
-      await save(job);
+      await saveQuiet(job, "условие");
       return;
     }
     job.busy = false;
@@ -1572,7 +1612,7 @@ async function fixJob(id, meta) {
       job.status = fresh ? "error" : "waiting";
       job.error = `Не удалось подготовить исправление: ${e.message || e}`;
       push(job, "system", `${job.error}. ${fresh ? "Нажмите «Запустить заново»." : "Нажмите «Исправить отчёт» ещё раз."}`);
-      await save(job);
+      await saveQuiet(job, "исправление");
     }
   })();
   return liveProgress(job);
@@ -1686,7 +1726,7 @@ async function runBrief(job) {
   let sendText = null; // в Telegram — после конца хода (как в turn): пока шла отправка, лаба оставалась «занятой»
   try {
     await mkdir(dirname(msgFile), { recursive: true });
-    await writeFile(msgFile, BRIEF_PROMPT);
+    await writeFile(msgFile, BRIEF_PROMPT + labMark(job.dir, job.tgId));
     // Та же сессия, что у лабы, — и та же модель: другая модель в сессии перечитала бы весь контекст без кэша.
     const r = await openclaw(["agent", "--agent", "files", "--session-key", `agent:files:lab-${job.key}`, "--message-file", msgFile,
       "--json", "--timeout", String(BRIEF_TIMEOUT_S), "--thinking", "low", ...modelArgs(job)], { timeoutMs: (BRIEF_TIMEOUT_S + 60) * 1000 });
@@ -1706,7 +1746,7 @@ async function runBrief(job) {
     release(slot);
     job.busy = false;
     delete job.briefing;
-    await save(job);
+    await saveQuiet(job, "объяснение");
   }
   if (sendText) await notify(job, sendText).catch(() => {});
 }
@@ -1718,6 +1758,7 @@ export async function message(tgId, id, text) {
   if (job.status === "error") throw new Error("Лаба не запустилась — нажмите «Запустить заново»");
   if (job.status === "submitted") throw new Error("Работа уже отправлена на проверку, диалог закрыт");
   if (job.busy) throw new Error("Агент ещё работает, подождите");
+  if (moodleOps.has(job.key)) throw new Error("Идёт отправка отчёта в Moodle — подождите несколько секунд");
   const t = String(text || "").trim();
   if (!t) throw new Error("Пустое сообщение");
   undismiss(job); // студент снова пишет по этой лабе — плашка возвращается на Главную
@@ -1825,6 +1866,9 @@ const moodleAttach = async (token, id, pdf) => attachFiles(token, id, [{ name: b
  */
 export async function attach(tgId, id, token) {
   const job = await load(tgId, id);
+  return moodleOp(job, () => attachBody(job, id, token));
+}
+async function attachBody(job, id, token) {
   await ensureReport(job);
   if (job.trial) throw new Error("Проверочный запуск: работа уже оценена, в Moodle ничего не прикрепляется");
   // Прикрепляется только отчёт, который студент посмотрел и подтвердил («Всё хорошо»).
@@ -1868,9 +1912,27 @@ export async function attach(tgId, id, token) {
   return publicJob(job);
 }
 
+/*
+ * Прикрепление и отправка в Moodle — только когда агент не работает и только по одной за раз (17 окт 2026, ревью).
+ * Раньше «Прикрепить» было доступно посреди хода: студент подтвердил отчёт, написал правку, агент пересобирал PDF —
+ * и в Moodle уходил старый или недописанный файл, а конец хода потом перезаписывал статус. Двойное нажатие запускало
+ * две загрузки сразу. Пока идёт операция с Moodle, не начинается и новый ход (message() смотрит moodleOps).
+ */
+const moodleOps = new Set(); // ключи заданий, по которым сейчас идёт прикрепление или отправка
+async function moodleOp(job, fn) {
+  if (!job) throw new Error("Лаба ещё не начата");
+  if (job.busy) throw new Error("Агент ещё работает над отчётом — дождитесь конца хода и посмотрите отчёт ещё раз");
+  if (moodleOps.has(job.key)) throw new Error("Уже отправляю в Moodle — подождите несколько секунд");
+  moodleOps.add(job.key);
+  try { return await fn(); } finally { moodleOps.delete(job.key); }
+}
+
 /** Отправить на проверку (submit --final). Только после черновика и отдельного подтверждения. */
 export async function submit(tgId, id, token) {
   const job = await load(tgId, id);
+  return moodleOp(job, () => submitBody(job, id, token));
+}
+async function submitBody(job, id, token) {
   await ensureReport(job);
   if (job.trial) throw new Error("Проверочный запуск: работа уже оценена, в Moodle ничего не отправляется");
   if (job.status !== "attached") throw new Error("Сначала прикрепите черновик");
@@ -2045,7 +2107,7 @@ async function runCheck(c, token) {
     const msgFile = join(c.dir, "tmp", `check-${Date.now()}.md`);
     await mkdir(dirname(msgFile), { recursive: true });
     // Повторная проверка идёт в той же сессии: агент помнит прошлые замечания и видит, что исправлено.
-    await writeFile(msgFile, c.n > 1 ? `[Сообщение приложения.] Студент загрузил новую версию отчёта — проверь её заново по тем же правилам (они ниже целиком). Прошлый результат не дописывай: \`check-result.json\` пиши с нуля по новой версии; в \`summary\` одной фразой скажи, что из прошлых замечаний исправлено.\n\n${instruction}` : instruction);
+    await writeFile(msgFile, (c.n > 1 ? `[Сообщение приложения.] Студент загрузил новую версию отчёта — проверь её заново по тем же правилам (они ниже целиком). Прошлый результат не дописывай: \`check-result.json\` пиши с нуля по новой версии; в \`summary\` одной фразой скажи, что из прошлых замечаний исправлено.\n\n${instruction}` : instruction) + labMark(c.dir, c.tgId));
     await stage("В очереди к агенту");
     queued = await acquire(job, { short: true });
     await stage("Агент читает отчёт и сверяет с заданием");

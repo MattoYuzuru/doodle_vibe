@@ -23,7 +23,8 @@
 //
 // Инструменты самого OpenClaw (mcp__openclaw__…) агенту лаб открыты только по списку OC_TOOLS: остальные дают доступ к
 // чужим сессиям, сообщениям от имени бота и настройкам шлюза, а лабе не нужны.
-import { appendFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { appendFileSync, closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,7 +35,7 @@ const HOME = norm(process.env.GUARD_HOME || homedir());                       //
 const APP = norm(process.env.GUARD_APP || resolve(HERE, "..", ".."));         // …/moodle-work/jarvis-app
 const OC = `${HOME}/.openclaw`, WS = `${OC}/workspace-files`, CL = `${HOME}/.claude`;
 const OWN_PROJECT = `${CL}/projects/${WS.replace(/[^a-z0-9]/g, "-")}`;        // журналы и вспомогательные файлы самого агента
-const SECRET_NAMES = /(^|[\/\s"'=`(])(users\.key|moodle[-_]token[\w.-]*|openclaw\.json[\w.-]*|\.credentials\.json|\.claude\.json[\w.-]*|\.git-credentials|credentials\.json|ngrok[-_]token[\w.-]*|ngrok\.yml)(?=$|[\s"'`);|&<>])/;
+const SECRET_NAMES = /(^|[\/\s"'=`(])(users\.key|guard\.key|moodle[-_]token[\w.-]*|openclaw\.json[\w.-]*|\.credentials\.json|\.claude\.json[\w.-]*|\.git-credentials|credentials\.json|ngrok[-_]token[\w.-]*|ngrok\.yml)(?=$|[\s"'`);|&<>])/;
 const BROWSER = ["/appdata/local/google/chrome/user data", "/appdata/roaming/mozilla/firefox", "/appdata/local/microsoft/edge/user data", "/appdata/roaming/opera software", "/appdata/local/yandex/yandexbrowser/user data"];
 const under = (p, dir) => p === dir || p.startsWith(dir + "/");
 const STATE = process.env.GUARD_STATE_DIR || HERE;                            // где лежат guard.seen и guard.log (в тестах — временная папка)
@@ -64,6 +65,106 @@ function whyStudentPath(abs, ownRoot) {
   if (sf && ownRoot && sf !== ownRoot) return "папка другого студента закрыта — работай только в своей папке лабы";
   return null;
 }
+/*
+ * Чья это лаба — по метке сервера в журнале сессии (17 окт 2026, ревью). Рабочая папка сессии агента в настоящих лабах
+ * всегда workspace-files, а не папка студента (проверено по журналам: 7297 из 7297 действий), поэтому ownLabRoot(cwd)
+ * на деле не срабатывал и чужие папки студентов закрыты не были. Теперь сервер (lab.mjs, labMark) заканчивает КАЖДОЕ
+ * сообщение агенту строкой «[doodle-lab <папка|wsl-id в base64url>.<подпись>]», подпись — HMAC-SHA256 ключом guard.key
+ * (в папке приложения, агенту закрыта). Сторож ищет подписанные метки в журнале сессии (transcript_path): текст студента,
+ * файлы и вывод команд подписи не подделают. Меток нет (сервер ещё не перезапущен, ключа нет) — как раньше, по cwd.
+ * Разные папки в одной сессии — не бывает (сессия агента своя на лабу): тогда закрыты все папки студентов.
+ */
+const APP_DIR = process.env.GUARD_APP || resolve(HERE, "..", "..");
+const KEY_FILE = process.env.GUARD_KEY_FILE || join(APP_DIR, "guard.key");
+const MARK_RE = /\[doodle-lab ([A-Za-z0-9_-]{4,600})\.([0-9a-f]{32})\]/g;
+const CONFLICT = "<разные лабы в одной сессии>";
+const markSig = (key, payload) => createHmac("sha256", key).update(`doodle-lab:${payload}`).digest("hex").slice(0, 32);
+function guardKey() { try { return readFileSync(KEY_FILE, "utf8").trim() || null; } catch { return null; } }
+/** Текст журнала: целиком до 16 МБ, иначе начало и конец по 8 МБ (метка есть в каждом сообщении сервера). */
+function transcriptText(path) {
+  let fd;
+  try {
+    fd = openSync(path, "r");
+    const size = fstatSync(fd).size, CAP = 16 << 20, HALF = 8 << 20;
+    const part = (pos, len) => { const b = Buffer.alloc(len); return b.subarray(0, readSync(fd, b, 0, len, pos)).toString("latin1"); };
+    return size <= CAP ? part(0, size) : `${part(0, HALF)}\n${part(size - HALF, HALF)}`;
+  } catch { return ""; } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* уже закрыт */ } }
+}
+/** Подписанная лаба сессии: { root, wslId } | { root: CONFLICT, wslId: null } | null (меток нет). */
+export function labOfTranscript(path, key = guardKey()) {
+  if (!path || !key || !existsSync(path)) return null;
+  const found = new Set();
+  for (const m of transcriptText(path).matchAll(MARK_RE)) {
+    const want = Buffer.from(markSig(key, m[1])), got = Buffer.from(m[2]);
+    if (want.length === got.length && timingSafeEqual(want, got)) found.add(m[1]);
+  }
+  if (!found.size) return null;
+  if (found.size > 1) return { root: CONFLICT, wslId: null };
+  const [dir, wslId] = Buffer.from([...found][0], "base64url").toString("utf8").split("|");
+  return { root: studentFolderOf(norm(dir)) || CONFLICT, wslId: wslId || null };
+}
+
+// --- WSL: команды лабы — только от Linux-пользователя этого студента; от root — только установка пакетов ---
+const WSL_MAP = () => { if (process.env.GUARD_WSL_MAP) return process.env.GUARD_WSL_MAP; const sh = join(MW, "agent-shared"); return join(existsSync(sh) ? sh : MW, "wsl-users.json"); };
+function wslMap() { try { return JSON.parse(readFileSync(WSL_MAP(), "utf8").replace(/^﻿/, "")) || {}; } catch { return {}; } }
+/** Можно ли работать от Linux-пользователя user в лабе wslId: свой — да; пока свой не заведён — любой, кроме чужих. */
+function wslUserOk(user, wslId, map = wslMap()) {
+  if (user === "root") return false;
+  if (!wslId) return true;                                   // лаба не опознана — как раньше
+  const own = map[wslId];
+  if (own) return user === String(own).toLowerCase();
+  return !Object.entries(map).some(([k, v]) => k !== wslId && String(v).toLowerCase() === user);
+}
+// От root разрешена только установка пакетов (env-instruction: «wsl -u root -e apt-get install -y …»): apt/dpkg, без
+// перенаправлений, подстановок и других команд в цепочке.
+const ROOT_OK = /^(?:(?:debian_frontend|needrestart_mode|apt_listchanges_frontend)=\S+\s+)*(?:apt-get|apt|apt-cache|dpkg|dpkg-query)\b/;
+function rootCommandOk(cmd) {
+  let s = cmd.trim().replace(/^(?:bash|sh)\s+-c\s+/, "").trim().replace(/^(["'])([\s\S]*)\1$/, "$2");
+  if (/\$\(|`|[<>]|\|(?!\|)/.test(s)) return false;
+  const parts = s.split(/&&|\|\||;/).map((p) => p.trim()).filter(Boolean);
+  return parts.length > 0 && parts.every((p) => ROOT_OK.test(p));
+}
+const WSL_INFO = /^(?:-l|--list|--status|--version|-v|--help|--shutdown|--update|--set-default|-s|--terminate|-t|--install)$/;
+const strip = (t) => t.replace(/^["'`]+|["'`]+$/g, "");
+/** Почему вызов WSL закрыт (строка) или null. c — команда после norm/expandVars. lab — подписанная лаба или null. */
+function whyWsl(c, lab) {
+  const wslId = lab ? lab.wslId ?? "\0" : null;               // CONFLICT: ни один пользователь студента не «свой»
+  if (/wsl-users\.json/.test(c)) return "список пользователей WSL закрыт";
+  for (const m of c.matchAll(/wsl_lab\.py["']?\s+(run|setup)\b([^\n;|]*)/g)) {
+    const args = m[2];
+    if (m[1] === "run") {
+      const u = /--user(?:\s+|=)(\S+)/.exec(args);
+      const user = u ? strip(u[1]) : "";
+      if (user === "root") return "команды лабы от root закрыты — запускай от своего пользователя Linux (wsl_lab.py setup)";
+      if (user && !wslUserOk(user, wslId)) return "это Linux-пользователь другого студента — работай только от своего (wsl_lab.py setup)";
+    } else if (wslId) {
+      const id = /--id(?:\s+|=)(\S+)/.exec(args);
+      if (id && strip(id[1]) !== wslId) return "чужой --id закрыт — используй --id из своей инструкции";
+    }
+  }
+  for (const m of c.matchAll(/(?:^|[\s"'`;|&(=/\\])wsl(?:\.exe)?(?=[\s"'`;|&)]|$)/g)) {
+    const toks = c.slice(m.index + m[0].length).split("\n")[0].trim().split(/\s+/).filter(Boolean);
+    let user = null, i = 0, info = false;
+    for (; i < toks.length; i++) {
+      const t = strip(toks[i]);
+      if (t === "-u" || t === "--user") { user = strip(toks[++i] || ""); continue; }
+      const glued = /^(?:-u|--user=)(.+)$/.exec(t);
+      if (glued) { user = strip(glued[1]); continue; }
+      if (t === "-d" || t === "--distribution" || t === "--cd" || t === "--shell-type") { i++; continue; }
+      if (t === "-e" || t === "--exec" || t === "--") { i++; break; }
+      if (WSL_INFO.test(t)) { info = true; break; }
+      if (/^-/.test(t)) continue;
+      break;
+    }
+    if (info) continue;
+    const cmd = toks.slice(i).join(" ");
+    if (user === "root") { if (!rootCommandOk(cmd)) return "команды от root в WSL закрыты, кроме установки пакетов (apt-get install)"; continue; }
+    if (user && !wslUserOk(user, wslId)) return "это Linux-пользователь другого студента — работай только от своего";
+    // Без -u WSL запускает команду от пользователя владельца ПК — студенту в чужом доме делать нечего.
+    if (!user && cmd && wslId && wslId !== "owner") return "WSL без -u работает от имени владельца ПК — запускай команды через wsl_lab.py run от своего пользователя";
+  }
+  return null;
+}
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // Массовая операция: рекурсия, архивация, копирование целиком, поиск по дереву.
 const BULK = /(?:^|[\s;|&(])(?:tar|robocopy|xcopy|compress-archive)\b|-recurse\b|-include\b|\bselect-string\b|\bfindstr\s+\/\S*s|\b(?:grep|rg)\s+-\S*[ru]|\bcp\s+-\S*r/;
@@ -71,7 +172,8 @@ const BULK = /(?:^|[\s;|&(])(?:tar|robocopy|xcopy|compress-archive)\b|-recurse\b
 const EXPAND = { userprofile: HOME, home: HOME, homepath: HOME, localappdata: `${HOME}/appdata/local`, appdata: `${HOME}/appdata/roaming`, programdata: "c:/programdata" };
 function expandVars(c) {
   return c
-    .replace(/(^|[\s"'`;|&(=])\/([a-z])\//g, "$1$2:/")                               // форма Git Bash: /c/users → c:/users
+    .replace(/(^|[\s"'`;|&(=])\/mnt\/([a-z])(?=\/|[\s"'`;|&)]|$)/g, "$1$2:")          // форма WSL: /mnt/c/users → c:/users (17 окт 2026)
+    .replace(/(^|[\s"'`;|&(=])\/([a-z])\//g, "$1$2:/")                              // форма Git Bash: /c/users → c:/users
     .replace(/%(\w+)%/g, (_, k) => EXPAND[k.toLowerCase()] ?? `%${k}%`)
     .replace(/\$(?:env:|\{env:)(\w+)\}?/gi, (_, k) => EXPAND[k.toLowerCase()] ?? `$env:${k}`)
     .replace(/(^|[\s"'`;|&(=])~(?=[\s/\\;|&)"']|$)/g, (_, p) => `${p}${HOME}`);
@@ -101,7 +203,7 @@ export function absPath(p, cwd) {
   if (/^(https?|data):/i.test(s)) return "";            // ссылка, а не путь на диске
   if (/^file:/i.test(s)) { try { s = fileURLToPath(s); } catch { s = s.replace(/^file:\/+/i, ""); } }
   if (!s) return "";
-  s = s.replace(/^~(?=$|[\\/])/, HOME).replace(/^\/([a-zA-Z])\//, "$1:/").replace(/^\/\/([a-zA-Z])\//, "$1:/");
+  s = s.replace(/^~(?=$|[\\/])/, HOME).replace(/^\/mnt\/([a-zA-Z])(?=\/|$)/, "$1:").replace(/^\/([a-zA-Z])\//, "$1:/").replace(/^\/\/([a-zA-Z])\//, "$1:/");
   // Windows отбрасывает хвостовые точки и пробелы в именах («jarvis-app.\…» = «jarvis-app\…») — убираем, иначе уловка обходит under().
   return norm(isAbsolute(s) ? resolve(s) : resolve(cwd || ".", s)).replace(/[ .]+(?=\/|$)/g, "");
 }
@@ -111,6 +213,7 @@ export function whyPath(abs, write, ownRoot) {
   if (!abs) return null;
   const st = whyStudentPath(abs, ownRoot);
   if (st) return st;
+  if (/(^|\/)wsl-users\.json$/.test(abs)) return "список пользователей WSL закрыт";
   if (under(abs, APP)) {
     const inAssets = under(abs, `${APP}/assets`); // готовые скрипты и образцы: читать и смотреть список можно, менять — нет
     if (inAssets && !write) return null;
@@ -154,11 +257,13 @@ function encodedPs(c) {
 }
 
 /** Почему команда оболочки закрыта (строка) или null. Команда разбирается как текст — см. оговорку в начале файла. */
-export function whyCommand(command, cwd) {
+export function whyCommand(command, cwd, lab = null) {
   const c = expandVars(norm(command));
+  const wsl = whyWsl(c, lab);
+  if (wsl) return wsl;
   // Чужие папки студентов и moodle-work\ops (служебные данные, резервные копии работ).
   if (/\/moodle-work\/ops(?![\w-])/.test(c)) return "папка moodle-work\\ops закрыта (служебные данные и резервные копии работ)";
-  const ownRoot = ownLabRoot(cwd);
+  const ownRoot = ownLabRoot(cwd) || lab?.root || null;
   if (ownRoot) {
     const ownTg = /\/moodle-work\/users\/([^/]+)$/.exec(ownRoot)?.[1], ownNum = /\/moodle-work\/(\d+)$/.exec(ownRoot)?.[1];
     for (const m of c.matchAll(/\/moodle-work\/users\/([^/\s"'`;|&<>)]+)/g)) if (m[1] !== ownTg) return "папка другого студента закрыта — работай только в своей папке лабы";
@@ -204,11 +309,13 @@ export function whyCommand(command, cwd) {
 
 const WRITERS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 /** Решение по действию агента: { deny: "причина" } или {}. Чистая функция. */
-export function decide(input) {
+export function decide(input, lab) {
   const tool = String(input?.tool_name || ""), ti = input?.tool_input || {}, cwd = input?.cwd || WS;
-  const ownRoot = ownLabRoot(cwd);                       // своя папка студента — из рабочей папки сессии (чужие закрыты)
+  // Подписанная лаба из журнала — лениво: читаем журнал, только если действие вообще касается moodle-work или WSL.
+  if (lab === undefined) lab = /moodle-work|wsl|\.\./i.test(JSON.stringify(ti)) ? labOfTranscript(input?.transcript_path) : null;
+  const ownRoot = ownLabRoot(cwd) || lab?.root || null;                     // своя папка студента — из рабочей папки сессии (чужие закрыты)
   if (tool === "Bash" || tool === "PowerShell") {
-    const why = whyCommand(ti.command || "", cwd);
+    const why = whyCommand(ti.command || "", cwd, lab);
     return why ? { deny: why } : {};
   }
   if (tool.startsWith(OC_PREFIX) && !OC_TOOLS.has(tool.slice(OC_PREFIX.length))) return { deny: "этот инструмент OpenClaw агенту лаб закрыт (чужие сессии, сообщения от имени бота, настройки шлюза)" };
@@ -252,7 +359,7 @@ export function decide(input) {
   // Шаблон поиска файлов сам может содержать путь («C:/…/jarvis-app/**»).
   for (const key of ["pattern", "glob"]) {
     if (typeof ti[key] !== "string" || !/[\\/]/.test(ti[key])) continue;
-    const why = whyCommand(ti[key], cwd) || (tool === "Glob" ? whyPath(absPath(ti[key].replace(/[*?[{].*$/, ""), ti.path || cwd), false, ownRoot) : null);
+    const why = whyCommand(ti[key], cwd, lab) || (tool === "Glob" ? whyPath(absPath(ti[key].replace(/[*?[{].*$/, ""), ti.path || cwd), false, ownRoot) : null);
     if (why) return { deny: why };
   }
   return {};

@@ -78,6 +78,11 @@ def setup(args):
     host = out(wsl(["hostname"]))
     if args.id == "owner":
         user = out(wsl(["whoami"]))
+        # Запоминаем и пользователя владельца: по списку сторож агента (guard.mjs) отличает «свой» Linux-пользователь лабы от чужого.
+        m = load_map()
+        if user and m.get("owner") != user:
+            m["owner"] = user
+            save_map(m)
     else:
         users = {line.split(":")[0]: line.split(":")[4] for line in out(wsl(["getent", "passwd"])).splitlines() if line.count(":") >= 6}
         m = load_map()
@@ -107,6 +112,9 @@ def run(args):
     command = args.command.strip("\n")
     if not command:
         sys.exit("пустая команда")
+    # От root команды лабы не идут: root читает домашние папки всех студентов (17 окт 2026, ревью). Пакеты ставит подготовка окружения.
+    if args.user.strip().lower() == "root" or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", args.user):
+        sys.exit(f"пользователь {args.user!r} не подходит: команды лабы — только от своего пользователя (wsl_lab.py setup)")
     cwd = args.cwd
     if not re.fullmatch(r"~(/[\w.@+-]+)*/?|/[\w./@+-]*", cwd):
         sys.exit(f"папка {cwd!r}: нужен путь вида ~/папка (без пробелов)")

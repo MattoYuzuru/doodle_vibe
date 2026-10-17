@@ -76,6 +76,36 @@ if (seen) {
   check("отчёт всё равно ушёл в Telegram документом", docs.length === 1, `документов: ${docs.length}`);
 }
 
+// 17 окт 2026 (ревью, п. 2): отчёт подтверждён, студент пишет правку — пока агент работает, «Прикрепить» и «Отправить»
+// отклоняются (раньше в Moodle уходил старый или недописанный файл).
+const idle = async () => { for (let i = 0; i < 600; i++) { const j = await lab.get(TG, ID); if (j && j.status !== "running") return j; await new Promise((r) => setTimeout(r, 50)); } return null; };
+await idle();
+await lab.message(TG, ID, "переделай вывод, добавь сравнение с вариантом 03");
+let attachErr = null, submitErr = null;
+try { await lab.attach(TG, ID, "tok"); } catch (e) { attachErr = String(e.message || e); }
+try { await lab.submit(TG, ID, "tok"); } catch (e) { submitErr = String(e.message || e); }
+check("во время хода агента «Прикрепить» и «Отправить» отклоняются", /Агент ещё работает/.test(attachErr || "") && /Агент ещё работает/.test(submitErr || ""), `${attachErr} | ${submitErr}`);
+await idle();
+
+// 17 окт 2026 (ревью, п. 1): запись задания не удалась (на месте файла — папка: rename падает, как при ENOSPC/EPERM) —
+// процесс жив (отказ промиса не необработанный), лаба не остаётся «занятой», студенту — понятное сообщение.
+const jobFile = join(SIM, "jobs", `${KEY}.json`);
+rmSync(jobFile, { force: true });
+mkdirSync(join(jobFile, "x"), { recursive: true });
+let unhandled = null;
+process.once("unhandledRejection", (e) => { unhandled = e; });
+await lab.message(TG, ID, "продолжай");
+let after = null;
+for (let i = 0; i < 300; i++) { await new Promise((r) => setTimeout(r, 50)); after = await lab.get(TG, ID); if (after && after.status !== "running") break; }
+const last = after?.messages?.at(-1)?.text || "";
+check("сбой записи задания: процесс жив, лаба не «занята», студенту — сообщение о сбое", !unhandled && ["waiting", "report"].includes(after?.status) && /Сбой на сервере/.test(last), // готовый отчёт не теряет кнопок
+  `${unhandled ? `unhandled: ${unhandled.message}` : "ок"} | ${after?.status} | ${last.slice(0, 80)}`);
+let again = null;
+try { again = await lab.message(TG, ID, "ещё раз"); } catch (e) { again = String(e.message || e); }
+check("после сбоя записи лаба принимает новое сообщение (busy снят)", typeof again === "object" || !/Агент ещё работает/.test(String(again)), String(again?.status ?? again));
+rmSync(jobFile, { recursive: true, force: true });
+await idle();
+
 fake.closeAllConnections();
 await new Promise((r) => fake.close(r));
 rmSync(root, { recursive: true, force: true });

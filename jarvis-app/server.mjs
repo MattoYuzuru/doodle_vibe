@@ -88,6 +88,9 @@ async function dropUserBadCopies(tgId) {
   for (const f of await readdir(dir).catch(() => [])) if (f.startsWith(pre)) await unlink(join(dir, f)).catch(() => {});
 }
 void cleanBadCopies().catch(() => {});
+// Последняя страховка (17 окт 2026, ревью): забытый .catch у фонового промиса в Node 15+ завершает весь процесс — со
+// всеми идущими лабами и уведомлениями. Такой отказ — ошибка в коде: пишем в журнал со стеком, процесс живёт.
+process.on("unhandledRejection", (e) => console.error(`${new Date().toISOString()} необработанная ошибка (unhandledRejection): ${e?.stack || e}`));
 setInterval(() => { void cleanBadCopies().catch(() => {}); }, 24 * 3600e3).unref();
 
 // Раз в час: для каждого вошедшего пользователя свежие данные из Moodle → напоминания и новые оценки в Telegram.
