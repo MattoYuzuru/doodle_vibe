@@ -68,6 +68,18 @@ export async function setMenuButton(url) {
   return { defaultOk, chats };
 }
 
+/**
+ * Включено ли у бота главное мини-приложение (BotFather → Configure Mini App). На него ведут ярлык на экране телефона и
+ * ссылка t.me/<бот>?startapp, а его адрес Bot API не меняет — только вручную в BotFather (19 окт 2026).
+ */
+export async function hasMainApp() {
+  if (!BOT_TOKEN) return false;
+  const r = await bots.call("getMe");
+  return !!r.ok && !!r.result?.has_main_web_app;
+}
+const MAIN_APP_HINT = "\n\n📱 Ярлык на экране телефона открывает главное мини-приложение бота, а его адрес Telegram даёт менять только вручную. " +
+  "Обновите в @BotFather: /mybots → бот → Bot Settings → Configure Mini App → Edit Mini App URL → вставьте адрес выше.";
+
 export async function currentUrl() { return readFile(CURRENT, "utf8").then((t) => t.trim()).catch(() => ""); }
 
 /** Быстрый туннель Cloudflare иногда «протухает»: cloudflared бесконечно повторяет «Tunnel not found», а адрес пропадает из DNS. */
@@ -151,9 +163,13 @@ export function watchTunnelUrl() {
         return;
       }
       if (changed || announce) console.log(`menu button → ${url} (умолчание: ${defaultOk ? "да" : "нет"}, обновлено чатов: ${changed})`);
-      if (announce && changed) {
+      // Адрес сменился: кнопки меню сервер поправил сам, а главное мини-приложение (если включено) — только владелец руками,
+      // поэтому о нём пишем, даже если кнопки у всех уже стояли верно.
+      const main = announce ? await hasMainApp().catch(() => false) : false;
+      if (announce && (changed || main)) {
         await notify(`🔗 ${announce}: ${url}\nАдрес мини-приложения обновлён автоматически — просто откройте Doodle заново.` +
-          (defaultOk ? "" : "\n\nℹ️ Для новых пользователей адрес обновится сам, только если убрать кнопку меню в @BotFather (Bot Settings → Menu Button → Remove) — один раз."));
+          (defaultOk ? "" : "\n\nℹ️ Для новых пользователей адрес обновится сам, только если убрать кнопку меню в @BotFather (Bot Settings → Menu Button → Remove) — один раз.") +
+          (main ? MAIN_APP_HINT : ""));
       }
       announce = null; changed = 0;
     } catch (e) { console.error("menu button:", e.message); }
