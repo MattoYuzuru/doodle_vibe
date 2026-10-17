@@ -1,0 +1,7 @@
+# Срочное сообщение владельцу: служба doodle упала и systemd перестал её поднимать (вызывается из alert.conf, OnFailure).
+[Unit]
+Description=Doodle failure alert
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/doodle-health failed

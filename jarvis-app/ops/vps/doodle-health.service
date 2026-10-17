@@ -1,0 +1,7 @@
+# Проверка VPS Doodle (doodle-health.sh), запускается таймером doodle-health.timer раз в 5 минут.
+[Unit]
+Description=Doodle health check
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/doodle-health

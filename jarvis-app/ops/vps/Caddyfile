@@ -1,3 +1,6 @@
+# СЕЙЧАС НЕ ИСПОЛЬЗУЕТСЯ (17 окт 2026): caddy на VPS выключен, порты 80/443 в ufw закрыты — Mini App идёт через туннель.
+# Включить снова: ufw allow 80/tcp && ufw allow 443/tcp && systemctl enable --now caddy.
+#
 # Doodle: Mini App и API по HTTPS. Временный адрес sslip.io (имя = IP сервера), сертификат Let's Encrypt выпускает Caddy сам.
 # Кнопка меню бота сюда НЕ ведёт: у студентов с VPN прямой адрес российского сервера не открывается, Mini App идёт через
 # туннель Cloudflare (doodle-tunnel.service). Этот адрес — запасной и для проверок.

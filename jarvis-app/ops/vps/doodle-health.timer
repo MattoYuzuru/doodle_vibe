@@ -1,0 +1,10 @@
+# Раз в 5 минут — проверка VPS Doodle (doodle-health.service).
+[Unit]
+Description=Doodle health check every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

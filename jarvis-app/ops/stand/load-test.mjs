@@ -25,7 +25,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const APP = join(HERE, "..", "..");
+// LOAD_APP — папка приложения, если скрипт лежит отдельно от неё (17 окт 2026: замер на VPS по коду живого сервера,
+// сам скрипт — в другой папке, чтобы не трогать рабочую копию). Из неё только читается.
+const APP = process.env.LOAD_APP || join(HERE, "..", "..");
 const ROOT = join(tmpdir(), "doodle-load"), SIM = join(ROOT, "app");
 const FAKE_PORT = 9944, PORT = 8898, FAKE = `http://127.0.0.1:${FAKE_PORT}`, B = `http://127.0.0.1:${PORT}`;
 const BOT = "123456:LOAD-TEST-TOKEN";
@@ -236,6 +238,16 @@ const ids = Array.from({ length: N }, (_, i) => 7001 + i), nOf = (id) => id - 70
 // Память и процессор копии сервера раз в 15 с; отклик /api/health раз в 2 с (задержки цикла событий).
 const proc = [];
 const sampleProc = () => {
+  // Linux (VPS): из /proc — RSS, анонимная память (≈ «частная») и время процессора (utime + stime, такты по 10 мс).
+  if (process.platform === "linux") {
+    try {
+      const st = readFileSync(`/proc/${child.pid}/status`, "utf8");
+      const kb = (k) => Number(new RegExp(`^${k}:\\s+(\\d+)`, "m").exec(st)?.[1] || 0) * 1024;
+      const f = readFileSync(`/proc/${child.pid}/stat`, "utf8").split(") ")[1].split(" ");
+      proc.push({ at: Date.now(), ws: kb("VmRSS"), priv: kb("RssAnon"), cpu: (Number(f[11]) + Number(f[12])) * 10, pid: child.pid });
+    } catch { /* процесс перезапускается */ }
+    return;
+  }
   const r = spawnSync("powershell", ["-NoProfile", "-Command", `$p = Get-Process -Id ${child.pid}; "$($p.WorkingSet64) $($p.PrivateMemorySize64) $($p.TotalProcessorTime.TotalMilliseconds)"`], { encoding: "utf8", windowsHide: true });
   const [ws, priv, cpu] = String(r.stdout || "").trim().split(/\s+/).map(Number);
   if (ws) proc.push({ at: Date.now(), ws, priv, cpu, pid: child.pid }); // pid — после --restart счётчик процессора начинается заново
