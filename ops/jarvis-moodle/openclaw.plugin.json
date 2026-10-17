@@ -1,0 +1,24 @@
+{
+  "id": "jarvis-moodle",
+  "name": "Jarvis Moodle",
+  "description": "Мгновенные дедлайны Moodle МИСИС по команде /deadlines (только чтение)",
+  "categories": ["other"],
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["moodle_read"]
+  },
+  "commandAliases": [
+    {
+      "name": "deadlines",
+      "kind": "runtime-slash"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {}
+  }
+}

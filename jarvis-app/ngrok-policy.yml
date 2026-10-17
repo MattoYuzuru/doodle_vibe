@@ -1,0 +1,13 @@
+# Политика трафика ngrok: у бесплатного тарифа перед сайтом показывается страница-предупреждение,
+# если запрос пришёл из браузера. WebView Telegram открывает её как пустой экран, поэтому для
+# Telegram-клиентов и всех запросов не «за документом» (скрипты, стили, API) добавляем на входе
+# заголовок ngrok-skip-browser-warning — предупреждение подавляется. Обычные браузеры его увидят.
+on_http_request:
+  - name: skip-warning-for-telegram-and-assets
+    expressions:
+      - "req.user_agent.contains('Telegram') || req.user_agent.contains('tgWebApp') || !('sec-fetch-dest' in req.headers) || !(req.headers['sec-fetch-dest'].join('') == 'document')"
+    actions:
+      - type: add-headers
+        config:
+          headers:
+            ngrok-skip-browser-warning: "1"

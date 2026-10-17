@@ -1,0 +1,247 @@
+@import "tailwindcss";
+@import "./theme/tokens.css";
+/* Шрифт в сборке (с кириллицей), а не с Google Fonts: без внешнего запроса до первого кадра. */
+@import "@fontsource/manrope/500.css";
+@import "@fontsource/manrope/600.css";
+@import "@fontsource/manrope/700.css";
+@import "@fontsource/manrope/800.css";
+
+@custom-variant dark (&:where([data-scheme="dark"], [data-scheme="dark"] *));
+
+/* Токены в Tailwind: bg-card, text-hint, text-s/m/l, rounded-card и т. д.
+   Три размера текста: s = 13, m = 16, l = 32. Отступы — стандартная шкала Tailwind (кратна 4). */
+@theme inline {
+  --color-page: var(--c-page);
+  --color-card: var(--c-card);
+  --color-raised: var(--c-raised);
+  --color-text: var(--c-text);
+  --color-hint: var(--c-hint);
+  --color-accent: var(--c-accent);
+  --color-on-accent: var(--c-on-accent);
+  --color-separator: var(--c-separator);
+  --color-red: var(--c-red);
+  --color-yellow: var(--c-yellow);
+  --color-green: var(--c-green);
+  --color-blur: var(--c-blur);
+  --color-scrim: var(--c-scrim);
+
+  --font-sans: "Manrope", -apple-system, "SF Pro Text", Roboto, system-ui, sans-serif;
+
+  --text-s: 13px;
+  --text-s--line-height: 18px;
+  --text-m: 16px;
+  --text-m--line-height: 22px;
+  --text-l: 32px;
+  --text-l--line-height: 38px;
+
+  --radius-card: 16px;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--c-page);
+  color: var(--c-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+  /* Горизонтальные жесты на странице — свайп между вкладками (App: TabTrack), браузер их себе не забирает. */
+  touch-action: pan-y;
+}
+
+button {
+  cursor: pointer;
+  /* без задержки на двойное нажатие и без зума по двойному тапу */
+  touch-action: manipulation;
+}
+
+/* В слое base, чтобы утилиты Tailwind (text-[26px], font-extrabold) имели приоритет. */
+@layer base {
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+}
+
+/* Фон страницы. Вариант задаётся атрибутом data-bg на <html> (?bg=…, пока идёт выбор). */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+/* glow — два цветных пятна (первоначальный вариант) */
+html[data-bg="glow"] body::before {
+  background:
+    radial-gradient(60% 45% at 12% 0%, var(--glow-1), transparent 70%),
+    radial-gradient(55% 40% at 92% 8%, var(--glow-2), transparent 70%);
+}
+/* plain — ничего, ровный фон темы */
+html[data-bg="plain"] body::before { display: none; }
+/* gradient — чуть светлее сверху, к низу уходит в фон */
+html[data-bg="gradient"] body::before { background: linear-gradient(180deg, var(--bg-top), transparent 55%); }
+/* dots — точечная сетка */
+html[data-bg="dots"] body::before {
+  background-image: radial-gradient(var(--bg-line) 1px, transparent 1.3px);
+  background-size: 16px 16px;
+}
+/* grain — зерно плёнки */
+html[data-bg="grain"] body::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0.9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.35;
+  mix-blend-mode: soft-light;
+}
+/* rings — тонкие концентрические кольца из правого верхнего угла */
+html[data-bg="rings"] body::before {
+  background: repeating-radial-gradient(circle at 92% -6%, var(--bg-line) 0 1px, transparent 1px 64px);
+  -webkit-mask: linear-gradient(180deg, #000, transparent 75%);
+  mask: linear-gradient(180deg, #000, transparent 75%);
+}
+/* grid — миллиметровка */
+html[data-bg="grid"] body::before {
+  background-image: linear-gradient(var(--bg-line) 1px, transparent 1px), linear-gradient(90deg, var(--bg-line) 1px, transparent 1px);
+  background-size: 24px 24px;
+  -webkit-mask: linear-gradient(180deg, #000 40%, transparent);
+  mask: linear-gradient(180deg, #000 40%, transparent);
+}
+/* glow1 — одно приглушённое свечение сверху, цвет по срочности ближайшего дедлайна (--bg-glow ставит Главная) */
+html[data-bg="glow1"] body::before { background: radial-gradient(75% 38% at 50% -6%, var(--bg-glow), transparent 70%); }
+
+/* ---------- Liquid Glass ----------
+   .glass — полупрозрачная поверхность с размытием, бликом сверху и светлой кромкой.
+   В Chromium (Telegram на Android и ПК) добавляется преломление по краям: SVG-фильтр
+   с картой смещений (см. hooks/useLiquidGlass.ts). В WebKit (iPhone) — матовое стекло. */
+/* Слой components: утилиты Tailwind (fixed, absolute, rounded-*) имеют приоритет над этими правилами. */
+@layer components {
+  .glass {
+    position: relative;
+    isolation: isolate;
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: blur(14px) saturate(180%);
+    backdrop-filter: blur(14px) saturate(180%);
+    box-shadow: var(--glass-shadow);
+  }
+  .glass::before,
+  .glass-lens::before {
+    /* кромка: градиентная рамка 1px, ярче сверху-слева — как блик на краю стекла */
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(150deg, var(--glass-rim), transparent 38%, transparent 62%, color-mix(in srgb, var(--glass-rim) 45%, transparent));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+  .glass::after {
+    /* мягкий блик сверху */
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.12), transparent 48%);
+    pointer-events: none;
+    z-index: -1;
+  }
+  /* Плитка бенто: плотнее обычного стекла, чтобы текст читался, но свечение фона сквозь неё видно. */
+  .glass-tile {
+    position: relative;
+    isolation: isolate;
+    background: var(--tile-bg);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    backdrop-filter: blur(20px) saturate(160%);
+    box-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 8px 24px rgb(0 0 0 / 0.12);
+  }
+  .glass-tile::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(160deg, color-mix(in srgb, var(--glass-rim) 70%, transparent), transparent 40%, transparent 70%, color-mix(in srgb, var(--glass-rim) 25%, transparent));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+  .glass-sheet {
+    background: var(--glass-sheet);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    backdrop-filter: blur(28px) saturate(180%);
+  }
+  .glass-accent {
+    background: color-mix(in srgb, var(--c-accent) 78%, transparent);
+  }
+  .glass-lens {
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: var(--glass-lens);
+    box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.25), 0 2px 10px rgb(0 0 0 / 0.18);
+  }
+  html.refract .glass[data-refract] {
+    -webkit-backdrop-filter: var(--refract-filter) blur(6px) saturate(190%);
+    backdrop-filter: var(--refract-filter) blur(6px) saturate(190%);
+  }
+}
+
+/* Облегчённый режим (lib/perf.ts): размытие под стеклом — самое дорогое при прокрутке на слабых телефонах.
+   Без него стекло и шторки — почти непрозрачные, плитки — как есть, тени проще. */
+/* Пульсирующая точка «агент работает» (LabPulse) на слабых телефонах не мигает. */
+html.lite .pulse-ping {
+  display: none;
+}
+html.lite *,
+html.lite *::before,
+html.lite *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+html.lite .glass:not(.glass-accent),
+html.lite .glass-sheet {
+  background: var(--c-blur);
+}
+html.lite .glass-tile {
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset;
+}
+/* Рамка-блик по маске на каждой плитке и цветное свечение фона — тоже лишняя отрисовка; рамку заменяет обычная граница. */
+html.lite .glass::before,
+html.lite .glass-tile::before,
+html.lite .glass-lens::before,
+html.lite body::before {
+  display: none;
+}
+html.lite .glass-tile {
+  border: 1px solid var(--c-separator);
+}
+/* Невидимые вкладки ленты отрисовываются, только когда свайп выводит их на экран. */
+html.lite [data-tab-page][aria-hidden="true"] {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 100vh;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@utility font-display {
+  font-family: var(--font-display);
+}

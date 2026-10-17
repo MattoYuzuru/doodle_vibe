@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Лаборатория дизайна — Главная</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@500;600;700;800&family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Лаборатория: 8 вариантов оформления Главной на одних данных. ?v=<имя> показывает один вариант размером 390×844. */
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#141416}
+body{font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+body[data-v] .phone{display:none}
+body[data-v] .phone.on{display:block}
+.phone{width:390px;height:844px;overflow:hidden;position:relative;margin:0 auto}
+svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.hidden{display:none}
+.tab{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px}
+
+/* ===== 1. Бумага: кремовый лист, серифная типографика, линейки вместо карточек ===== */
+.v-paper{background:#F3EFE6;color:#16130F;padding:22px 22px 0;font-family:Inter,sans-serif}
+.v-paper .cap{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#8B8479;font-weight:500}
+.v-paper h1{font-family:"Instrument Serif",serif;font-weight:400;font-size:34px;margin-top:6px;letter-spacing:-.01em}
+.v-paper h1 i{color:#8B8479}
+.v-paper .hero{margin-top:26px;padding-bottom:18px;border-bottom:1px solid #16130F}
+.v-paper .big{font-family:"Instrument Serif",serif;font-size:84px;line-height:.9;letter-spacing:-.03em}
+.v-paper .big small{font-size:26px;letter-spacing:0;margin:0 14px 0 4px;font-style:italic;color:#8B8479}
+.v-paper .t{font-family:"Instrument Serif",serif;font-size:24px;margin-top:14px;line-height:1.15}
+.v-paper .m{display:flex;justify-content:space-between;margin-top:8px;font-size:13px;color:#8B8479}
+.v-paper .m b{color:#C8462B;font-weight:600}
+.v-paper .sec{margin-top:20px}
+.v-paper .row{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid #D9D3C7;font-size:15px}
+.v-paper .row span:last-child{color:#8B8479;font-size:13px;white-space:nowrap;padding-top:2px}
+.v-paper .row .s{display:block;color:#8B8479;font-size:12px;margin-top:2px}
+.v-paper .task{display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #D9D3C7;font-size:15px}
+.v-paper .task i{width:16px;height:16px;border:1.5px solid #16130F;flex:none}
+.v-paper .task.done{color:#8B8479;text-decoration:line-through}
+.v-paper .task.done i{background:#16130F}
+.v-paper .task em{margin-left:auto;font-style:normal;color:#8B8479;font-size:13px}
+.v-paper .q{font-family:"Instrument Serif",serif;font-style:italic;font-size:19px;line-height:1.3;margin-top:12px;color:#3A362F}
+.v-paper .bar{position:absolute;left:0;right:0;bottom:0;height:64px;background:#F3EFE6;border-top:1px solid #16130F;display:flex;align-items:center;justify-content:space-around;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8B8479;padding-bottom:6px}
+.v-paper .bar b{color:#16130F;font-weight:600;border-bottom:1.5px solid #16130F;padding-bottom:2px}
+.v-paper .fab{position:absolute;right:20px;bottom:84px;width:52px;height:52px;border-radius:50%;background:#16130F;color:#F3EFE6;display:grid;place-items:center;font-size:30px;font-family:"Instrument Serif",serif}
+
+/* ===== 2. Швейцарский: чёрно-белая сетка, моноширинные цифры, один оранжевый акцент ===== */
+.v-swiss{background:#fff;color:#000;font-family:"Inter Tight",sans-serif;padding:20px 18px 0}
+.v-swiss .lbl{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#777}
+.v-swiss .head{display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:12px;border-bottom:2px solid #000}
+.v-swiss .head h1{font-size:26px;font-weight:800;letter-spacing:-.03em;line-height:1}
+.v-swiss .hero{padding:18px 0;border-bottom:1px solid #000}
+.v-swiss .big{font-family:"JetBrains Mono",monospace;font-size:70px;font-weight:700;letter-spacing:-.06em;line-height:1;margin-top:8px}
+.v-swiss .big small{font-size:22px;letter-spacing:0;margin-right:16px}
+.v-swiss .hero .t{font-size:18px;font-weight:700;margin-top:10px;letter-spacing:-.02em}
+.v-swiss .acc{display:inline-block;margin-top:8px;background:#FF4D00;color:#fff;font-family:"JetBrains Mono",monospace;font-size:11px;padding:3px 7px;letter-spacing:.06em}
+.v-swiss .sec{border-bottom:1px solid #000;padding:12px 0}
+.v-swiss .row{display:grid;grid-template-columns:28px 1fr auto;gap:10px;padding:9px 0;font-size:14px;font-weight:600;letter-spacing:-.01em;border-top:1px solid #E6E6E6}
+.v-swiss .row:first-of-type{border-top:0}
+.v-swiss .row .n,.v-swiss .row .d{font-family:"JetBrains Mono",monospace;font-weight:500;color:#777;font-size:12px;padding-top:2px}
+.v-swiss .row .s{display:block;font-weight:500;color:#777;font-size:12px}
+.v-swiss .prog{height:3px;background:#E6E6E6;margin:8px 0 4px}.v-swiss .prog i{display:block;height:100%;width:25%;background:#000}
+.v-swiss .task{display:grid;grid-template-columns:16px 1fr auto;gap:12px;align-items:center;padding:8px 0;font-size:14px;font-weight:600;border-top:1px solid #E6E6E6}
+.v-swiss .task i{width:14px;height:14px;border:2px solid #000}
+.v-swiss .task.done{color:#999;text-decoration:line-through}.v-swiss .task.done i{background:#000}
+.v-swiss .task .d{font-family:"JetBrains Mono",monospace;font-weight:500;color:#777;font-size:12px}
+.v-swiss .bar{position:absolute;left:0;right:0;bottom:0;height:62px;display:grid;grid-template-columns:repeat(4,1fr);border-top:2px solid #000;background:#fff}
+.v-swiss .bar div{display:grid;place-items:center;font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;border-right:1px solid #E6E6E6}
+.v-swiss .bar div.on{background:#000;color:#fff}
+.v-swiss .fab{position:absolute;right:18px;bottom:80px;width:50px;height:50px;background:#000;color:#fff;display:grid;place-items:center;font-size:28px;font-weight:300}
+
+/* ===== 3. Бенто: мозаика плиток разного размера, как виджеты ===== */
+.v-bento{background:#0A0A0C;color:#F2F2F4;font-family:Manrope,sans-serif;padding:20px 16px 0}
+.v-bento .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.v-bento .head h1{font-size:22px;font-weight:800;letter-spacing:-.02em}.v-bento .head span{color:#7C7C86;font-size:13px;font-weight:600}
+.v-bento .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.v-bento .tile{background:#17171B;border-radius:22px;padding:16px;min-height:120px;position:relative;overflow:hidden}
+.v-bento .tile.w{grid-column:span 2}
+.v-bento .tile .lbl{font-size:12px;font-weight:700;color:#7C7C86;text-transform:uppercase;letter-spacing:.06em}
+.v-bento .hero{background:linear-gradient(135deg,#2B2FA8,#6A3BFF 60%,#9D5CFF);min-height:150px}
+.v-bento .hero .lbl{color:rgba(255,255,255,.7)}
+.v-bento .hero .big{font-size:52px;font-weight:800;letter-spacing:-.04em;line-height:1;margin-top:14px}
+.v-bento .hero .big small{font-size:20px;color:rgba(255,255,255,.7);margin:0 10px 0 3px}
+.v-bento .hero .t{font-size:15px;font-weight:700;margin-top:8px}
+.v-bento .hero .m{font-size:12px;color:rgba(255,255,255,.75);margin-top:4px;font-weight:600}
+.v-bento .num{font-size:38px;font-weight:800;letter-spacing:-.04em;margin-top:10px;line-height:1}
+.v-bento .num small{font-size:14px;color:#7C7C86;font-weight:700;margin-left:4px;letter-spacing:0}
+.v-bento .sub{font-size:12px;color:#7C7C86;font-weight:600;margin-top:6px}
+.v-bento .ring{position:absolute;right:14px;top:14px;width:44px;height:44px;border-radius:50%;background:conic-gradient(#5B8CFF 25%,#2A2A30 0);-webkit-mask:radial-gradient(circle,transparent 58%,#000 60%);mask:radial-gradient(circle,transparent 58%,#000 60%)}
+.v-bento .list .row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid #26262C;font-size:13px;font-weight:700}
+.v-bento .list .row:first-of-type{border-top:0;padding-top:10px}
+.v-bento .list .row span:last-child{color:#7C7C86;font-weight:600;white-space:nowrap}
+.v-bento .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:1px}
+.v-bento .task{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:700;padding:6px 0}
+.v-bento .task i{width:18px;height:18px;border-radius:50%;border:2px solid #3A3A42;flex:none}
+.v-bento .task.done{color:#7C7C86;text-decoration:line-through}.v-bento .task.done i{background:#5B8CFF;border-color:#5B8CFF}
+.v-bento .note{background:#2A2418;color:#F5E6C3}.v-bento .note .lbl{color:#B89B5E}.v-bento .note p{font-size:13px;line-height:1.4;margin-top:8px;font-weight:600}
+.v-bento .bar{position:absolute;left:16px;right:16px;bottom:14px;height:60px;border-radius:30px;background:#17171B;display:flex;justify-content:space-around;align-items:center;color:#7C7C86;font-weight:700}
+.v-bento .bar .on{color:#F2F2F4}
+.v-bento .fab{position:absolute;right:16px;bottom:86px;width:52px;height:52px;border-radius:18px;background:#5B8CFF;display:grid;place-items:center;color:#fff;font-size:28px;font-weight:600}
+
+/* ===== 4. Аврора: экран целиком — живой mesh-градиент по срочности, без карточек ===== */
+.v-aurora{color:#fff;font-family:Inter,sans-serif;padding:22px 22px 0;background:#1B1F7A;background-image:radial-gradient(70% 50% at 15% 10%,#4C6BFF 0%,transparent 60%),radial-gradient(60% 45% at 90% 25%,#B14CFF 0%,transparent 60%),radial-gradient(70% 60% at 50% 100%,#FF6AA2 0%,transparent 60%),linear-gradient(#171A5E,#2A1E6E)}
+.v-aurora .cap{font-size:13px;opacity:.75;font-weight:500}
+.v-aurora h1{font-size:24px;font-weight:700;letter-spacing:-.02em;margin-top:2px}
+.v-aurora .hero{margin-top:34px;text-align:center}
+.v-aurora .big{font-size:88px;font-weight:700;letter-spacing:-.05em;line-height:.95}
+.v-aurora .big small{font-size:28px;letter-spacing:0;opacity:.7;margin:0 10px 0 4px}
+.v-aurora .t{font-size:17px;font-weight:600;margin-top:12px}
+.v-aurora .pill{display:inline-flex;gap:8px;align-items:center;margin-top:12px;padding:7px 14px;border-radius:999px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);backdrop-filter:blur(10px);font-size:13px;font-weight:600}
+.v-aurora .panel{margin-top:22px;border-radius:22px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);padding:6px 16px;backdrop-filter:blur(16px)}
+.v-aurora .panel h2{font-size:14px;font-weight:700;padding:10px 0 2px;opacity:.85}
+.v-aurora .row{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid rgba(255,255,255,.12);font-size:14px;font-weight:600}
+.v-aurora .row span:last-child{opacity:.75;font-weight:500;white-space:nowrap;font-size:13px}
+.v-aurora .row .s{display:block;opacity:.65;font-size:12px;font-weight:500}
+.v-aurora .task{display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid rgba(255,255,255,.12);font-size:14px;font-weight:600}
+.v-aurora .task i{width:20px;height:20px;border-radius:50%;border:2px solid rgba(255,255,255,.6);flex:none}
+.v-aurora .task.done{opacity:.55;text-decoration:line-through}.v-aurora .task.done i{background:#fff;border-color:#fff}
+.v-aurora .task em{margin-left:auto;font-style:normal;opacity:.7;font-size:12px}
+.v-aurora .bar{position:absolute;left:16px;right:16px;bottom:14px;height:60px;border-radius:30px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);backdrop-filter:blur(16px);display:flex;justify-content:space-around;align-items:center;opacity:.95}
+.v-aurora .bar .tab{opacity:.65}.v-aurora .bar .on{opacity:1}
+.v-aurora .fab{position:absolute;right:20px;bottom:86px;width:52px;height:52px;border-radius:50%;background:#fff;color:#2A1E6E;display:grid;place-items:center;font-size:28px;font-weight:500}
+
+/* ===== 5. Циферблат: кольцо времени, всё через графику колец ===== */
+.v-dial{background:#0E0F12;color:#ECECEE;font-family:"DM Sans",sans-serif;padding:20px 20px 0}
+.v-dial .head{display:flex;justify-content:space-between;align-items:center}
+.v-dial .head h1{font-size:20px;font-weight:600}.v-dial .head span{font-size:13px;color:#7A7B85}
+.v-dial .dial{position:relative;width:250px;height:250px;margin:22px auto 0;border-radius:50%;background:conic-gradient(from -90deg,#5B8CFF 0 62%,#1E2029 62% 100%);-webkit-mask:radial-gradient(circle,transparent 61%,#000 62%);mask:radial-gradient(circle,transparent 61%,#000 62%)}
+.v-dial .dial2{position:absolute;inset:14px;border-radius:50%;background:conic-gradient(from -90deg,#9D5CFF 0 25%,#1E2029 25% 100%);-webkit-mask:radial-gradient(circle,transparent 78%,#000 79%);mask:radial-gradient(circle,transparent 78%,#000 79%)}
+.v-dial .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.v-dial .center .cap{font-size:12px;color:#7A7B85;font-weight:500}
+.v-dial .center .big{font-size:46px;font-weight:700;letter-spacing:-.04em;line-height:1;margin-top:4px}
+.v-dial .center .big small{font-size:18px;color:#7A7B85;margin:0 6px 0 2px;letter-spacing:0}
+.v-dial .center .t{font-size:13px;font-weight:600;margin-top:6px;max-width:150px;line-height:1.25}
+.v-dial .wrap{position:relative;width:250px;height:250px;margin:22px auto 0}
+.v-dial .wrap .dial{margin:0;position:absolute;inset:0}
+.v-dial .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:22px}
+.v-dial .st{background:#16171C;border-radius:18px;padding:12px;text-align:center}
+.v-dial .st .r{width:38px;height:38px;border-radius:50%;margin:0 auto 8px;-webkit-mask:radial-gradient(circle,transparent 62%,#000 64%);mask:radial-gradient(circle,transparent 62%,#000 64%)}
+.v-dial .st b{display:block;font-size:17px;font-weight:700}.v-dial .st span{font-size:11px;color:#7A7B85}
+.v-dial .list{margin-top:18px;background:#16171C;border-radius:18px;padding:4px 14px}
+.v-dial .row{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid #24252C;font-size:14px;font-weight:600}
+.v-dial .row:first-child{border-top:0}
+.v-dial .row span:last-child{color:#7A7B85;font-weight:500;font-size:13px;white-space:nowrap}
+.v-dial .bar{position:absolute;left:0;right:0;bottom:0;height:70px;display:flex;justify-content:space-around;align-items:center;color:#7A7B85;background:#0E0F12;border-top:1px solid #1E2029;padding-bottom:8px}
+.v-dial .bar .on{color:#5B8CFF}
+.v-dial .fab{position:absolute;right:20px;bottom:88px;width:52px;height:52px;border-radius:50%;border:1.5px solid #5B8CFF;color:#5B8CFF;display:grid;place-items:center;font-size:28px}
+
+/* ===== 6. Лента: один хронологический поток дел и сроков с линией «сейчас» ===== */
+.v-line{background:#FAFAF8;color:#111;font-family:Inter,sans-serif;padding:22px 20px 0}
+.v-line .head h1{font-size:26px;font-weight:700;letter-spacing:-.03em}.v-line .head span{font-size:13px;color:#8A8A85}
+.v-line .stream{margin-top:22px;position:relative;padding-left:64px}
+.v-line .stream:before{content:"";position:absolute;left:52px;top:6px;bottom:0;width:1px;background:#DDD}
+.v-line .ev{position:relative;padding:0 0 22px}
+.v-line .ev .tm{position:absolute;left:-64px;width:44px;text-align:right;font-family:"JetBrains Mono",monospace;font-size:11px;color:#8A8A85;top:3px}
+.v-line .ev .dot{position:absolute;left:-16px;top:5px;width:9px;height:9px;border-radius:50%;background:#FAFAF8;border:2px solid #111}
+.v-line .ev.done .dot{background:#111}.v-line .ev.done .t{color:#8A8A85;text-decoration:line-through}
+.v-line .ev.dl .dot{border-color:#C8462B;background:#C8462B}
+.v-line .ev .t{font-size:15px;font-weight:600}.v-line .ev .s{font-size:12px;color:#8A8A85;margin-top:2px}
+.v-line .ev.big .t{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.15}
+.v-line .ev .chip{display:inline-block;margin-top:6px;font-family:"JetBrains Mono",monospace;font-size:11px;padding:3px 8px;border:1px solid #111;border-radius:999px}
+.v-line .now{position:relative;height:0;margin:-6px 0 22px}
+.v-line .now:before{content:"";position:absolute;left:-16px;right:0;top:0;height:1.5px;background:#C8462B}
+.v-line .now span{position:absolute;left:-64px;top:-8px;width:44px;text-align:right;font-family:"JetBrains Mono",monospace;font-size:11px;color:#C8462B;font-weight:700}
+.v-line .day{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.1em;color:#8A8A85;text-transform:uppercase;margin:4px 0 14px -64px}
+.v-line .bar{position:absolute;left:0;right:0;bottom:0;height:64px;border-top:1px solid #DDD;background:#FAFAF8;display:flex;justify-content:space-around;align-items:center;color:#8A8A85;padding-bottom:6px}
+.v-line .bar .on{color:#111}
+.v-line .fab{position:absolute;right:20px;bottom:84px;width:50px;height:50px;border-radius:50%;background:#111;color:#fff;display:grid;place-items:center;font-size:26px}
+
+/* ===== 7. Пастель: кремовый фон, мягкие цветные карточки, округлый гротеск ===== */
+.v-pastel{background:#FBF7F2;color:#2B2A28;font-family:Outfit,sans-serif;padding:22px 18px 0}
+.v-pastel .head{display:flex;justify-content:space-between;align-items:center}
+.v-pastel .head h1{font-size:24px;font-weight:600}.v-pastel .head span{font-size:13px;color:#8C877E}
+.v-pastel .av{width:38px;height:38px;border-radius:50%;background:#E4DDF5;display:grid;place-items:center;font-weight:600;color:#6B57A8}
+.v-pastel .card{border-radius:24px;padding:18px;margin-top:12px}
+.v-pastel .peach{background:#F9DFD0;position:relative;overflow:hidden}
+.v-pastel .peach:after{content:"";position:absolute;right:-30px;top:-30px;width:150px;height:150px;border-radius:50%;background:#F3C6AE}
+.v-pastel .peach .lbl{font-size:12px;color:#A9765D;font-weight:600;position:relative}
+.v-pastel .peach .big{font-size:54px;font-weight:600;letter-spacing:-.03em;line-height:1;margin-top:10px;position:relative}
+.v-pastel .peach .big small{font-size:20px;color:#A9765D;margin:0 8px 0 2px;letter-spacing:0}
+.v-pastel .peach .t{font-size:16px;font-weight:600;margin-top:8px;position:relative}.v-pastel .peach .m{font-size:13px;color:#A9765D;margin-top:2px;position:relative}
+.v-pastel .sage{background:#DCE8DC}.v-pastel .lav{background:#E4DDF5}.v-pastel .butter{background:#F7EBC8}
+.v-pastel h2{font-size:15px;font-weight:600;display:flex;justify-content:space-between}
+.v-pastel h2 span{font-size:12px;font-weight:500;color:#8C877E}
+.v-pastel .row{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid rgba(0,0,0,.07);font-size:14px;font-weight:500}
+.v-pastel .row:first-of-type{border-top:0;padding-top:12px}
+.v-pastel .row span:last-child{color:#8C877E;font-size:12px;white-space:nowrap}
+.v-pastel .task{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:14px;font-weight:500}
+.v-pastel .task i{width:20px;height:20px;border-radius:50%;border:2px solid #7FA383;flex:none}
+.v-pastel .task.done{color:#8C877E;text-decoration:line-through}.v-pastel .task.done i{background:#7FA383}
+.v-pastel .task em{margin-left:auto;font-style:normal;color:#8C877E;font-size:12px}
+.v-pastel .prog{height:8px;border-radius:4px;background:rgba(0,0,0,.08);margin-top:10px}.v-pastel .prog i{display:block;width:25%;height:100%;border-radius:4px;background:#7FA383}
+.v-pastel .bar{position:absolute;left:18px;right:18px;bottom:14px;height:62px;border-radius:31px;background:#fff;box-shadow:0 10px 30px rgba(60,40,20,.12);display:flex;justify-content:space-around;align-items:center;color:#A5A09A}
+.v-pastel .bar .on{color:#2B2A28}
+.v-pastel .fab{position:absolute;right:18px;bottom:88px;width:52px;height:52px;border-radius:50%;background:#2B2A28;color:#fff;display:grid;place-items:center;font-size:28px}
+
+/* ===== 8. Терминал: моноширинный шрифт, точечная сетка, подсказки как в консоли ===== */
+.v-term{background:#111214;color:#D7D7DB;font-family:"JetBrains Mono",monospace;padding:20px 18px 0;background-image:radial-gradient(#212226 1px,transparent 1px);background-size:14px 14px}
+.v-term .p{color:#6B6B75}.v-term .g{color:#7CFF9B}.v-term .a{color:#FFB454}.v-term .r{color:#FF6B6B}
+.v-term .line{font-size:12px;line-height:1.7}
+.v-term .big{font-size:44px;font-weight:700;letter-spacing:-.04em;margin:10px 0 2px;line-height:1}
+.v-term .big small{font-size:18px;color:#6B6B75;margin:0 10px 0 2px}
+.v-term .t{font-size:15px;font-weight:500;margin-top:6px}
+.v-term .box{margin-top:16px;border:1px solid #2A2B31;border-radius:6px;padding:10px 12px;background:rgba(17,18,20,.85)}
+.v-term .box .h{font-size:11px;color:#6B6B75;margin-bottom:6px}
+.v-term .row{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;line-height:1.9}
+.v-term .row span:last-child{color:#6B6B75;white-space:nowrap}
+.v-term .row span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.v-term .cur{display:inline-block;width:8px;height:15px;background:#7CFF9B;vertical-align:-2px;margin-left:2px}
+.v-term .bar{position:absolute;left:0;right:0;bottom:0;height:56px;border-top:1px solid #2A2B31;background:#111214;display:flex;justify-content:space-around;align-items:center;font-size:12px;color:#6B6B75}
+.v-term .bar .on{color:#7CFF9B}
+.v-term .fab{position:absolute;right:18px;bottom:74px;width:46px;height:46px;border:1px solid #7CFF9B;border-radius:6px;color:#7CFF9B;display:grid;place-items:center;font-size:24px}
+</style>
+</head>
+<body>
+<svg class="hidden" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4h11l-2 4 2 4H5"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></symbol>
+</svg>
+
+<!-- 1. Бумага -->
+<section class="phone v-paper" data-name="paper">
+  <div class="cap">Среда · 30 сентября</div>
+  <h1>Добрый день, <i>Артём</i></h1>
+  <div class="hero">
+    <div class="cap">Ближайший срок</div>
+    <div class="big" style="margin-top:14px">2<small>дня</small>7<small>часов</small></div>
+    <div class="t">ЛР01 · Процессы и потоки в Linux</div>
+    <div class="m"><span>Операционные системы</span><b>до 2 окт, 23:59</b></div>
+  </div>
+  <div class="sec">
+    <div class="cap">Дальше</div>
+    <div class="row"><span>Этап курсовой № 1<span class="s">Оптимизация клиент-серверных приложений</span></span><span>8 дн</span></div>
+    <div class="row"><span>ЛР2 · Логические элементы<span class="s">Цифровая электроника</span></span><span>12 дн</span></div>
+  </div>
+  <div class="sec">
+    <div class="cap">Сегодня · 1 из 4</div>
+    <div class="task"><i></i>Поднять стенд для ЛР01<em>12:30</em></div>
+    <div class="task"><i></i>Набросать план курсовой<em>16:00</em></div>
+    <div class="task done"><i></i>Прочитать методичку<em>10:00</em></div>
+  </div>
+  <div class="sec"><div class="cap">Закреплено</div><div class="q">«Повторить: p95, граница пропускной способности, почему пул БД = 10»</div></div>
+  <div class="fab">+</div>
+  <div class="bar"><b>Главная</b><span>Сроки</span><span>План</span><span>Заметки</span></div>
+</section>
+
+<!-- 2. Швейцарский -->
+<section class="phone v-swiss" data-name="swiss">
+  <div class="head"><h1>Среда<br>30.09</h1><div class="lbl" style="text-align:right">Артём<br>БИСТ-24</div></div>
+  <div class="hero">
+    <div class="lbl">Ближайший срок → ОС</div>
+    <div class="big">02<small>д</small>07<small>ч</small></div>
+    <div class="t">ЛР01 · Процессы и потоки в Linux</div>
+    <span class="acc">ДО 02.10 23:59</span>
+  </div>
+  <div class="sec">
+    <div class="lbl" style="margin-bottom:6px">Сроки</div>
+    <div class="row"><span class="n">01</span><span>Этап курсовой № 1<span class="s">ОКСП</span></span><span class="d">08д</span></div>
+    <div class="row"><span class="n">02</span><span>ЛР2 · Логические элементы<span class="s">Электроника</span></span><span class="d">12д</span></div>
+    <div class="row"><span class="n">03</span><span>ЛР4 · Профилирование<span class="s">ОКСП</span></span><span class="d">15д</span></div>
+  </div>
+  <div class="sec">
+    <div class="lbl">Сегодня — 1/4</div>
+    <div class="prog"><i></i></div>
+    <div class="task"><i></i><span>Поднять стенд для ЛР01</span><span class="d">12:30</span></div>
+    <div class="task"><i></i><span>Набросать план курсовой</span><span class="d">16:00</span></div>
+    <div class="task done"><i></i><span>Прочитать методичку</span><span class="d">10:00</span></div>
+  </div>
+  <div class="fab">+</div>
+  <div class="bar"><div class="on">Главная</div><div>Сроки</div><div>План</div><div style="border:0">Заметки</div></div>
+</section>
+
+<!-- 3. Бенто -->
+<section class="phone v-bento" data-name="bento">
+  <div class="head"><h1>Среда, 30 сентября</h1><span>Артём</span></div>
+  <div class="grid">
+    <div class="tile w hero"><div class="lbl">Ближайший срок</div><div class="big">2<small>д</small>7<small>ч</small></div><div class="t">ЛР01 · Процессы и потоки в Linux</div><div class="m">ОС · до 2 окт, 23:59</div></div>
+    <div class="tile"><div class="lbl">Сегодня</div><div class="ring"></div><div class="num">1<small>из 4</small></div><div class="sub">Поднять стенд · 12:30</div></div>
+    <div class="tile"><div class="lbl">Неделя</div><div class="num">3<small>срока</small></div><div class="sub">1 требует внимания</div></div>
+    <div class="tile w list"><div class="lbl">Дальше</div>
+      <div class="row"><span><i class="dot" style="background:#4DA3FF"></i>Этап курсовой № 1</span><span>8 д</span></div>
+      <div class="row"><span><i class="dot" style="background:#FF7AB6"></i>ЛР2 · Логические элементы</span><span>12 д</span></div>
+      <div class="row"><span><i class="dot" style="background:#4DA3FF"></i>ЛР4 · Профилирование</span><span>15 д</span></div>
+    </div>
+    <div class="tile w"><div class="lbl">План</div>
+      <div class="task" style="margin-top:6px"><i></i>Поднять стенд для ЛР01</div><div class="task"><i></i>Набросать план курсовой</div><div class="task done"><i></i>Прочитать методичку</div>
+    </div>
+    <div class="tile w note" style="min-height:0;padding-right:84px"><div class="lbl">Закреплено · Защита ЛР3</div><p>Повторить: p95, граница пропускной способности, пул БД = 10.</p></div>
+  </div>
+  <div class="fab">+</div>
+  <div class="bar"><div class="tab on"><svg class="i"><use href="#i-home"/></svg></div><div class="tab"><svg class="i"><use href="#i-flag"/></svg></div><div class="tab"><svg class="i"><use href="#i-cal"/></svg></div><div class="tab"><svg class="i"><use href="#i-pen"/></svg></div></div>
+</section>
+
+<!-- 4. Аврора -->
+<section class="phone v-aurora" data-name="aurora">
+  <div class="cap">Среда, 30 сентября</div>
+  <h1>Привет, Артём</h1>
+  <div class="hero">
+    <div class="cap">до ближайшего срока</div>
+    <div class="big" style="margin-top:8px">2<small>д</small>7<small>ч</small></div>
+    <div class="t">ЛР01 · Процессы и потоки в Linux</div>
+    <div class="pill">● Операционные системы · до 2 окт, 23:59</div>
+  </div>
+  <div class="panel">
+    <h2>Дальше</h2>
+    <div class="row"><span>Этап курсовой № 1<span class="s">Оптимизация клиент-серверных приложений</span></span><span>8 д</span></div>
+    <div class="row"><span>ЛР2 · Логические элементы<span class="s">Цифровая электроника</span></span><span>12 д</span></div>
+  </div>
+  <div class="panel">
+    <h2>Сегодня · 1 из 4</h2>
+    <div class="task"><i></i>Поднять стенд для ЛР01<em>12:30</em></div>
+    <div class="task"><i></i>Набросать план курсовой<em>16:00</em></div>
+    <div class="task done"><i></i>Прочитать методичку<em>10:00</em></div>
+  </div>
+  <div class="fab">+</div>
+  <div class="bar"><div class="tab on"><svg class="i"><use href="#i-home"/></svg>Главная</div><div class="tab"><svg class="i"><use href="#i-flag"/></svg>Сроки</div><div class="tab"><svg class="i"><use href="#i-cal"/></svg>План</div><div class="tab"><svg class="i"><use href="#i-pen"/></svg>Заметки</div></div>
+</section>
+
+<!-- 5. Циферблат -->
+<section class="phone v-dial" data-name="dial">
+  <div class="head"><h1>Привет, Артём</h1><span>Ср, 30 сен</span></div>
+  <div class="wrap">
+    <div class="dial"></div><div class="dial2"></div>
+    <div class="center"><div class="cap">осталось</div><div class="big">2<small>д</small>7<small>ч</small></div><div class="t">ЛР01 · Процессы и потоки в Linux</div></div>
+  </div>
+  <div class="stats">
+    <div class="st"><div class="r" style="background:conic-gradient(#5B8CFF 25%,#24252C 0)"></div><b>1 / 4</b><span>задачи</span></div>
+    <div class="st"><div class="r" style="background:conic-gradient(#9D5CFF 60%,#24252C 0)"></div><b>3</b><span>срока за неделю</span></div>
+    <div class="st"><div class="r" style="background:conic-gradient(#3FD0A8 40%,#24252C 0)"></div><b>2 / 5</b><span>шагов ЛР01</span></div>
+  </div>
+  <div class="list">
+    <div class="row"><span>Поднять стенд для ЛР01</span><span>12:30</span></div>
+    <div class="row"><span>Набросать план курсовой</span><span>16:00</span></div>
+    <div class="row"><span>Этап курсовой № 1 · ОКСП</span><span>8 д</span></div>
+  </div>
+  <div class="fab">+</div>
+  <div class="bar"><svg class="i on"><use href="#i-home"/></svg><svg class="i"><use href="#i-flag"/></svg><svg class="i"><use href="#i-cal"/></svg><svg class="i"><use href="#i-pen"/></svg></div>
+</section>
+
+<!-- 6. Лента -->
+<section class="phone v-line" data-name="line">
+  <div class="head"><h1>Среда, 30 сентября</h1><span>3 задачи · 1 срок на этой неделе</span></div>
+  <div class="stream">
+    <div class="day">Сегодня</div>
+    <div class="ev done"><span class="tm">10:00</span><i class="dot"></i><div class="t">Прочитать методичку ЛР01</div></div>
+    <div class="ev"><span class="tm">12:30</span><i class="dot"></i><div class="t">Поднять стенд для ЛР01</div><div class="s">ОС · подготовка</div></div>
+    <div class="now"><span>16:41</span></div>
+    <div class="ev"><span class="tm">16:00</span><i class="dot"></i><div class="t">Набросать план курсовой</div></div>
+    <div class="ev"><span class="tm">19:00</span><i class="dot"></i><div class="t">Спортзал</div></div>
+    <div class="day">Четверг, 2 окт</div>
+    <div class="ev dl big"><span class="tm">23:59</span><i class="dot"></i><div class="t">ЛР01 · Процессы и потоки в Linux</div><div class="s">Операционные системы · сдать в Moodle</div><span class="chip">через 2 д 7 ч</span></div>
+    <div class="day">Среда, 8 окт</div>
+    <div class="ev dl"><span class="tm">23:59</span><i class="dot"></i><div class="t">Этап курсовой № 1</div><div class="s">Оптимизация клиент-серверных приложений</div></div>
+  </div>
+  <div class="fab">+</div>
+  <div class="bar"><div class="tab on"><svg class="i"><use href="#i-home"/></svg>Лента</div><div class="tab"><svg class="i"><use href="#i-flag"/></svg>Сроки</div><div class="tab"><svg class="i"><use href="#i-cal"/></svg>План</div><div class="tab"><svg class="i"><use href="#i-pen"/></svg>Заметки</div></div>
+</section>
+
+<!-- 7. Пастель -->
+<section class="phone v-pastel" data-name="pastel">
+  <div class="head"><div><h1>Привет, Артём</h1><span>Среда, 30 сентября</span></div><div class="av">А</div></div>
+  <div class="card peach"><div class="lbl">Ближайший срок</div><div class="big">2<small>д</small>7<small>ч</small></div><div class="t">ЛР01 · Процессы и потоки в Linux</div><div class="m">Операционные системы · до 2 окт, 23:59</div></div>
+  <div class="card sage"><h2>Сегодня <span>1 из 4</span></h2><div class="prog"><i></i></div>
+    <div class="task" style="margin-top:6px"><i></i>Поднять стенд для ЛР01<em>12:30</em></div><div class="task"><i></i>Набросать план курсовой<em>16:00</em></div><div class="task done"><i></i>Прочитать методичку<em>10:00</em></div></div>
+  <div class="card lav"><h2>Дальше <span>все</span></h2>
+    <div class="row"><span>Этап курсовой № 1</span><span>8 д</span></div><div class="row"><span>ЛР2 · Логические элементы</span><span>12 д</span></div></div>
+  <div class="card butter"><h2>Закреплено</h2><div class="row"><span>Защита ЛР3 — повторить p95, границу пропускной способности…</span></div></div>
+  <div class="fab">+</div>
+  <div class="bar"><div class="tab on"><svg class="i"><use href="#i-home"/></svg>Главная</div><div class="tab"><svg class="i"><use href="#i-flag"/></svg>Сроки</div><div class="tab"><svg class="i"><use href="#i-cal"/></svg>План</div><div class="tab"><svg class="i"><use href="#i-pen"/></svg>Заметки</div></div>
+</section>
+
+<!-- 8. Терминал -->
+<section class="phone v-term" data-name="term">
+  <div class="line"><span class="p">~/jarvis</span> <span class="g">$</span> today <span class="p">— ср, 30 сен · 16:41</span></div>
+  <div class="line p" style="margin-top:12px">next deadline</div>
+  <div class="big">02<small>d</small>07<small>h</small>18<small>m</small></div>
+  <div class="t">ЛР01 · Процессы и потоки в Linux</div>
+  <div class="line"><span class="p">course</span> ОС &nbsp; <span class="p">due</span> <span class="a">2026-10-02 23:59</span> &nbsp; <span class="p">steps</span> 2/5</div>
+  <div class="box"><div class="h">// deadlines --next 3</div>
+    <div class="row"><span><span class="p">01</span> Этап курсовой № 1 <span class="p">ОКСП</span></span><span>8d</span></div>
+    <div class="row"><span><span class="p">02</span> ЛР2 · Логические элементы <span class="p">ЦЭ</span></span><span>12d</span></div>
+    <div class="row"><span><span class="p">03</span> ЛР4 · Профилирование <span class="p">ОКСП</span></span><span>15d</span></div>
+  </div>
+  <div class="box"><div class="h">// plan --today &nbsp; <span class="g">1/4 done</span></div>
+    <div class="row"><span><span class="g">[x]</span> <span class="p">10:00</span> Прочитать методичку</span></div>
+    <div class="row"><span>[ ] <span class="p">12:30</span> Поднять стенд для ЛР01</span></div>
+    <div class="row"><span>[ ] <span class="p">16:00</span> Набросать план курсовой</span></div>
+    <div class="row"><span>[ ] <span class="p">19:00</span> Спортзал</span></div>
+  </div>
+  <div class="box"><div class="h">// notes --pinned</div><div class="row"><span>Защита ЛР3: p95, граница пропускной способности, пул БД = 10</span></div></div>
+  <div class="line" style="margin-top:14px"><span class="p">~/jarvis</span> <span class="g">$</span> <span class="cur"></span></div>
+  <div class="fab">+</div>
+  <div class="bar"><span class="on">[home]</span><span>[deadlines]</span><span>[plan]</span><span>[notes]</span></div>
+</section>
+
+<script>
+  const v = new URLSearchParams(location.search).get("v");
+  if (v) { document.body.dataset.v = v; document.querySelector(`.phone[data-name="${v}"]`)?.classList.add("on"); }
+</script>
+</body>
+</html>

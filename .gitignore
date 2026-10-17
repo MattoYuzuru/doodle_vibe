@@ -1,0 +1,57 @@
+# История изменений проекта Doodle (git). В неё идёт только код и документы; секреты, данные пользователей,
+# работы студентов и установленные программы — нет. Правило: сначала всё исключено, затем разрешены нужные папки.
+/*
+!/.gitignore
+!/HANDOFF.md
+!/jarvis-app/
+!/ops/
+
+# --- секреты (никогда не добавлять) ---
+jarvis-app/bot-token.txt
+jarvis-app/users.key
+jarvis-app/ngrok-token.txt
+jarvis-app/ngrok.yml
+jarvis-app/local-owner.flag
+*.key
+*.pem
+
+# --- данные пользователей и состояние сервера ---
+jarvis-app/users/
+jarvis-app/jobs/
+jarvis-app/notify/
+jarvis-app/checks/
+jarvis-app/usage/
+jarvis-app/diag/
+jarvis-app/ej-debug/
+jarvis-app/lessons/
+jarvis-app/course-styles/
+jarvis-app/cal-cache/
+jarvis-app/schedule-cache/
+jarvis-app/lab-allowlist.txt
+jarvis-app/notify-state.old.json
+jarvis-app/current-url.txt
+jarvis-app/tunnel-nobind.flag
+ops/job-backups/
+ops/*.state.json
+ops/*.backup.json
+ops/*.lock
+ops/*.bak-*
+
+# --- журналы, сборки, зависимости, временное ---
+*.log
+*.log.*
+*.tmp
+node_modules/
+__pycache__/
+jarvis-app/web/dist/
+jarvis-app/ops/stand/sim/
+jarvis-app/ops/stand/sim-ui/
+jarvis-app/ops/migrate/*.zip
+
+# сторож агента: журнал отказов и отметка «вызывается»
+jarvis-app/ops/agent-guard/guard.log
+jarvis-app/ops/agent-guard/guard.seen
+
+# ежедневные копии данных и их настройка
+jarvis-app/backups/
+jarvis-app/backup.json

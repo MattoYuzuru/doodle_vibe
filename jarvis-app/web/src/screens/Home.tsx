@@ -1,0 +1,164 @@
+import { m } from "framer-motion";
+import { CalendarDays, ChevronRight, CircleHelp, Flag, Smartphone } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ActiveLabs } from "../components/ActiveLabs";
+import { HeroDeadlineCard } from "../components/HeroDeadlineCard";
+import { JournalTile } from "../components/JournalTile";
+import { LessonRow, matchSubject } from "../components/LessonRow";
+import { MoodleDown } from "../components/MoodleDown";
+import { Tile, TileLabel } from "../components/Tile";
+import { Avatar, EmptyState, Skeleton } from "../components/ui";
+import { useNav } from "../hooks/useNav";
+import { useNow } from "../hooks/useNow";
+import { DAY, effectiveDue, formatLongDate, mskParts, todayKey } from "../lib/dates";
+import { useSchedule } from "../store/schedule";
+import { subjectOf, useAppStore } from "../store/useAppStore";
+import { urgencyOf } from "../theme/urgency";
+import { addToHomeScreen, haptic, homeScreenStatus, telegramUser } from "../telegram/webapp";
+
+/** Главная в стиле бенто: мозаика стеклянных плиток, отвечает на вопрос «что делать сейчас?» */
+export function HomeScreen() {
+  const { status, subjects, deadlines, moodle, pendingCourses } = useAppStore();
+  const { push, setTab } = useNav();
+  const now = useNow();
+  const user = telegramUser();
+  const today = todayKey();
+  // Плитка «Добавить на экран телефона» — только если Telegram сообщил, что ярлыка ещё нет.
+  const [homeScreen, setHomeScreen] = useState<string | null>(null);
+  useEffect(() => { void homeScreenStatus().then(setHomeScreen); }, []);
+
+  // Просроченные старше недели на Главной не показываем — они остаются во вкладке «Дедлайны».
+  const open = deadlines
+    .filter((d) => d.status === "open" && effectiveDue(d.due) > now - 7 * DAY)
+    .sort((a, b) => effectiveDue(a.due) - effectiveDue(b.due));
+  const [hero] = open;
+
+  // Цвет свечения фона (вариант glow1) — по срочности ближайшего дедлайна.
+  const heroUrgency = hero ? urgencyOf(hero, now) : "calm";
+  useEffect(() => {
+    const dark = document.documentElement.dataset.scheme === "dark";
+    const a = dark ? 0.3 : 0.16;
+    const c = heroUrgency === "urgent" || heroUrgency === "overdue" ? `rgb(255 77 61 / ${a})` : heroUrgency === "soon" ? `rgb(245 165 36 / ${a})` : `rgb(61 92 240 / ${a})`;
+    document.documentElement.style.setProperty("--bg-glow", c);
+  }, [heroUrgency]);
+
+  // Пары на сегодня из расписания группы (подгруппа — из профиля); прошедшие определяем по московскому времени.
+  const { forDay, status: schedStatus, data: sched } = useSchedule();
+  const schedNeedGroup = !!sched?.needGroup || (!!sched && !sched.group);
+  const lessons = forDay(today);
+  const nowP = mskParts(now);
+  const nowHM = `${String(nowP.hh).padStart(2, "0")}:${String(nowP.mm).padStart(2, "0")}`;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <m.header
+        className="flex min-h-12 items-center justify-between gap-3 px-1"
+        initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}
+      >
+        <div className="min-w-0">
+          <h1 className="font-display text-[22px] font-extrabold tracking-[-0.02em]">{formatLongDate(today)}</h1>
+          {moodle.status !== "idle" && (
+            <p className={`truncate text-[12px] font-semibold ${moodle.status === "error" || moodle.down ? "text-yellow" : "text-hint"}`}>
+              {moodle.status === "loading" ? "Moodle · обновляю…"
+                : moodle.down ? "Moodle · не отвечает" // подробности — в плашке ниже
+                : moodle.status === "ok" && moodle.at ? `Moodle · обновлено ${new Date(moodle.at).toLocaleTimeString("ru-RU", { timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit" })}`
+                : `Moodle: ${moodle.error}`}
+            </p>
+          )}
+        </div>
+        <button onClick={() => push({ name: "profile" })} className="flex shrink-0 items-center gap-2" aria-label="Профиль">
+          <span className="text-s font-semibold text-hint">{user.firstName}</span>
+          <Avatar name={user.firstName} photoUrl={user.photoUrl} size={32} />
+        </button>
+      </m.header>
+
+      {status === "loading" ? (
+        <HomeSkeleton />
+      ) : (
+        <div className="grid grid-cols-2 gap-2.5">
+          {/* Moodle не отвечает (сбой у МИСИС): плашка первой, под ней — прежние данные. */}
+          <MoodleDown index={0} />
+          {hero ? (
+            <HeroDeadlineCard deadline={hero} subject={subjectOf(subjects, hero.subjectId)} now={now}
+              onOpen={() => push({ name: "deadline", id: hero.id })} />
+          ) : (
+            <Tile span={2} index={0}>
+              <EmptyState icon={Flag} title="Дедлайнов нет" text="Все сроки закрыты. Добавьте новый, когда появится."
+                action="Добавить дедлайн" onAction={() => push({ name: "deadline-form" })} />
+            </Tile>
+          )}
+
+          {/* Отчёты с агентом: прогресс и что от студента нужно; нажатие — в чат лабы. */}
+          <ActiveLabs index={1} />
+
+          {/* Курс прошлого семестра с новой работой сам в дедлайны не попадает — просим уточнить (ответ — на экране «Курсы»). */}
+          {pendingCourses.length > 0 && (
+            <Tile span={2} index={1} onClick={() => { haptic.tap(); push({ name: "courses" }); }} className="!min-h-0 py-3">
+              <div className="flex items-center gap-3">
+                <span className="grid size-9 shrink-0 place-items-center rounded-full bg-yellow/15 text-yellow"><CircleHelp size={18} strokeWidth={2.5} /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-m font-bold">Это ваш курс сейчас?</span>
+                  <span className="line-clamp-2 block text-s text-hint">
+                    {pendingCourses[0].name} ({pendingCourses[0].reason}): появилась работа «{pendingCourses[0].title}»{pendingCourses[0].section ? `, раздел «${pendingCourses[0].section}»` : ""}
+                    {pendingCourses.length > 1 ? ` и ещё ${pendingCourses.length - 1}` : ""}
+                  </span>
+                </span>
+                <ChevronRight size={18} className="shrink-0 text-hint" />
+              </div>
+            </Tile>
+          )}
+
+          {/* Пары на сегодня — сразу под ближайшим дедлайном; прошедшие приглушены. Нажатие ведёт в план. */}
+          {/* Каждая пара — кнопка (экран курса), поэтому сама плитка не кнопка; в план ведёт ссылка в заголовке. */}
+          <Tile span={2} index={1} className="min-h-0 pb-2">
+            <div className="flex items-center justify-between gap-2">
+              <TileLabel className="flex items-center gap-1.5"><CalendarDays size={13} strokeWidth={2.5} />Расписание · сегодня{lessons.length > 0 && <span className="text-hint/70">{lessons.length}</span>}</TileLabel>
+              <button onClick={() => { haptic.select(); setTab("plan"); }} className="-my-1 -mr-1 flex min-h-8 items-center gap-0.5 px-1 text-[12px] font-bold text-accent">План<ChevronRight size={14} strokeWidth={2.5} /></button>
+            </div>
+            {lessons.length > 0 ? (
+              <div className="mt-1">
+                {lessons.map((l, i) => (
+                  <div key={i} className="border-t border-separator first:border-t-0">
+                    <LessonRow lesson={l} subject={matchSubject(subjects, l.name)} past={l.end <= nowHM}
+                      onOpen={() => { haptic.tap(); push({ name: "course", title: l.name, subjectId: matchSubject(subjects, l.name)?.id, lesson: l }); }} />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 pb-1 text-s font-semibold text-hint">
+                {schedNeedGroup ? "Выберите группу в профиле — и здесь появятся пары" : schedStatus === "loading" || schedStatus === "idle" ? "Загружаю расписание…" : schedStatus === "error" ? "Расписание недоступно" : "Сегодня пар нет"}
+              </p>
+            )}
+          </Tile>
+
+          {/* Электронный журнал: средние посещаемость и рейтинг за семестр, пропуски (на месте прежних заметок). */}
+          <JournalTile index={2} />
+
+          {homeScreen === "missed" && (
+            <Tile span={2} index={5} onClick={() => { haptic.tap(); addToHomeScreen(); setHomeScreen("unknown"); }} className="!min-h-0 py-3">
+              <div className="flex items-center gap-3">
+                <span className="grid size-9 shrink-0 place-items-center rounded-full bg-accent/15 text-accent"><Smartphone size={18} strokeWidth={2.5} /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-m font-bold">Добавить на экран телефона</span>
+                  <span className="block text-s text-hint">Открывать Doodle одним нажатием, как приложение</span>
+                </span>
+                <ChevronRight size={18} className="shrink-0 text-hint" />
+              </div>
+            </Tile>
+          )}
+
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HomeSkeleton() {
+  return (
+    <div className="grid grid-cols-2 gap-2.5" aria-label="Загрузка">
+      <Skeleton className="col-span-2 h-40 rounded-[22px]" />
+      <Skeleton className="col-span-2 h-36 rounded-[22px]" />
+      <Skeleton className="col-span-2 h-48 rounded-[22px]" />
+    </div>
+  );
+}

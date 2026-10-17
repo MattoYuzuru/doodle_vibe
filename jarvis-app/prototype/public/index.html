@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Джарвис</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#000;--card:#1c1c1e;--card2:#2c2c2e;--card3:#3a3a3c;--line:rgba(255,255,255,.07);
+  --text:#fff;--text2:#d1d1d6;--hint:#8e8e93;--accent:#3e88f7;
+  --green:#30d158;--orange:#ff9f0a;--red:#ff453a;--yellow:#ffd60a;--violet:#9d5cff;
+  --top:var(--tg-content-safe-area-inset-top,0px);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{background:var(--bg);color:var(--text);font-family:Inter,-apple-system,"SF Pro Text",Roboto,system-ui,sans-serif;-webkit-font-smoothing:antialiased;overscroll-behavior:none}
+body{min-height:100vh}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-align:inherit}
+input,textarea{font:inherit;color:inherit}
+svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+main{max-width:520px;margin:0 auto;padding:calc(10px + var(--top)) 16px calc(112px + env(safe-area-inset-bottom))}
+
+/* верх */
+.top{display:flex;align-items:center;justify-content:space-between;height:44px}
+.me{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px}
+.avatar{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#4f5bd5,#9d5cff);display:grid;place-items:center;font-weight:700;font-size:13px;overflow:hidden}
+.avatar img{width:100%;height:100%;object-fit:cover}
+.icon-btn{width:36px;height:36px;border-radius:50%;background:var(--card);display:grid;place-items:center;color:var(--text2)}
+.icon-btn svg{width:20px;height:20px}
+.page-title{font-size:30px;font-weight:800;letter-spacing:-.6px;margin:8px 0 16px}
+
+/* главная цифра, как баланс в кошельке */
+.hero{text-align:center;padding:20px 0 26px}
+.hero .label{color:var(--hint);font-size:15px;font-weight:500}
+.hero .big{font-size:54px;font-weight:700;letter-spacing:-2px;line-height:1.1;margin-top:6px;font-variant-numeric:tabular-nums}
+.hero .big small{font-size:.6em;color:var(--hint);letter-spacing:-.5px;margin:0 12px 0 3px}
+.hero .big small:last-child{margin-right:0}
+.hero .sub{display:inline-flex;align-items:center;gap:6px;margin-top:12px;background:var(--card);padding:7px 13px;border-radius:999px;font-size:13px;color:var(--text2);max-width:100%}
+.hero .sub span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* плитки действий */
+.actions{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.action{background:var(--card);border-radius:16px;padding:14px 2px 11px;display:flex;flex-direction:column;align-items:center;gap:8px;font-size:13px;font-weight:500;color:var(--text2);text-align:center;transition:transform .12s}
+.action:active{transform:scale(.95);background:var(--card2)}
+
+/* баннеры-карусель */
+.banners{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;margin:14px -16px 0;padding:0 16px;scrollbar-width:none}
+.banners::-webkit-scrollbar{display:none}
+.banner{flex:0 0 100%;scroll-snap-align:center;position:relative;overflow:hidden;border-radius:20px;padding:16px 108px 16px 18px;min-height:116px;display:flex;flex-direction:column;justify-content:center;background:linear-gradient(115deg,#5236f0 0%,#8c55ff 55%,#c07bff 100%)}
+.banner.warm{background:linear-gradient(115deg,#c2336d 0%,#e0457b 45%,#9d5cff 100%)}
+.banner.hot{background:linear-gradient(115deg,#e0352b 0%,#ff6a3d 55%,#ffa23a 100%)}
+.banner.done{background:linear-gradient(115deg,#1f8a4c 0%,#30b86a 60%,#5fd68f 100%)}
+.banner h3{font-size:18px;font-weight:700;line-height:1.25}
+.banner p{font-size:14px;opacity:.88;margin-top:6px;display:flex;align-items:center;gap:4px}
+.banner p svg{width:15px;height:15px}
+.badge{position:absolute;right:14px;top:50%;transform:translateY(-50%) rotate(-6deg);width:84px;height:84px;border-radius:24px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 10px 30px rgba(0,0,0,.18);backdrop-filter:blur(6px);display:flex;flex-direction:column;align-items:center;justify-content:center}
+.badge b{font-size:34px;font-weight:800;line-height:1}
+.badge span{font-size:12px;font-weight:600;opacity:.9;margin-top:2px}
+.banner::after{content:"";position:absolute;right:-40px;top:-60px;width:180px;height:180px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.25),transparent 70%)}
+.dots{display:flex;justify-content:center;gap:5px;margin-top:10px}
+.dot{width:6px;height:6px;border-radius:3px;background:var(--card3);transition:width .2s,background .2s}
+.dot.on{width:16px;background:#fff}
+
+/* карточки и списки */
+.card{background:var(--card);border-radius:20px;padding:16px;margin-top:14px}
+.card-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.card-h h2{font-size:18px;font-weight:700}
+.link{color:var(--accent);font-size:15px;font-weight:500}
+.row{display:flex;align-items:center;gap:12px;padding:10px 0;width:100%}
+.ico{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px;flex:none;color:#fff}
+.ico svg{width:20px;height:20px}
+.grow{flex:1;min-width:0}
+.title{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta{font-size:14px;color:var(--hint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.right{text-align:right;flex:none}
+.right .t{font-size:15px;font-weight:600}
+.chip{display:inline-block;margin-top:3px;font-size:12px;font-weight:600;padding:3px 8px;border-radius:999px;background:var(--card2);color:var(--text2)}
+.chip.red{background:rgba(255,69,58,.16);color:#ff6961}
+.chip.orange{background:rgba(255,159,10,.16);color:var(--orange)}
+.chip.yellow{background:rgba(255,214,10,.14);color:var(--yellow)}
+.chip.green{background:rgba(48,209,88,.15);color:var(--green)}
+.group-h{color:var(--hint);font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin:20px 4px 4px}
+.list{background:var(--card);border-radius:20px;padding:2px 16px}
+.list .row+.row{border-top:1px solid var(--line)}
+.empty{color:var(--hint);text-align:center;padding:22px 10px;font-size:15px;line-height:1.4}
+.foot{color:var(--hint);font-size:12px;text-align:center;margin-top:14px}
+.err{background:rgba(255,69,58,.1);color:#ff8a80;border-radius:14px;padding:12px 14px;font-size:14px;margin-top:14px;line-height:1.4}
+
+/* задачи */
+.check{width:24px;height:24px;border-radius:50%;border:2px solid #545458;flex:none;display:grid;place-items:center;transition:background .15s,border-color .15s}
+.check svg{width:14px;height:14px;stroke-width:3;opacity:0}
+.check.on{background:var(--accent);border-color:var(--accent)}
+.check.on svg{opacity:1}
+.done .title{color:var(--hint);text-decoration:line-through}
+.progress{height:6px;border-radius:3px;background:var(--card2);overflow:hidden;margin:8px 0 4px}
+.progress i{display:block;height:100%;border-radius:3px;background:var(--accent);transition:width .3s}
+.prog-l{display:flex;justify-content:space-between;font-size:13px;color:var(--hint)}
+
+/* неделя */
+.week-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.week-h b{font-size:16px;font-weight:600}
+.week-h b::first-letter{text-transform:uppercase}
+.days{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+.day{background:var(--card);border-radius:14px;padding:8px 0 10px;text-align:center;font-size:12px;font-weight:500;color:var(--hint);position:relative}
+.day b{display:block;font-size:17px;font-weight:700;color:#fff;margin-top:3px}
+.day.today b{color:var(--accent)}
+.day.on{background:var(--accent);color:rgba(255,255,255,.85)}
+.day.on b{color:#fff}
+.day i{position:absolute;left:50%;bottom:4px;width:4px;height:4px;margin-left:-2px;border-radius:50%;background:var(--violet)}
+.day.on i{background:#fff}
+
+/* заметки */
+.search{display:flex;align-items:center;gap:8px;background:var(--card);border-radius:12px;padding:0 12px;color:var(--hint)}
+.search svg{width:18px;height:18px}
+.search input{flex:1;background:none;border:0;outline:none;padding:11px 0;font-size:16px;color:#fff}
+.notes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.note{background:var(--card);border-radius:18px;padding:14px;min-height:118px;display:flex;flex-direction:column;gap:6px;text-align:left}
+.note h4{font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.note p{font-size:13px;color:#aeaeb2;line-height:1.4;white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.note time{margin-top:auto;font-size:11px;color:var(--hint)}
+
+/* плавающие элементы */
+.tabbar{position:fixed;left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));max-width:496px;margin:0 auto;z-index:20;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:6px;border-radius:30px;background:rgba(28,28,30,.9);border:1px solid var(--line);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}
+.tab{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 0 6px;border-radius:24px;font-size:11px;font-weight:600;color:var(--hint);text-align:center;transition:background .15s,color .15s}
+.tab.on{background:var(--card3);color:#fff}
+.fab{position:fixed;right:max(20px,calc(50% - 240px));bottom:calc(96px + env(safe-area-inset-bottom));z-index:19;width:56px;height:56px;border-radius:50%;background:var(--accent);display:grid;place-items:center;box-shadow:0 10px 28px rgba(62,136,247,.45)}
+.fab svg{width:26px;height:26px}
+.sheet-wrap{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;opacity:0;transition:opacity .2s}
+.sheet-wrap.show{opacity:1}
+.sheet{width:100%;max-width:520px;margin:0 auto;background:var(--card);border-radius:26px 26px 0 0;padding:8px 16px calc(20px + env(safe-area-inset-bottom));max-height:90vh;overflow:auto;transform:translateY(100%);transition:transform .28s cubic-bezier(.2,.8,.2,1)}
+.sheet-wrap.show .sheet{transform:none}
+.handle{width:36px;height:5px;border-radius:3px;background:#48484a;margin:0 auto 14px}
+.sheet h3{font-size:20px;font-weight:700;line-height:1.3}
+.kv{display:flex;justify-content:space-between;gap:16px;padding:12px 0;border-top:1px solid var(--line);font-size:15px}
+.kv span{color:var(--hint);flex:none}
+.kv b{font-weight:500;text-align:right}
+.field{display:block;width:100%;background:var(--card2);border:0;border-radius:14px;padding:13px 14px;font-size:16px;outline:none;margin-top:10px;color:#fff}
+.field::placeholder{color:#6e6e73}
+textarea.field{min-height:220px;resize:none;line-height:1.45}
+.field-row{display:flex;gap:8px}
+.field-row .field{flex:1}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:14px;border-radius:14px;background:var(--accent);font-weight:600;font-size:16px;margin-top:12px;text-align:center}
+.btn svg{width:20px;height:20px}
+.btn.ghost{background:var(--card2)}
+.btn.danger{background:rgba(255,69,58,.14);color:#ff6961}
+#toast{position:fixed;left:50%;top:calc(12px + var(--top));z-index:70;transform:translate(-50%,-120px);background:#2c2c2e;padding:10px 16px;border-radius:14px;font-size:14px;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.4);transition:transform .25s}
+#toast.show{transform:translate(-50%,0)}
+.spin{animation:spin .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.skel{color:var(--card3)}
+.ai{display:grid;place-items:center}
+
+/* ===== Вариант B: «Карта» — герой как банковская карта, круглые кнопки, классический таб-бар ===== */
+.v-b{--accent:#2f7bf6}
+.v-b .hero{padding:6px 0 22px}
+.bank{display:block;width:100%;text-align:left;position:relative;overflow:hidden;border-radius:24px;padding:18px 20px 16px;background:radial-gradient(130% 150% at 100% 0%,#7b9bff 0%,#3d5cf0 32%,#2b2fa8 68%,#191a5a 100%);box-shadow:0 18px 44px rgba(47,123,246,.22)}
+.bank::before,.bank::after{content:"";position:absolute;border-radius:50%;border:1px solid rgba(255,255,255,.14)}
+.bank::before{width:220px;height:220px;right:-70px;top:-90px}
+.bank::after{width:160px;height:160px;right:-40px;top:-60px}
+.bank-top{display:flex;justify-content:space-between;align-items:center;font-size:14px;font-weight:500;color:rgba(255,255,255,.8)}
+.bank .chip{margin:0;background:rgba(255,255,255,.2);color:#fff}
+.bank-big{font-size:50px;font-weight:800;letter-spacing:-2px;line-height:1.1;margin-top:16px;font-variant-numeric:tabular-nums}
+.bank-big small{font-size:.55em;color:rgba(255,255,255,.65);letter-spacing:0;margin:0 10px 0 3px}
+.bank-name{font-size:17px;font-weight:600;margin-top:4px}
+.bank-foot{display:flex;justify-content:space-between;gap:10px;margin-top:20px;font-size:13px;color:rgba(255,255,255,.75)}
+.bank-foot span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bank-foot span:last-child{white-space:nowrap}
+.v-b .action{background:none;padding:0;gap:8px}
+.v-b .action:active{background:none}
+.v-b .action .ai{width:54px;height:54px;border-radius:50%;background:var(--accent);color:#fff}
+.v-b .tabbar{left:0;right:0;bottom:0;max-width:none;border-radius:0;border:0;border-top:1px solid var(--line);padding:6px 6px calc(6px + env(safe-area-inset-bottom));background:rgba(20,20,22,.94)}
+.v-b .tab.on{background:none;color:var(--accent)}
+.v-b .fab{bottom:calc(84px + env(safe-area-inset-bottom))}
+
+/* ===== Вариант C: «Лайм» — текст слева, счётчики, цветные иконки, акцент салатовый ===== */
+.v-c{--accent:#b8f53d}
+.v-c .hero{text-align:left;padding:12px 2px 22px}
+.v-c .hello{color:var(--hint);font-size:15px;font-weight:500}
+.v-c .hello::first-letter{text-transform:uppercase}
+.v-c .hero .big{font-size:62px;margin-top:4px}
+.v-c .hero .label{margin-top:2px;color:var(--text2);font-size:15px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:20px}
+.stats div{background:var(--card);border-radius:16px;padding:12px 12px 11px}
+.stats b{display:block;font-size:24px;font-weight:700}
+.stats span{font-size:12px;color:var(--hint)}
+.v-c .action .ai{width:42px;height:42px;border-radius:13px;background:color-mix(in srgb,var(--c) 18%,transparent);color:var(--c)}
+.v-c .action{gap:7px;padding-top:12px}
+.v-c .banner{flex-basis:82%;background:var(--card);border:1px solid var(--line);padding-right:92px;min-height:104px}
+.v-c .banner::after{display:none}
+.v-c .banner p{color:var(--text2)}
+.v-c .badge{transform:translateY(-50%);width:66px;height:66px;border-radius:20px;background:var(--accent);color:#000;border:0;box-shadow:none}
+.v-c .banner.hot .badge{background:#ff6a3d;color:#fff}
+.v-c .banner.warm .badge{background:#ffb340}
+.v-c .dot.on{background:var(--accent)}
+.v-c .tab.on{background:var(--accent);color:#000}
+.v-c .check.on svg,.v-c .fab,.v-c .btn,.v-c .day.on,.v-c .day.on b{color:#000}
+.v-c .btn.ghost{color:#fff}
+.v-c .btn.danger{color:#ff6961}
+.v-c .fab{box-shadow:0 10px 28px rgba(184,245,61,.28)}
+</style>
+</head>
+<body>
+<main id="view"></main>
+<nav class="tabbar" id="tabbar"></nav>
+<div id="fab-slot"></div>
+<div id="toast"></div>
+<script>
+const tg = window.Telegram?.WebApp;
+const inTG = !!(tg && tg.initData);
+if (tg) {
+  tg.ready(); tg.expand();
+  try { tg.setHeaderColor("#000000"); tg.setBackgroundColor("#000000"); tg.setBottomBarColor?.("#000000"); tg.disableVerticalSwipes?.(); } catch {}
+}
+const haptic = (t = "light") => { try {
+  if (t === "select") tg.HapticFeedback.selectionChanged();
+  else if (t === "ok") tg.HapticFeedback.notificationOccurred("success");
+  else tg.HapticFeedback.impactOccurred(t);
+} catch {} };
+
+/* ---------- иконки ---------- */
+const P = {
+  home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+  cal: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  plan: '<path d="M10 6h10M10 12h10M10 18h10"/><path d="m3.5 6 1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5L7.5 17"/>',
+  note: '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  left: '<path d="m15 5-7 7 7 7"/>', right: '<path d="m9 5 7 7-7 7"/>',
+  ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  flag: '<path d="M5 21V4h11l-2 4 2 4H5"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  pin: '<path d="M9 4h6l-1 5 4 4H6l4-4zM12 13v8"/>',
+};
+const ic = (n) => `<svg viewBox="0 0 24 24">${P[n]}</svg>`;
+const esc = (s = "") => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/* ---------- хранилище: облако Telegram, иначе localStorage ---------- */
+const cloud = inTG && tg.isVersionAtLeast?.("6.9") ? tg.CloudStorage : null;
+const ls = { get(k) { try { return localStorage.getItem("j_" + k); } catch { return null; } },
+             set(k, v) { try { localStorage.setItem("j_" + k, v); } catch {} },
+             del(k) { try { localStorage.removeItem("j_" + k); } catch {} } };
+const parse = (v) => { try { return v ? JSON.parse(v) : null; } catch { return null; } };
+// ?v=a|b|c — вариант оформления, ?tab=… — стартовая вкладка, ?demo — примерные заметки и задачи (ничего не сохраняется).
+const Q = new URLSearchParams(location.search);
+const V = ["a", "b", "c"].includes(Q.get("v")) ? Q.get("v") : ["a", "b", "c"].includes(ls.get("variant")) ? ls.get("variant") : "a";
+document.body.classList.add("v-" + V);
+const DEMO = Q.has("demo");
+const store = {
+  async get(k) {
+    let v = cloud ? await new Promise((r) => cloud.getItem(k, (e, x) => r(e ? null : x))) : null;
+    return parse(v || ls.get(k));
+  },
+  async getMany(keys) {
+    if (!keys.length) return {};
+    let m = cloud ? await new Promise((r) => cloud.getItems(keys, (e, x) => r(e ? {} : x))) : {};
+    const out = {};
+    for (const k of keys) out[k] = parse(m[k] || ls.get(k));
+    return out;
+  },
+  async set(k, val) {
+    const s = JSON.stringify(val); ls.set(k, s);
+    if (cloud) await new Promise((r) => cloud.setItem(k, s, () => r()));
+  },
+  async del(k) { ls.del(k); if (cloud) await new Promise((r) => cloud.removeItem(k, () => r())); },
+};
+
+/* ---------- даты (время Москвы) ---------- */
+const TZ = "Europe/Moscow";
+const MONTHS = ["января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря"];
+const WD = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"];
+const WDL = ["понедельник","вторник","среда","четверг","пятница","суббота","воскресенье"];
+function mskParts(ms) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("ru-RU", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+    .formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return { y: +p.year, m: +p.month, d: +p.day, hh: p.hour, mm: p.minute };
+}
+const keyOf = ({ y, m, d }) => `${y}${String(m).padStart(2, "0")}${String(d).padStart(2, "0")}`;
+const todayKey = () => keyOf(mskParts(Date.now()));
+const fromKey = (k) => new Date(Date.UTC(+k.slice(0, 4), +k.slice(4, 6) - 1, +k.slice(6, 8)));
+const addDays = (k, n) => { const d = fromKey(k); d.setUTCDate(d.getUTCDate() + n); return keyOf({ y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() }); };
+const wdIdx = (k) => (fromKey(k).getUTCDay() + 6) % 7;
+function dayLabel(k, withWd = true) {
+  const t = todayKey();
+  if (k === t) return "Сегодня";
+  if (k === addDays(t, 1)) return "Завтра";
+  if (k === addDays(t, -1)) return "Вчера";
+  const d = fromKey(k);
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}${withWd ? ", " + WDL[wdIdx(k)] : ""}`;
+}
+const fmtDue = (due) => { const p = mskParts(due * 1000); return `${p.d} ${MONTHS[p.m - 1]}, ${p.hh}:${p.mm}`; };
+// Срок «5 октября 00:00» на деле значит «до конца 4 октября», поэтому в плане показываем его накануне.
+const workDay = (due) => keyOf(mskParts(due * 1000 - 1000));
+const plural = (n, a, b, c) => { const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? b : c; };
+function leftParts(due) {
+  const s = due - Date.now() / 1000;
+  if (s <= 0) return null;
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d > 0 ? [[d, "д"], [h, "ч"]] : h > 0 ? [[h, "ч"], [m, "мин"]] : [[Math.max(m, 1), "мин"]];
+}
+const leftText = (due) => { const p = leftParts(due); return p ? p.map(([n, u]) => `${n} ${u}`).join(" ") : "просрочено"; };
+
+/* ---------- задания ---------- */
+const SUBMITTED = ["submitted"];
+const isOpen = (x) => !SUBMITTED.includes(x.status) && x.grade == null;
+const shortName = (n) => { const s = n.split(/\.\s/)[0]; return s.length > 60 ? s.slice(0, 57) + "…" : s; };
+const initials = (c) => c.split(/[\s-]+/).filter((w) => w.length > 2 && /^[A-ZА-ЯЁ]/i.test(w)).slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "•";
+const COLORS = ["linear-gradient(135deg,#4f5bd5,#9d5cff)", "linear-gradient(135deg,#ff6a3d,#ffa23a)", "linear-gradient(135deg,#1f9d8b,#3fd0a8)", "linear-gradient(135deg,#d6336c,#ff6b9a)", "linear-gradient(135deg,#2f6fdf,#4fb3ff)", "linear-gradient(135deg,#8a5a00,#e0a526)"];
+const colorOf = (s) => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return COLORS[h % COLORS.length]; };
+function statusChip(x) {
+  if (x.grade != null) return `<span class="chip green">Оценка ${esc(x.grade)}</span>`;
+  if (x.status === "submitted") return `<span class="chip green">Отправлено</span>`;
+  if (x.status === "draft") return `<span class="chip yellow">Черновик</span>`;
+  const s = x.due - Date.now() / 1000;
+  if (s <= 0) return `<span class="chip red">Просрочено</span>`;
+  if (s < 86400) return `<span class="chip red">${leftText(x.due)}</span>`;
+  if (s < 3 * 86400) return `<span class="chip orange">${leftText(x.due)}</span>`;
+  return `<span class="chip">${leftText(x.due)}</span>`;
+}
+const statusText = (x) => x.grade != null ? `Оценка ${x.grade}` : ({ submitted: "Отправлено на проверку", draft: "Черновик", new: "Ответа нет", none: "Ответа нет" }[x.status] || "Неизвестно");
+
+/* ---------- состояние ---------- */
+const S = { tab: "home", dl: null, dlErr: null, loading: false, dlFilter: "active", notes: [], plan: {}, day: todayKey(), q: "", banner: 0 };
+const user = tg?.initDataUnsafe?.user;
+
+async function loadDL(force) {
+  S.loading = true; render();
+  try {
+    const r = await fetch("api/deadlines" + (force ? "?refresh" : ""), { headers: { "x-telegram-init-data": tg?.initData || "" } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(r.status === 403 ? "Нет доступа: откройте приложение из бота" : j.error || `Ошибка ${r.status}`);
+    S.dl = j; S.dlErr = null;
+    store.set("dl_cache", { updated: j.updated, url: j.url, items: j.items.slice(0, 12).map(({ courseFull, ...x }) => x) });
+    if (force) { toast("Дедлайны обновлены"); haptic("ok"); }
+  } catch (e) {
+    S.dlErr = /fetch|network|Failed/i.test(e.message) ? "ПК с Джарвисом сейчас недоступен" : e.message;
+  }
+  S.loading = false; render();
+}
+async function loadNotes() {
+  const ids = (await store.get("notes")) || [];
+  const m = await store.getMany(ids.map((id) => "n_" + id));
+  S.notes = ids.map((id) => m["n_" + id]).filter(Boolean);
+}
+async function saveNote(n) {
+  n.updated = Date.now();
+  const i = S.notes.findIndex((x) => x.id === n.id);
+  if (i >= 0) S.notes[i] = n; else S.notes.unshift(n);
+  await store.set("n_" + n.id, n);
+  await store.set("notes", S.notes.map((x) => x.id));
+}
+async function deleteNote(id) {
+  S.notes = S.notes.filter((x) => x.id !== id);
+  await store.del("n_" + id);
+  await store.set("notes", S.notes.map((x) => x.id));
+}
+async function loadPlan(k) { if (!(k in S.plan)) S.plan[k] = (await store.get("p_" + k)) || []; return S.plan[k]; }
+const savePlan = (k) => store.set("p_" + k, S.plan[k]);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+/* ---------- экраны ---------- */
+const items = () => S.dl?.items || [];
+const openItems = () => items().filter((x) => isOpen(x) && x.due > Date.now() / 1000);
+
+function header(extra = "") {
+  const name = user?.first_name || "";
+  const av = user?.photo_url ? `<img src="${esc(user.photo_url)}" alt="">` : esc(((user?.first_name?.[0] || "А") + (user?.last_name?.[0] || "К")).toUpperCase());
+  return `<div class="top"><div class="me"><div class="avatar">${av}</div>${esc(name)}</div>
+    <button class="icon-btn" data-act="refresh" aria-label="Обновить">${S.loading ? `<svg class="spin" viewBox="0 0 24 24">${P.refresh}</svg>` : ic("refresh")}</button></div>${extra}`;
+}
+
+function viewHome() {
+  const open = openItems(), next = open[0];
+  let hero;
+  if (next) {
+    const parts = leftParts(next.due);
+    hero = `<div class="label">До ближайшего дедлайна</div>
+      <div class="big">${parts.map(([n, u]) => `${n}<small>${u}</small>`).join("")}</div>
+      <button class="sub" data-act="dl" data-id="${next.id}">${ic("flag").replace("<svg", '<svg style="width:14px;height:14px"')}<span>${esc(shortName(next.name))} · ${esc(next.course)}</span></button>`;
+  } else if (S.dl) {
+    hero = `<div class="label">Ближайших дедлайнов нет</div><div class="big">0<small>задач</small></div>`;
+  } else {
+    hero = `<div class="label">${S.dlErr ? esc(S.dlErr) : "Загружаю дедлайны…"}</div><div class="big skel">—</div>`;
+  }
+  const banners = open.slice(0, 5).map((x) => {
+    const s = x.due - Date.now() / 1000, days = Math.floor(s / 86400);
+    const cls = s < 86400 ? "hot" : s < 3 * 86400 ? "warm" : "";
+    const badge = days >= 1 ? `<b>${days}</b><span>${plural(days, "день", "дня", "дней")}</span>` : `<b>${Math.max(1, Math.floor(s / 3600))}</b><span>ч</span>`;
+    return `<button class="banner ${cls}" data-act="dl" data-id="${x.id}"><h3>${esc(shortName(x.name))}</h3>
+      <p>${ic("clock")}до ${fmtDue(x.due)}</p><p style="margin-top:2px">${esc(x.course)}</p><div class="badge">${badge}</div></button>`;
+  }).join("") || (S.dl ? `<div class="banner done"><h3>Всё сдано</h3><p>Новых заданий с ближайшим сроком нет</p><div class="badge"><b>✓</b></div></div>` : "");
+  const dots = open.length > 1 ? `<div class="dots">${open.slice(0, 5).map((_, i) => `<i class="dot ${i === S.banner ? "on" : ""}"></i>`).join("")}</div>` : "";
+
+  const t = todayKey(), tasks = S.plan[t] || [], dlToday = open.filter((x) => workDay(x.due) === t);
+  const doneN = tasks.filter((x) => x.done).length, total = tasks.length;
+  const planRows = dlToday.map(dlRowPlan).join("") + tasks.slice(0, 4).map((x) => taskRow(x, t)).join("");
+  const notes = [...S.notes].sort((a, b) => b.updated - a.updated).slice(0, 2);
+
+  const actions = `<div class="actions">
+      <button class="action" data-act="tab" data-tab="deadlines" style="--c:#ff7a45"><span class="ai">${ic("cal")}</span>Дедлайны</button>
+      <button class="action" data-act="new-note" style="--c:#ffd60a"><span class="ai">${ic("note")}</span>Заметка</button>
+      <button class="action" data-act="new-task" style="--c:#30d158"><span class="ai">${ic("plus")}</span>Задача</button>
+      <button class="action" data-act="tab" data-tab="plan" style="--c:#64a8ff"><span class="ai">${ic("plan")}</span>План</button>
+    </div>`;
+  const upcoming = `<div class="card"><div class="card-h"><h2>Ближайшие сроки</h2><button class="link" data-act="tab" data-tab="deadlines">Все</button></div>
+      ${open.slice(0, 3).map(dlRow).join("") || `<div class="empty">Всё сдано</div>`}</div>`;
+  if (V === "b") {
+    hero = next ? `<button class="bank" data-act="dl" data-id="${next.id}">
+        <div class="bank-top"><span>Ближайший дедлайн</span><span class="chip">${next.status === "draft" ? "Черновик" : "Не сдано"}</span></div>
+        <div class="bank-big">${leftParts(next.due).map(([n, u]) => `${n}<small>${u}</small>`).join("")}</div>
+        <div class="bank-name">${esc(shortName(next.name))}</div>
+        <div class="bank-foot"><span>${esc(next.course)}</span><span>до ${fmtDue(next.due)}</span></div></button>`
+      : `<div class="bank"><div class="bank-top"><span>${S.dl ? "Ближайших дедлайнов нет" : "Загружаю…"}</span></div><div class="bank-big">—</div></div>`;
+  }
+  if (V === "c") {
+    const p = mskParts(Date.now()), soon = open.filter((x) => x.due - Date.now() / 1000 < 14 * 86400).length;
+    hero = `<div class="hello">${WDL[wdIdx(todayKey())]}, ${p.d} ${MONTHS[p.m - 1]}</div>
+      ${next ? `<div class="big">${leftParts(next.due).map(([n, u]) => `${n}<small>${u}</small>`).join("")}</div>
+        <div class="label">до «${esc(shortName(next.name))}» · ${esc(next.course)}</div>` : `<div class="big">—</div><div class="label">${S.dl ? "Ближайших дедлайнов нет" : "Загружаю…"}</div>`}
+      <div class="stats"><div><b>${soon}</b><span>${plural(soon, "дедлайн", "дедлайна", "дедлайнов")} за 2 нед.</span></div>
+        <div><b>${total - doneN}</b><span>задач на сегодня</span></div><div><b>${S.notes.length}</b><span>${plural(S.notes.length, "заметка", "заметки", "заметок")}</span></div></div>`;
+  }
+
+  return header() + `<section class="hero">${hero}</section>
+    ${actions}
+    ${V === "b" ? upcoming : banners ? `<div class="banners" id="banners">${banners}</div>${dots}` : ""}
+    ${S.dlErr && S.dl ? `<div class="err">${esc(S.dlErr)}. Показаны данные от ${fmtUpdated()}.</div>` : ""}
+    <div class="card"><div class="card-h"><h2>План на сегодня</h2><button class="link" data-act="tab" data-tab="plan">Все</button></div>
+      ${total ? `<div class="progress"><i style="width:${Math.round(doneN / total * 100)}%"></i></div><div class="prog-l"><span>Выполнено ${doneN} из ${total}</span></div>` : ""}
+      ${planRows || `<div class="empty">На сегодня задач нет</div>`}
+      <button class="link" style="margin-top:6px" data-act="new-task">+ Добавить задачу</button></div>
+    <div class="card"><div class="card-h"><h2>Заметки</h2><button class="link" data-act="tab" data-tab="notes">Все</button></div>
+      ${notes.length ? notes.map((n) => `<button class="row" data-act="note" data-id="${n.id}"><div class="ico" style="background:var(--card2)">${ic("note")}</div>
+        <div class="grow"><div class="title">${esc(n.title || "Без названия")}</div><div class="meta">${esc((n.body || "").split("\n")[0] || "Пустая заметка")}</div></div></button>`).join("")
+        : `<div class="empty">Заметок пока нет</div>`}</div>`;
+}
+
+function dlRow(x) {
+  const p = mskParts(x.due * 1000);
+  return `<button class="row" data-act="dl" data-id="${x.id}"><div class="ico" style="background:${colorOf(x.course)}">${esc(initials(x.course))}</div>
+    <div class="grow"><div class="title">${esc(shortName(x.name))}</div><div class="meta">${esc(x.course)}</div></div>
+    <div class="right"><div class="t">${p.hh}:${p.mm}</div>${statusChip(x)}</div></button>`;
+}
+function dlRowPlan(x) {
+  const p = mskParts(x.due * 1000);
+  return `<button class="row" data-act="dl" data-id="${x.id}"><div class="ico" style="width:24px;height:24px;background:var(--violet)">${ic("flag").replace("<svg", '<svg style="width:13px;height:13px"')}</div>
+    <div class="grow"><div class="title">${esc(shortName(x.name))}</div><div class="meta">Сдать до ${p.d} ${MONTHS[p.m - 1]}, ${p.hh}:${p.mm}</div></div></button>`;
+}
+function taskRow(x, k) {
+  return `<div class="row ${x.done ? "done" : ""}"><button class="check ${x.done ? "on" : ""}" data-act="toggle" data-day="${k}" data-id="${x.id}" aria-label="Готово">${ic("check")}</button>
+    <button class="grow" data-act="task" data-day="${k}" data-id="${x.id}"><div class="title">${esc(x.text)}</div>${x.time ? `<div class="meta">${esc(x.time)}</div>` : ""}</button></div>`;
+}
+const fmtUpdated = () => { if (!S.dl) return ""; const p = mskParts(S.dl.updated * 1000); return `${dayLabel(keyOf(p), false).toLowerCase()} ${p.hh}:${p.mm}`; };
+
+function viewDeadlines() {
+  const now = Date.now() / 1000;
+  const list = S.dlFilter === "active" ? items().filter((x) => isOpen(x) && x.due > now) : items();
+  const groups = {};
+  for (const x of list) (groups[keyOf(mskParts(x.due * 1000))] ||= []).push(x);
+  const body = Object.entries(groups).map(([k, xs]) => `<div class="group-h">${dayLabel(k)}</div><div class="list">${xs.map(dlRow).join("")}</div>`).join("");
+  return header(`<h1 class="page-title">Дедлайны</h1>`) + `
+    <div class="seg" style="display:grid;grid-template-columns:1fr 1fr;background:var(--card);border-radius:12px;padding:3px">
+      ${[["active", "Активные"], ["all", "Все"]].map(([v, l]) => `<button data-act="filter" data-v="${v}" style="padding:8px;border-radius:10px;font-size:14px;font-weight:600;text-align:center;${S.dlFilter === v ? "background:var(--card3);color:#fff" : "color:var(--hint)"}">${l}</button>`).join("")}
+    </div>
+    ${S.dlErr ? `<div class="err">${esc(S.dlErr)}${S.dl ? `. Показаны данные от ${fmtUpdated()}.` : ". Проверьте, что ПК включён."}</div>` : ""}
+    ${body || (S.dl ? `<div class="empty">${S.dlFilter === "active" ? "Все задания сданы" : "Заданий нет"}</div>` : S.dlErr ? "" : `<div class="empty">Загружаю…</div>`)}
+    ${S.dl ? `<div class="foot">Обновлено ${fmtUpdated()} · Moodle МИСИС</div>` : ""}`;
+}
+
+function viewPlan() {
+  const t = todayKey(), k = S.day, weekStart = addDays(k, -wdIdx(k));
+  const open = openItems();
+  const marks = new Set(open.map((x) => workDay(x.due)));
+  const tasks = [...(S.plan[k] || [])].sort((a, b) => (a.done - b.done) || (a.time || "99").localeCompare(b.time || "99"));
+  const dls = open.filter((x) => workDay(x.due) === k);
+  const doneN = tasks.filter((x) => x.done).length;
+  const ws = fromKey(weekStart), we = fromKey(addDays(weekStart, 6));
+  const NOM = ["январь","февраль","март","апрель","май","июнь","июль","август","сентябрь","октябрь","ноябрь","декабрь"];
+  const monthL = ws.getUTCMonth() === we.getUTCMonth() ? NOM[ws.getUTCMonth()] : `${NOM[ws.getUTCMonth()]} – ${NOM[we.getUTCMonth()]}`;
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = addDays(weekStart, i), hasTasks = (S.plan[d] || []).some((x) => !x.done);
+    return `<button class="day ${d === k ? "on" : ""} ${d === t ? "today" : ""}" data-act="day" data-day="${d}">${WD[i]}<b>${fromKey(d).getUTCDate()}</b>${marks.has(d) || hasTasks ? "<i></i>" : ""}</button>`;
+  }).join("");
+  return header(`<h1 class="page-title">План</h1>`) + `
+    <div class="week-h"><button class="icon-btn" data-act="week" data-n="-7">${ic("left")}</button><b>${monthL}</b><button class="icon-btn" data-act="week" data-n="7">${ic("right")}</button></div>
+    <div class="days">${days}</div>
+    <div class="group-h">${["Сегодня", "Завтра", "Вчера"].includes(dayLabel(k)) ? `${dayLabel(k)}, ${fromKey(k).getUTCDate()} ${MONTHS[fromKey(k).getUTCMonth()]}` : dayLabel(k)}</div>
+    <div class="card" style="margin-top:0">
+      ${tasks.length ? `<div class="progress" style="margin-top:0"><i style="width:${Math.round(doneN / tasks.length * 100)}%"></i></div><div class="prog-l"><span>Выполнено ${doneN} из ${tasks.length}</span></div>` : ""}
+      ${dls.map(dlRowPlan).join("")}${tasks.map((x) => taskRow(x, k)).join("")}
+      ${!tasks.length && !dls.length ? `<div class="empty">Задач нет. Нажмите «+», чтобы добавить</div>` : ""}
+    </div>`;
+}
+
+function viewNotes() {
+  const q = S.q.trim().toLowerCase();
+  const list = [...S.notes].filter((n) => !q || `${n.title} ${n.body}`.toLowerCase().includes(q))
+    .sort((a, b) => (b.pinned | 0) - (a.pinned | 0) || b.updated - a.updated);
+  const dt = (ms) => { const p = mskParts(ms); return `${dayLabel(keyOf(p), false)}, ${p.hh}:${p.mm}`; };
+  return header(`<h1 class="page-title">Заметки</h1>`) + `
+    <label class="search">${ic("search")}<input id="q" placeholder="Поиск" value="${esc(S.q)}"></label>
+    ${list.length ? `<div class="notes">${list.map((n) => `<button class="note" data-act="note" data-id="${n.id}">
+      <h4>${n.pinned ? "📌 " : ""}${esc(n.title || "Без названия")}</h4><p>${esc(n.body || "")}</p><time>${dt(n.updated)}</time></button>`).join("")}</div>`
+      : `<div class="empty">${q ? "Ничего не найдено" : "Заметок пока нет. Нажмите «+», чтобы создать"}</div>`}`;
+}
+
+/* ---------- нижняя шторка ---------- */
+let sheetEl = null;
+function openSheet(html, onMount) {
+  closeSheet(true);
+  sheetEl = document.createElement("div");
+  sheetEl.className = "sheet-wrap";
+  sheetEl.innerHTML = `<div class="sheet"><div class="handle"></div>${html}</div>`;
+  sheetEl.addEventListener("click", (e) => { if (e.target === sheetEl) closeSheet(); });
+  document.body.appendChild(sheetEl);
+  requestAnimationFrame(() => sheetEl.classList.add("show"));
+  try { tg.BackButton.show(); } catch {}
+  onMount?.(sheetEl);
+}
+function closeSheet(instant) {
+  if (!sheetEl) return;
+  const el = sheetEl; sheetEl = null;
+  try { tg.BackButton.hide(); } catch {}
+  if (instant) return el.remove();
+  el.classList.remove("show"); setTimeout(() => el.remove(), 280);
+}
+try { tg.BackButton.onClick(() => closeSheet()); } catch {}
+
+function sheetDeadline(id) {
+  const x = items().find((i) => String(i.id) === String(id)); if (!x) return;
+  const link = S.dl?.url && x.cmid ? `${S.dl.url}/mod/assign/view.php?id=${x.cmid}` : null;
+  openSheet(`<h3>${esc(x.name)}</h3><div style="height:12px"></div>
+    <div class="kv"><span>Курс</span><b>${esc(x.courseFull || x.course)}</b></div>
+    <div class="kv"><span>Срок</span><b>${fmtDue(x.due)}</b></div>
+    <div class="kv"><span>Осталось</span><b>${leftText(x.due)}</b></div>
+    <div class="kv"><span>Статус</span><b>${esc(statusText(x))}</b></div>
+    ${link ? `<button class="btn" data-sheet="open">${ic("ext")}Открыть в Moodle</button>` : ""}
+    <button class="btn ghost" data-sheet="plan">${ic("plus")}Добавить в план на сегодня</button>`, (el) => {
+    el.querySelector('[data-sheet="open"]')?.addEventListener("click", () => { tg?.openLink ? tg.openLink(link) : window.open(link, "_blank"); });
+    el.querySelector('[data-sheet="plan"]').addEventListener("click", async () => {
+      const t = todayKey(); await loadPlan(t);
+      S.plan[t].push({ id: uid(), text: `Работа над: ${shortName(x.name)}`, done: false });
+      await savePlan(t); closeSheet(); haptic("ok"); toast("Добавлено в план"); render();
+    });
+  });
+}
+
+function sheetTask(day, id) {
+  const list = S.plan[day] || [], x = id ? list.find((t) => t.id === id) : null;
+  openSheet(`<h3>${x ? "Задача" : "Новая задача"}</h3>
+    <input class="field" id="t-text" placeholder="Что нужно сделать" maxlength="200" value="${esc(x?.text || "")}">
+    <div class="field-row"><input class="field" id="t-time" type="time" value="${esc(x?.time || "")}">
+      <input class="field" id="t-day" type="date" value="${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6)}"></div>
+    <button class="btn" data-sheet="save">Сохранить</button>
+    ${x ? `<button class="btn danger" data-sheet="del">${ic("trash")}Удалить</button>` : ""}`, (el) => {
+    const inp = el.querySelector("#t-text"); setTimeout(() => inp.focus(), 300);
+    el.querySelector('[data-sheet="save"]').addEventListener("click", async () => {
+      const text = inp.value.trim(); if (!text) return inp.focus();
+      const newDay = el.querySelector("#t-day").value.replaceAll("-", "") || day, time = el.querySelector("#t-time").value;
+      if (x) { S.plan[day] = list.filter((t) => t.id !== id); await savePlan(day); }
+      await loadPlan(newDay);
+      S.plan[newDay].push({ id: x?.id || uid(), text, time, done: x?.done || false });
+      await savePlan(newDay); closeSheet(); haptic("ok"); render();
+    });
+    el.querySelector('[data-sheet="del"]')?.addEventListener("click", async () => {
+      S.plan[day] = list.filter((t) => t.id !== id); await savePlan(day); closeSheet(); haptic("medium"); render();
+    });
+  });
+}
+
+function sheetNote(id) {
+  const n = id ? S.notes.find((x) => x.id === id) : null;
+  openSheet(`<input class="field" id="n-title" placeholder="Заголовок" maxlength="120" value="${esc(n?.title || "")}" style="font-weight:700;font-size:18px">
+    <textarea class="field" id="n-body" placeholder="Текст заметки" maxlength="3500">${esc(n?.body || "")}</textarea>
+    <button class="btn" data-sheet="save">Сохранить</button>
+    <div class="field-row"><button class="btn ghost" data-sheet="pin">${ic("pin")}${n?.pinned ? "Открепить" : "Закрепить"}</button>
+      ${n ? `<button class="btn danger" data-sheet="del">${ic("trash")}Удалить</button>` : ""}</div>`, (el) => {
+    let pinned = !!n?.pinned;
+    if (!n) setTimeout(() => el.querySelector("#n-title").focus(), 300);
+    const save = async () => {
+      const title = el.querySelector("#n-title").value.trim(), body = el.querySelector("#n-body").value;
+      if (!title && !body.trim()) return closeSheet();
+      await saveNote({ id: n?.id || uid(), title, body, pinned }); closeSheet(); haptic("ok"); render();
+    };
+    el.querySelector('[data-sheet="save"]').addEventListener("click", save);
+    el.querySelector('[data-sheet="pin"]').addEventListener("click", () => { pinned = !pinned; save(); });
+    el.querySelector('[data-sheet="del"]')?.addEventListener("click", () => {
+      const go = async () => { await deleteNote(n.id); closeSheet(); haptic("medium"); render(); };
+      if (tg?.showConfirm && inTG) tg.showConfirm("Удалить заметку?", (ok) => ok && go()); else if (confirm("Удалить заметку?")) go();
+    });
+  });
+}
+
+/* ---------- отрисовка и события ---------- */
+let toastT;
+function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 1800); }
+
+const TABS = [["home", "home", "Главная"], ["deadlines", "cal", "Дедлайны"], ["plan", "plan", "План"], ["notes", "note", "Заметки"]];
+function render() {
+  const view = document.getElementById("view");
+  const focused = document.activeElement?.id === "q";
+  view.innerHTML = { home: viewHome, deadlines: viewDeadlines, plan: viewPlan, notes: viewNotes }[S.tab]();
+  document.getElementById("tabbar").innerHTML = TABS.map(([id, icon, label]) =>
+    `<button class="tab ${S.tab === id ? "on" : ""}" data-act="tab" data-tab="${id}">${ic(icon)}${label}</button>`).join("");
+  document.getElementById("fab-slot").innerHTML = S.tab === "plan" || S.tab === "notes"
+    ? `<button class="fab" data-act="${S.tab === "plan" ? "new-task" : "new-note"}" aria-label="Добавить">${ic("plus")}</button>` : "";
+  const b = document.getElementById("banners");
+  if (b) {
+    b.scrollLeft = S.banner * b.clientWidth;
+    b.addEventListener("scroll", () => {
+      const i = Math.round(b.scrollLeft / (b.clientWidth + 10));
+      if (i !== S.banner) { S.banner = i; document.querySelectorAll(".dot").forEach((d, j) => d.classList.toggle("on", j === i)); }
+    }, { passive: true });
+  }
+  const q = document.getElementById("q");
+  if (q) { q.addEventListener("input", () => { S.q = q.value; render(); }); if (focused) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
+}
+
+document.addEventListener("click", async (e) => {
+  const el = e.target.closest("[data-act]"); if (!el || el.closest(".sheet")) return;
+  const { act, id, tab, day } = el.dataset;
+  if (act === "tab") { if (S.tab !== tab) { haptic("select"); S.tab = tab; if (tab === "plan") await loadWeek(); window.scrollTo(0, 0); render(); } }
+  else if (act === "refresh") { haptic(); loadDL(true); }
+  else if (act === "dl") { haptic(); sheetDeadline(id); }
+  else if (act === "filter") { haptic("select"); S.dlFilter = el.dataset.v; render(); }
+  else if (act === "new-note") { haptic(); sheetNote(null); }
+  else if (act === "note") { haptic(); sheetNote(id); }
+  else if (act === "new-task") { haptic(); const k = S.tab === "plan" ? S.day : todayKey(); await loadPlan(k); sheetTask(k, null); }
+  else if (act === "task") { haptic(); sheetTask(day, id); }
+  else if (act === "toggle") {
+    const x = (S.plan[day] || []).find((t) => t.id === id); if (!x) return;
+    x.done = !x.done; haptic(x.done ? "ok" : "light"); render(); savePlan(day);
+  }
+  else if (act === "day") { haptic("select"); S.day = day; await loadPlan(day); render(); }
+  else if (act === "week") { haptic("select"); S.day = addDays(S.day, +el.dataset.n); await loadWeek(); render(); }
+});
+
+async function loadWeek() {
+  const start = addDays(S.day, -wdIdx(S.day));
+  const keys = Array.from({ length: 7 }, (_, i) => addDays(start, i)).filter((k) => !(k in S.plan));
+  const m = await store.getMany(keys.map((k) => "p_" + k));
+  for (const k of keys) S.plan[k] = m["p_" + k] || [];
+}
+
+function seedDemo() {
+  store.set = store.del = async () => {};
+  const h = 3600e3, now = Date.now(), t = todayKey();
+  S.notes = [
+    { id: "d1", title: "Защита ЛР3", body: "Повторить: p95, граница пропускной способности, почему пул БД = 10.\nВопросы преподавателя записать сюда.", pinned: true, updated: now - 2 * h },
+    { id: "d2", title: "Курсовая, этап 1", body: "Вариант 04. Стек: Node + PostgreSQL. Замерить исходные показатели.", updated: now - 26 * h },
+    { id: "d3", title: "Идеи для бота", body: "Утренняя сводка в 8:00.\nНапоминание за сутки до срока.", updated: now - 3 * 24 * h },
+    { id: "d4", title: "Купить", body: "Кофе\nТетрадь в клетку\nЗарядку для ноутбука", updated: now - 5 * 24 * h },
+  ];
+  S.plan[t] = [
+    { id: "t1", text: "Прочитать методичку ЛР01 по ОС", time: "10:00", done: true },
+    { id: "t2", text: "Поднять стенд для ЛР01", time: "12:30", done: false },
+    { id: "t3", text: "Набросать план курсовой", time: "16:00", done: false },
+    { id: "t4", text: "Спортзал", time: "19:00", done: false },
+  ];
+  S.plan[addDays(t, 1)] = [{ id: "t5", text: "Консультация по курсовой", time: "11:00", done: false }];
+}
+
+(async function init() {
+  const cached = await store.get("dl_cache");
+  if (cached?.items) S.dl = cached;
+  if (["home", "deadlines", "plan", "notes"].includes(Q.get("tab"))) S.tab = Q.get("tab");
+  if (DEMO) seedDemo(); else await Promise.all([loadNotes(), loadPlan(todayKey())]);
+  if (S.tab === "plan") await loadWeek();
+  render();
+  loadDL(false);
+  setInterval(() => { if (!sheetEl && document.activeElement?.id !== "q") render(); }, 60000);
+})();
+</script>
+</body>
+</html>

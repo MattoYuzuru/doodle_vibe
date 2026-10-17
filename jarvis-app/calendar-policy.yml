@@ -1,0 +1,11 @@
+# Политика трафика ngrok для постоянного адреса календаря (cal-tunnel.mjs).
+# Через этот адрес снаружи доступен ТОЛЬКО календарь (/cal/<секрет>.ics): всё остальное (приложение, /api) закрыто —
+# приложение по-прежнему открывается через туннель Cloudflare из кнопки бота.
+on_http_request:
+  - name: only-calendar
+    expressions:
+      - "!req.url.path.startsWith('/cal/')"
+    actions:
+      - type: deny
+        config:
+          status_code: 404

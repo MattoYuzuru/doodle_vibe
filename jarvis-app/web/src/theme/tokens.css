@@ -1,0 +1,82 @@
+/* Дизайн-токены. Цвета свои, а не из темы Telegram (--tg-theme-*): приложение по умолчанию светлое
+   при любой теме Telegram, и смешивать его тёмные цвета со светлыми панелями нельзя — панели выходят серыми.
+   Схема задаётся атрибутом data-scheme на <html>: его ставит telegram/webapp.ts (светлая; тёмная — ?scheme=dark). */
+
+:root,
+:root[data-scheme="light"] {
+  --c-page: #f2f2f7;
+  --c-card: #ffffff;
+  --c-text: #000000;
+  --c-hint: #8e8e93;
+  --c-accent: #2f7bf6;
+  --c-on-accent: #ffffff;
+  --c-separator: rgb(0 0 0 / 0.08);
+
+  --c-red: #ff3b30;
+  --c-yellow: #b38600;
+  --c-green: #248a3d;
+
+  --c-blur: rgb(242 242 247 / 0.96);
+  --c-scrim: rgb(0 0 0 / 0.32);
+
+  /* Liquid Glass */
+  --glass-bg: rgb(255 255 255 / 0.52);
+  --glass-sheet: rgb(255 255 255 / 0.78);
+  --glass-lens: rgb(255 255 255 / 0.7);
+  --glass-rim: rgb(255 255 255 / 0.9);
+  --glass-shadow: 0 8px 28px rgb(0 0 0 / 0.12), 0 1px 2px rgb(0 0 0 / 0.06);
+  --tile-bg: rgb(255 255 255 / 0.72);
+  --glow-1: rgb(61 92 240 / 0.16);
+  --glow-2: rgb(157 92 255 / 0.12);
+
+  /* Фон страницы (варианты в index.css) */
+  --bg-top: #e4e4ee;
+  --bg-line: rgb(0 0 0 / 0.07);
+  --bg-glow: rgb(61 92 240 / 0.16);
+  --bg-grain: rgb(0 0 0 / 0.5);
+}
+
+:root[data-scheme="dark"] {
+  --c-page: #000000;
+  --c-card: #1c1c1e;
+  --c-text: #ffffff;
+  --c-hint: #8e8e93;
+  --c-accent: #2f7bf6;
+  --c-on-accent: #ffffff;
+  --c-separator: rgb(255 255 255 / 0.08);
+
+  --c-red: #ff453a;
+  --c-yellow: #ffd60a;
+  --c-green: #30d158;
+
+  --c-blur: rgb(20 20 22 / 0.96);
+  --c-scrim: rgb(0 0 0 / 0.56);
+
+  /* Liquid Glass */
+  --glass-bg: rgb(40 40 46 / 0.46);
+  --glass-sheet: rgb(30 30 34 / 0.74);
+  --glass-lens: rgb(255 255 255 / 0.13);
+  --glass-rim: rgb(255 255 255 / 0.42);
+  --glass-shadow: 0 10px 32px rgb(0 0 0 / 0.45), 0 1px 2px rgb(0 0 0 / 0.3);
+  --tile-bg: rgb(26 26 30 / 0.74);
+  --glow-1: rgb(61 92 240 / 0.34);
+  --glow-2: rgb(157 92 255 / 0.24);
+
+  /* Фон страницы (варианты в index.css) */
+  --bg-top: #16161c;
+  --bg-line: rgb(255 255 255 / 0.07);
+  --bg-glow: rgb(61 92 240 / 0.3);
+  --bg-grain: rgb(255 255 255 / 0.5);
+}
+
+:root {
+  /* Шрифт заголовков и крупных цифр; по умолчанию тот же, что и основной. */
+  --font-display: var(--font-sans);
+
+  /* Поднятый слой (бейджи, поля ввода) — вычисляем, в теме Telegram такого цвета нет. */
+  --c-raised: color-mix(in srgb, var(--c-text) 8%, var(--c-card));
+
+  /* Безопасные зоны Telegram (полноэкранный режим, чёлка) + системные. */
+  --safe-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
+  --safe-bottom: max(var(--tg-safe-area-inset-bottom, 0px), env(safe-area-inset-bottom, 0px));
+}

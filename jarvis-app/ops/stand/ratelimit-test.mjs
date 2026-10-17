@@ -1,0 +1,12 @@
+import { pathToFileURL } from "node:url";
+const r = await import(pathToFileURL("C:/Users/User/moodle-work/jarvis-app/ratelimit.mjs").href);
+let fails = 0; const check = (n, c, e = "") => { if (!c) fails++; console.log((c ? "PASS" : "FAIL") + "  " + n + (e ? "  | " + e : "")); };
+const t0 = 1e12;
+const a = [1, 2, 3, 4].map(() => r.hit("k", 3, 1000, t0));
+check("в пределах окна первые три проходят, четвёртый — отказ с пометкой «первый»", a[0] === null && a[2] === null && a[3]?.first === true && a[3].wait === 1);
+check("следующий отказ — уже не «первый»; счётчик виден без новой отметки", r.hit("k", 3, 1000, t0 + 10).first === false && r.count("k", t0 + 10) === 5 && r.count("k", t0 + 2000) === 0);
+check("новое окно — счёт с начала; другой ключ независим", r.hit("k", 3, 1000, t0 + 1500) === null && r.hit("z", 1, 1000, t0) === null && r.hit("z", 1, 1000, t0)?.first === true);
+const req = (h) => ({ headers: h });
+check("адрес клиента: Cloudflare — из cf-connecting-ip; иначе последнее значение X-Forwarded-For; без заголовков — local", r.clientIp(req({ "cf-connecting-ip": "1.2.3.4", "x-forwarded-for": "9.9.9.9" })) === "1.2.3.4" && r.clientIp(req({ "x-forwarded-for": "6.6.6.6, 5.5.5.5" })) === "5.5.5.5" && r.clientIp(req({})) === "local");
+r.sweep(t0 + 1e9); check("устаревшие счётчики убираются", r.size() === 0, String(r.size()));
+console.log(fails ? `ИТОГ: провалено ${fails}` : "ИТОГ: всё прошло"); process.exit(fails ? 1 : 0);

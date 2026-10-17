@@ -1,0 +1,16 @@
+node v24.19.0
+npm 11.17.0
+Python 3.12.2
+git version 2.55.0.windows.5
+openjdk version "17.0.20.1" 2026-08-18
+dotnet 9.0.313
+Docker version 29.7.2, build a7dcaa6
+openclaw OpenClaw 2026.9.6 (eb377ac)
+k6.exe v2.2.0 (commit/00a9a1b7f5, go1.26.5, windows/amd64)
+* Ubuntu            Stopped         2
+  docker-desktop    Stopped         2
+/c/Program Files/7-Zip/7z.exe
+C:\Program Files (x86)\cloudflared\cloudflared.exe
+C:\Users\User\AppData\Local\Microsoft\WinGet\Packages\Ngrok.Ngrok_Microsoft.Winget.Source_8wekyb3d8bbwe\ngrok.exe
+`-- openclaw@2026.9.6
+
