@@ -390,8 +390,8 @@ export function OwlAssistant() {
   // Две кнопки — дуга 160°…105° радиусом 96: при 180°…90° подпись левой ложится на вкладки, а верхней — за край экрана.
   // Три (на телефоне есть «На экран») — дуга шире и радиус 120, иначе соседние кнопки и подписи налезают друг на друга.
   const three = items.length > 2;
-  const R = three ? 120 : 96;
-  const A0 = ((three ? 172 : 160) * Math.PI) / 180, A1 = ((three ? 98 : 105) * Math.PI) / 180;
+  const R = three ? 130 : 96;
+  const A0 = ((three ? 175 : 160) * Math.PI) / 180, A1 = ((three ? 95 : 105) * Math.PI) / 180;
   const spot = (i: number) => {
     const a = items.length > 1 ? A0 - (i / (items.length - 1)) * (A0 - A1) : (A0 + A1) / 2;
     return { x: R * Math.cos(a), y: -R * Math.sin(a) };
