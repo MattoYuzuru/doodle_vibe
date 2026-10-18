@@ -13,7 +13,9 @@ import * as ej from "./ej.mjs";
 import * as notify from "./notify.mjs";
 import { ejState, listUsers, OWNER_ID } from "./users.mjs";
 
-const EVERY = Number(process.env.JOURNAL_EVERY_MS) || 3 * 3600e3;
+// Раз в 6 часов (18 окт 2026, решение владельца «журнал реже»; было раз в 3 часа): пропуски и оценки журнала не срочные,
+// а чтение журнала — десятки запросов к ej.misis.ru и вход через MISIS ID.
+const EVERY = Number(process.env.JOURNAL_EVERY_MS) || 6 * 3600e3;
 export const LOW = 75, CRITICAL = 50;
 const MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 // Дата занятия в журнале — «2026-09-08» без времени: берём число и месяц прямо из строки (разбор через Date сдвинул бы день по поясу сервера).

@@ -32,11 +32,98 @@ const probes = new Map(); // courseId → { from, to } (с): в курсе не 
  * все его курсы тихие с прошлого настоящего опроса; раз в QUICK_FULL_EVERY он всё равно спрашивает (тест, открытый
  * только другой группе курса, или ставший доступным по дате, изменением модуля не виден).
  */
+/*
+ * «Тихий» — значит без изменений РАБОТ (18 окт 2026). Раньше тишину стирало любое изменение модуля: по данным 16 окт
+ * 6,4 % проверок курса что-то находили (форумы, посещаемость…), у человека ~7 курсов — и почти каждые 5 минут хоть один
+ * «менялся»: тесты спрашивались раз в ~65 с вместо раза в 5 минут (38 % всех запросов к Moodle). Теперь изменение
+ * стирает тишину, только если изменился тест, задание или семинар (WORK) либо модуль, которого в списке курса не видно
+ * (новый, скрытый, недоступный этому человеку — может оказаться тестом). Виды модулей курса — courseWork, по последнему
+ * списку модулей (он и так читается при каждом изменении). Найденное изменение работы — ещё и сигнал перечитать сроки
+ * и оценки студентов курса сразу (workChangedSince, server.mjs freshDeadlines), а не ждать планового часа.
+ */
+const WORK = new Set(["quiz", "assign", "workshop"]);
+const courseWork = new Map(); // courseId → Set(cmid тестов, заданий, семинаров) по последнему списку модулей
+const workChangedAt = new Map(); // courseId → когда (с) найдено изменение работы
+/** Найдено ли изменение работ в этих курсах после момента sinceMs (мс). */
+export function workChangedSince(courseIds, sinceMs) {
+  return courseIds.some((id) => (workChangedAt.get(Number(id)) || 0) * 1000 > sinceMs);
+}
 const quietOf = new Map(); // courseId → { from, to } (с)
-function noteQuiet(courseId, from, to) {
-  const q = quietOf.get(courseId);
+/** Продлить известный промежуток [from, to] без изменений в map (quietOf — для тестов, probes — для материалов). */
+function extend(map, courseId, from, to) {
+  const q = map.get(courseId);
   if (q && from <= q.to) { q.from = Math.min(q.from, from); q.to = Math.max(q.to, to); }
-  else quietOf.set(courseId, { from, to }); // промежутки не соприкасаются — о времени между ними ничего не известно
+  else map.set(courseId, { from, to }); // промежутки не соприкасаются — о времени между ними ничего не известно
+}
+const noteQuiet = (courseId, from, to) => extend(quietOf, courseId, from, to);
+/**
+ * Изменение в курсе нашлось (inst — cmid изменившихся модулей), sections — список модулей курса (null — не прочитан):
+ * изменилась работа или невидимый модуль — тишина тестов кончается и сроки студентов курса надо перечитать; иначе
+ * промежуток [from, to] для тестов тихий.
+ */
+function classify(courseId, inst, sections, from, to) {
+  if (!sections) { quietOf.delete(courseId); workChangedAt.set(courseId, to); return; } // не прочитан — могло измениться что угодно
+  const mods = sections.flatMap((sec) => sec.modules || []);
+  const work = new Set(mods.filter((m) => WORK.has(m.modname)).map((m) => m.id));
+  courseWork.set(courseId, work);
+  const visible = new Set(mods.filter((m) => m.uservisible !== false).map((m) => m.id));
+  if (inst.some((id) => work.has(id) || !visible.has(id))) { quietOf.delete(courseId); workChangedAt.set(courseId, to); }
+  else noteQuiet(courseId, from, to);
+}
+/*
+ * Сигнал по курсу (18 окт 2026, решение владельца). Раньше о курсе узнавали только из проверки материалов каждого
+ * человека: при 200 людях её круг — минуты, тишина курсов устаревала (quietSince — не старше 2 минут), и тесты всё равно
+ * спрашивались у каждого. Теперь сервер (server.mjs signalTick) раз в ~30 с спрашивает «что изменилось» по каждому курсу
+ * один раз — токеном одного из его студентов, пакетом на все курсы этого студента (группа — обычно один запрос). Ответ
+ * продлевает тишину для тестов (quietOf) и общую проверку материалов (probes) всех студентов курса; изменение — список
+ * модулей курса тем же токеном, разбор classify и очередь «сначала студенты курса» (changedAt → needsCheck).
+ * Модуль, видимый только части курса, токен другого студента может не увидеть: его найдут собственная проверка
+ * материалов (раз в MATERIALS_OWN_EVERY) и страховочный опрос тестов (QUICK_FULL_EVERY).
+ */
+const signalAt = new Map(); // courseId → время (с) последнего ответа сигнала
+// Модули курса по прошлому списку, прочитанному САМИМ сигналом. Не общий список: если новый модуль первым заметила проверка
+// одного студента, общий список его уже знал бы, сигнал счёл бы изменение «без новостей» — и одногруппники, ещё не
+// проверявшие курс, взяли бы этот ответ и материал потеряли (нашлось на стенде 18 окт: 3 из 25 без «Нового материала»).
+const signalMods = new Map(); // courseId → Set(cmid)
+const SIGNAL_OVERLAP_S = /^\d+$/.test(process.env.SIGNAL_OVERLAP_S || "") ? Number(process.env.SIGNAL_OVERLAP_S) : 30;
+/** Сигнал по курсам courseIds токеном token. Возвращает число курсов с изменениями. Пауза Moodle — PausedError наверх. */
+export async function probeSignal(token, courseIds) {
+  const list = [...new Set(courseIds.map(Number))];
+  if (!list.length) return 0;
+  const nowS = Math.floor(Date.now() / 1000);
+  // С запасом SIGNAL_OVERLAP (30 с) назад от прошлого ответа: изменение, сделанное во время прошлого запроса, и разница
+  // часов с Moodle не должны его потерять (цена — то же изменение иногда находится дважды).
+  const since = new Map(list.map((id) => { const t = signalAt.get(id); return [id, t ? t - SIGNAL_OVERLAP_S : nowS - 600]; }));
+  const many = async (reqs) => {
+    try { return await moodle.callMany(token, reqs); }
+    catch (e) { if (e?.name === "PausedError") throw e; return reqs.map(() => ({ error: e })); }
+  };
+  const res = await many(list.map((id) => ({ fn: "core_course_get_updates_since", params: { courseid: id, since: since.get(id) } })));
+  const changed = [];
+  list.forEach((id, i) => {
+    if (res[i]?.error || !res[i]) return;
+    signalAt.set(id, nowS);
+    const inst = (res[i].data?.instances || []).filter((x) => x.contextlevel === "module").map((x) => ({ id: x.id, files: (x.updates || []).some((u) => u.name === "contentfiles") }));
+    if (!inst.length) { extend(probes, id, since.get(id), nowS); noteQuiet(id, since.get(id), nowS); return; }
+    changed.push({ id, inst });
+  });
+  if (changed.length) {
+    const r2 = await many(changed.map(({ id }) => ({ fn: "core_course_get_contents", params: { courseid: id, options: [{ name: "excludecontents", value: "1" }] } })));
+    changed.forEach(({ id, inst }, i) => {
+      const sections = !r2[i]?.error && Array.isArray(r2[i]?.data) ? r2[i].data : null, prev = signalMods.get(id);
+      if (sections) signalMods.set(id, new Set(sections.flatMap((sec) => sec.modules || []).map((m) => m.id)));
+      classify(id, inst.map((x) => x.id), sections, since.get(id), nowS);
+      // Есть ли что сказать в «Новых материалах»: новый модуль, невидимый этому токену или заменённый файл. Нет (сообщение
+      // в форуме, отметки посещаемости, сроки известного теста) — ответ годится всем студентам курса как «изменений нет»,
+      // и 25 человек не читают список модулей ради пустого результата. Без прошлого списка — считаем, что есть.
+      const kind = new Map((sections || []).flatMap((sec) => sec.modules || []).filter((m) => m.uservisible !== false).map((m) => [m.id, m.modname]));
+      const forMaterials = !sections || !prev || inst.some((x) => !prev.has(x.id) || !kind.has(x.id) || (x.files && ["resource", "folder"].includes(kind.get(x.id))));
+      if (!forMaterials) { extend(probes, id, since.get(id), nowS); return; }
+      probes.delete(id);
+      if ((changedAt.get(id) || 0) < nowS) changedAt.set(id, nowS);
+    });
+  }
+  return changed.length;
 }
 /** Не менялся ли ни один модуль этих курсов с момента fromS (с) по последние freshS секунд. */
 export function quietSince(courseIds, fromS, { freshS = 120, nowS = Math.floor(Date.now() / 1000) } = {}) {
@@ -213,15 +300,32 @@ export async function checkMaterials(tgId, token, courses, { mute = false, skipC
     probe.forEach((c, i) => {
       if (res[i]?.error || !res[i]) return;
       const inst = (res[i].data?.instances || []).filter((x) => x.contextlevel === "module");
-      if (!inst.length) { probes.set(c.id, { from: since.get(c.id), to: nowS }); noteQuiet(c.id, since.get(c.id), nowS); got.set(c.id, { same: true, at: nowS, own: true }); return; }
-      probes.delete(c.id); quietOf.delete(c.id);
-      if ((changedAt.get(c.id) || 0) < nowS) changedAt.set(c.id, nowS);
-      contents.push({ c, updated: new Set(inst.filter((x) => (x.updates || []).some((u) => u.name === "contentfiles")).map((x) => x.id)) });
+      if (!inst.length) { extend(probes, c.id, since.get(c.id), nowS); noteQuiet(c.id, since.get(c.id), nowS); got.set(c.id, { same: true, at: nowS, own: true }); return; }
+      // Общую проверку и очередь «сначала студенты курса» трогаем после списка модулей — только если нашлось новое для
+      // материалов (18 окт 2026: раньше каждое сообщение в форуме делало срочными всех одногруппников, и при 200 людях
+      // круг проверки растягивался до 6 минут).
+      contents.push({ c, inst: inst.map((x) => x.id), updated: new Set(inst.filter((x) => (x.updates || []).some((u) => u.name === "contentfiles")).map((x) => x.id)) });
     });
   }
   if (contents.length) {
     const res = await many(contents.map(({ c }) => ({ fn: "core_course_get_contents", params: { courseid: c.id, options: [{ name: "excludecontents", value: "1" }] } })));
-    contents.forEach(({ c, updated }, i) => { const sections = res[i]?.data; if (!res[i]?.error && Array.isArray(sections)) got.set(c.id, { sections, updated }); });
+    contents.forEach(({ c, inst, updated }, i) => {
+      const sections = !res[i]?.error && Array.isArray(res[i]?.data) ? res[i].data : null;
+      if (sections) got.set(c.id, { sections, updated });
+      // Первая проверка курса человеком — не изменение; иначе — тест/задание/невидимый модуль или нет (classify).
+      if (!inst) return;
+      classify(c.id, inst, sections, since.get(c.id), nowS);
+      // Новое для материалов — модуль, которого этот человек ещё не видел, невидимый ему или с заменённым файлом: тогда
+      // общий ответ «изменений нет» больше не годится, и одногруппники проверяют курс первыми. Иначе (форум, посещаемость,
+      // известный модуль) — ничего не трогаем: прежняя общая проверка верна и дальше.
+      const seenIds = new Set(snap.courses[String(c.id)]?.ids || []);
+      const kind = new Map((sections || []).flatMap((sec) => sec.modules || []).filter((m) => m.uservisible !== false).map((m) => [m.id, m.modname]));
+      if (sections && !inst.some((id) => !seenIds.has(id) || !kind.has(id) || (updated.has(id) && ["resource", "folder"].includes(kind.get(id))))) return;
+      probes.delete(c.id);
+      // Отметку ставим, только если изменение в окне этой проверки ещё никто не отметил (сигнал или одногруппник): иначе
+      // каждый получивший материал заново делал срочными всех, кто уже проверил, и очередь ходила по кругу у первых.
+      if ((changedAt.get(c.id) || 0) < since.get(c.id)) changedAt.set(c.id, nowS);
+    });
   }
   const out = [];
   const relay = mute && await notify.isRelaySource(tgId); // как у объявлений: выключено у человека, но нужно беседе

@@ -43,6 +43,9 @@ const CODE = opt("app", APP), TAG = opt("tag", "");
 // доставки «Новый тест» / «Новый материал», когда сервер уже знает «тихие» курсы.
 const STEADY_MS = Number(opt("steady", 0)) * 60e3;
 const RESTART = args.includes("--restart");
+// Шум изменений в курсах (форум курса меняется раз в ~19 минут, у каждого курса со своим сдвигом) — см. updates_since.
+const NOISE = opt("noise", "on") !== "off", NOISE_S = 19 * 60;
+const noiseAt = (cid) => { const ph = (cid * 7919) % NOISE_S, t = Math.floor(Date.now() / 1000); return Math.floor((t - ph) / NOISE_S) * NOISE_S + ph; };
 const GROUP_SIZE = 25, COURSES = 8;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const nowS = () => Math.floor(Date.now() / 1000);
@@ -125,13 +128,18 @@ function ws(fn, p, n, inner) {
       const cid = Number(p.courseid), since = Number(p.since);
       // Как настоящий Moodle: новый тест — тоже изменение модуля курса.
       const q = extraQuiz.get(cid), quizMod = q && q.addedAt >= since ? [{ contextlevel: "module", id: q.coursemodule, updates: [{ name: "configuration" }] }] : [];
-      return { instances: [...(extraMods.get(cid) || []).filter((m) => m.at >= since).map((m) => ({ contextlevel: "module", id: m.id, updates: [{ name: "configuration" }] })), ...quizMod] };
+      // «Шум» (18 окт 2026): в настоящих курсах всё время что-то меняется — форумы, посещаемость; по данным 16 окт 6,4 %
+      // проверок курса находили изменение, то есть примерно раз в 19 минут на курс. Без шума стенд не видел, что любое
+      // такое изменение заставляло заново спрашивать тесты. --noise=off — без шума (как замеры 15–17 окт).
+      const noise = NOISE && noiseAt(cid) >= since ? [{ contextlevel: "module", id: cid * 100 + 60, updates: [{ name: "configuration" }] }] : [];
+      return { instances: [...(extraMods.get(cid) || []).filter((m) => m.at >= since).map((m) => ({ contextlevel: "module", id: m.id, updates: [{ name: "configuration" }] })), ...quizMod, ...noise] };
     }
     case "core_course_get_contents": {
       const cid = Number(p.courseid);
       if (!stats.contentsFirst.has(`${n}:${cid}`)) stats.contentsFirst.set(`${n}:${cid}`, Date.now());
       const q = extraQuiz.get(cid);
       return [{ name: "Общее", modules: [{ id: cid * 100 + 50, name: "Методичка", modname: "resource", visible: 1, uservisible: true, url: `${FAKE}/mod/resource/view.php?id=${cid * 100 + 50}` },
+        { id: cid * 100 + 60, name: "Форум курса", modname: "forum", visible: 1, uservisible: true, url: `${FAKE}/mod/forum/view.php?id=${cid * 100 + 60}` },
         ...(extraMods.get(cid) || []).map((m) => ({ id: m.id, name: m.name, modname: "resource", visible: 1, uservisible: true, url: `${FAKE}/mod/resource/view.php?id=${m.id}` })),
         ...(q ? [{ id: q.coursemodule, name: q.name, modname: "quiz", visible: 1, uservisible: true, url: `${FAKE}/mod/quiz/view.php?id=${q.coursemodule}` }] : [])] }];
     }

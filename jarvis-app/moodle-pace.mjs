@@ -49,11 +49,25 @@ const WAIT_USER = num(process.env.MOODLE_QUEUE_WAIT_MS, 45e3), WAIT_BG = num(pro
  * плановый запрос, прождавший BG_AGE_MS, проходит через раз со срочными — ни те, ни другие не голодают (при длинном
  * хвосте давно ждут все плановые, и без чередования очередь снова стала бы «кто раньше»). Темп (GAP_BG) не меняется.
  */
-const URGENT = new Set(["quick", "quiz-open", "materials"]);
+// 18 окт 2026 (владелец: «тесты нужно точно оперативно»): срочные в два ряда — сначала тесты и сигнал по курсу
+// (news.probeSignal), потом материалы; плановые — после них.
+const BG_RANK = { "quiz-open": 0, quick: 0, signal: 0, materials: 1 };
+const URGENT = new Set(Object.keys(BG_RANK));
 const BG_AGE_MS = num(process.env.MOODLE_BG_AGE_MS, 30e3);
+/** Первый в очереди с самым срочным рядом (-1 — срочных нет). */
+function bestUrgent(q) {
+  let best = -1;
+  for (let k = 0; k < q.length; k++) {
+    const r = BG_RANK[q[k].turn.name];
+    if (r === undefined) continue;
+    if (best < 0 || r < BG_RANK[q[best].turn.name]) best = k;
+    if (r === 0) break;
+  }
+  return best;
+}
 /** Какой фоновый запрос пустить следующим (индекс в h.qBg); h.agedLast — прошлым пропущен давно ждущий плановый. */
 function nextBg(h, now) {
-  const q = h.qBg, i = q.findIndex((w) => URGENT.has(w.turn.name));
+  const q = h.qBg, i = bestUrgent(q);
   const aged = !URGENT.has(q[0].turn.name) && now - q[0].at >= BG_AGE_MS;
   const pick = i < 0 || (aged && !h.agedLast) ? 0 : i;
   h.agedLast = pick === 0 && aged;

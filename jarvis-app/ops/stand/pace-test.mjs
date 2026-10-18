@@ -44,6 +44,10 @@ const go = async (url, { ms = 10, status = 200, error = null, api = true, what =
   const at = (x) => order.indexOf(x);
   check("очередь фона: срочные идут раньше плановых, вставших в очередь до них", at("m1") < at("n2") && at("m3") < at("n2"), order.join(" "));
   check("очередь фона: плановый, ждущий дольше срока, проходит через раз со срочными (не голодает)", at("n2") < at("m6") && at("n3") < at("m6") && !order.slice(order.indexOf("n2")).join(" ").includes("n3 n4"), order.join(" "));
+  // Тесты (quick) — раньше материалов, вставших в очередь до них.
+  order.length = 0;
+  await Promise.all([run("materials", 3), run("quick", 2)]);
+  check("очередь фона: опрос тестов идёт раньше материалов", at("q1") < at("m2") && at("q2") < at("m2"), order.join(" "));
 }
 { // Отказ веб-сервиса: фон встаёт на паузу, человек проходит, владельцу одно сообщение.
   pace._reset(); alerts.length = 0;

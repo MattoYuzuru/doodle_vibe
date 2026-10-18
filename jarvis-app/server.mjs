@@ -115,14 +115,19 @@ const NOTIFY_EVERY = Number(process.env.NOTIFY_EVERY_MS) || 10 * 60 * 1000; // �
  */
 const MOODLE_HOST = new URL(users.BASE).hostname;
 const MIN = 60e3;
-const FULL_EVERY = Number(process.env.MOODLE_FULL_EVERY_MS) || 30 * MIN;
+// Сроки и оценки — раз в час (18 окт 2026, решение владельца; было раз в полчаса): срочное узнаём раньше по сигналу курса —
+// изменился тест или задание (news.workChangedSince), и сроки этого человека перечитываются на ближайшем обходе.
+const FULL_EVERY = Number(process.env.MOODLE_FULL_EVERY_MS) || 60 * MIN;
 // Опрос тестов — раз в 45 с (15 окт 2026, владелец: «задержка до 1 минуты»; МИСИС на число запросов с одного адреса не
 // реагирует). Отказы Moodle (403/429) по-прежнему ставят все фоновые обходы на паузу (moodle-pace).
 const QUICK_EVERY = Number(process.env.QUICK_EVERY_MS) || 45e3;
 // С 15 окт 2026 (решение владельца) тесты человека спрашиваются, только если в его курсах что-то менялось с прошлого
 // настоящего опроса (news.quietSince — по ответам проверки материалов), но не реже раза в QUICK_FULL_EVERY: тест только
 // для другой группы курса или ставший доступным по дате изменением модуля не виден.
-const QUICK_FULL_EVERY = Math.max(QUICK_EVERY, Number(process.env.QUICK_FULL_EVERY_MS) || 5 * MIN);
+// 18 окт 2026 (решение владельца): страховочный опрос — раз в 15 минут вместо 5. Тишину теперь стирает только изменение
+// работ (news.mjs WORK), а тест другой группы или скрытый тест — это модуль, невидимый человеку, он тишину тоже стирает;
+// время открытия известного теста ловят таймеры planOpen.
+const QUICK_FULL_EVERY = Math.max(QUICK_EVERY, Number(process.env.QUICK_FULL_EVERY_MS) || 15 * MIN);
 const NIGHT = /^(\d{1,2})-(\d{1,2})$/.exec(process.env.MOODLE_NIGHT ?? "0-7"); // часы по Москве; MOODLE_NIGHT=off — без ночного режима
 const isNight = () => {
   if (!NIGHT) return false;
@@ -160,11 +165,13 @@ const REREAD_MIN = Math.min(10 * MIN, FULL_EVERY);
 async function freshDeadlines(u) {
   const key = `full:${u.tgId}`, have = moodle.staleDeadlines(u.token);
   if (tokenBad(u) || pace.paused(MOODLE_HOST)) return { d: have, read: false };
-  // Срок чуть меньше получаса: обход идёт раз в 15 минут, и чтение приходится ровно на каждый второй обход (ночью — раз
-  // в два часа, у давно не открывавших приложение — раз в час). Пользователи и так идут по очереди, с паузами.
+  // Срок чуть меньше FULL_EVERY (часа): обход идёт раз в 10 минут, и чтение приходится на каждый шестой (ночью — раз в
+  // четыре часа, у давно не открывавших приложение — раз в два часа).
   const every = (isNight() ? 4 : inactive(u.tgId) ? 2 : 1) * FULL_EVERY * 0.9;
   const last = Math.max(moodle.deadlinesAt(u.token), pace.stampAt(key));
-  if (Date.now() - last < (have ? every : REREAD_MIN)) return { d: have, read: false };
+  // В курсе человека изменился тест или задание после прошлого чтения — читаем сейчас, не дожидаясь планового срока.
+  const signal = !!have?.courses?.length && news.workChangedSince(have.courses.map((c) => c.id), last);
+  if (!signal && Date.now() - last < (have ? every : REREAD_MIN)) return { d: have, read: false };
   let d;
   try { d = await moodle.deadlines(u.token, true); }
   catch (e) {
@@ -366,6 +373,34 @@ async function materialsTick() {
   finally { materialsBusy = false; }
 }
 setInterval(materialsTick, MATERIALS_TICK);
+/*
+ * Сигнал по курсу (18 окт 2026, news.probeSignal): раз в SIGNAL_EVERY каждый курс спрашивается один раз — токеном
+ * первого из его студентов, пакетом на все курсы этого студента. По ответам опрос тестов пропускает тихие курсы, а
+ * проверка материалов берёт общий ответ вместо своего запроса. Ночью и на паузе Moodle — не ходим, как и остальные.
+ */
+const SIGNAL_EVERY = Number(process.env.SIGNAL_EVERY_MS) || 30e3;
+let signalBusy = false;
+async function signalTick() {
+  if (signalBusy || isNight() || pace.paused(MOODLE_HOST)) return;
+  signalBusy = true;
+  try {
+    const by = new Map(), taken = new Set(); // пользователь → курсы, которые спрашивает он
+    for (const u of await users.allLoggedIn()) {
+      const d = !tokenBad(u) && moodle.staleDeadlines(u.token);
+      const mine = (d?.courses || []).map((c) => Number(c.id)).filter((id) => !taken.has(id));
+      if (!mine.length) continue;
+      mine.forEach((id) => taken.add(id));
+      by.set(u, mine);
+    }
+    for (const [u, ids] of by) {
+      try {
+        await pace.background("signal", () => news.probeSignal(u.token, ids)); // в журнал не пишем: изменения в курсах — каждые несколько минут
+      } catch (e) { noteTickError(u, "signal", e); if (e?.name === "PausedError") break; }
+    }
+  } catch (e) { console.log(`signal: обход прерван (${e?.message || e})`); }
+  finally { signalBusy = false; }
+}
+setInterval(signalTick, SIGNAL_EVERY);
 /**
  * Пропуски, посещаемость и оценки ниже порога из электронного журнала (attendance.mjs) — сообщением бота. d — дедлайны
  * этого обхода (курсы Moodle семестра, без нового чтения Moodle): по ним бот спрашивает о дисциплинах журнала без курса.
@@ -425,6 +460,9 @@ setInterval(notifyTick, NOTIFY_EVERY);
 // Быстрый опрос тестов (один вызов Moodle на пользователя): внезапный короткий тест → уведомление в течение минуты.
 // Только днём; у давно не открывавших приложение — втрое реже и со своим сдвигом. Таймер обхода — раз в 10 с, иначе
 // между отметкой «пора» и следующим обходом терялось бы до целого шага.
+// Начало последнего удачного настоящего опроса тестов человека (мс) — только в памяти: после перезапуска «тихих» курсов
+// в памяти нет, и первый опрос всё равно настоящий.
+const quickFullAt = new Map();
 async function quickTick() {
   if (quickBusy) return;
   quickBusy = true;
@@ -432,13 +470,21 @@ async function quickTick() {
     if (isNight() || pace.paused(MOODLE_HOST)) return;
     for (const u of await users.allLoggedIn()) {
       const key = `quick:${u.tgId}`;
-      if (tokenBad(u) || Date.now() - pace.stampAt(key) < (inactive(u.tgId) ? 3 * spread(u.tgId) : 1) * QUICK_EVERY) continue;
+      if (tokenBad(u)) continue;
+      // Сигнал по курсу нашёл изменение теста или задания после прошлого опроса этого человека — опрашиваем сразу, не
+      // дожидаясь его обычного шага (18 окт 2026: иначе к задержке сигнала добавлялось до 45 с).
+      const signalled = news.workChangedSince((moodle.staleDeadlines(u.token)?.courses || []).map((c) => c.id), pace.stampAt(key));
+      if (!signalled && Date.now() - pace.stampAt(key) < (inactive(u.tgId) ? 3 * spread(u.tgId) : 1) * QUICK_EVERY) continue;
       // Курсы не менялись с прошлого настоящего опроса — тестов там новых нет, Moodle не спрашиваем (отметка — без записи
       // на диск: после перезапуска «тихих» курсов в памяти нет, и первый опрос всё равно настоящий).
-      const full = `quickfull:${u.tgId}`, lastFull = pace.stampAt(full), d = moodle.staleDeadlines(u.token);
+      const lastFull = quickFullAt.get(u.tgId) || 0, d = moodle.staleDeadlines(u.token);
       if (lastFull && Date.now() - lastFull < QUICK_FULL_EVERY && d?.courses?.length && news.quietSince(d.courses.map((c) => c.id), Math.floor(lastFull / 1000) - 60)) { pace.stamp(key); continue; }
-      pace.stamp(full); pace.stamp(key, 0, true);
-      try { moodle.setOverrides(u.token, u.overrides, u.tgId); const q = await pace.background("quick", () => moodle.quizzesQuick(u.token)); await notify.checkNew(u.tgId, q.items, q.courses); await afterQuick(u, q); }
+      // Отметка «настоящий опрос был» (full) — только после удачного: опрос, не дождавшийся очереди, раньше считался
+      // сделанным, и при тихих курсах следующий шёл лишь через QUICK_FULL_EVERY (с 18 окт — 15 минут), а новый тест,
+      // найденный сигналом до этого опроса, ждал столько же (стенд 18 окт: 2 из 25 без «Нового теста»).
+      const pollAt = Date.now();
+      pace.stamp(key, 0, true);
+      try { moodle.setOverrides(u.token, u.overrides, u.tgId); const q = await pace.background("quick", () => moodle.quizzesQuick(u.token)); quickFullAt.set(u.tgId, pollAt); await notify.checkNew(u.tgId, q.items, q.courses); await afterQuick(u, q); }
       catch (e) { noteTickError(u, "quick", e); if (e?.name === "PausedError") break; }
       // Паузы 1,5–4,5 с между людьми здесь больше нет (15 окт 2026): очередь фона сама пропускает не больше двух запросов
       // в секунду, а пауза только удлиняла круг — при 50 людях до 3–4 минут вместо обещанных 45 с.
