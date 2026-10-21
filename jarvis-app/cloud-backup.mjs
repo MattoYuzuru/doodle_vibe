@@ -4,7 +4,7 @@
 // они бы пропали. Поэтому приложение при запуске и после изменений присылает копию сюда, а открывшись в новом боте
 // с пустым хранилищем — забирает её. Копия лежит в cloud\<tgId>.json, доступна только самому человеку (по подписи
 // Telegram) и попадает в ежедневную резервную копию.
-import { copyFile, mkdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJson, writeTextAtomic } from "./state-file.mjs";
@@ -33,6 +33,12 @@ export async function save(tgId, data) {
   // человека писали в один файл), rename — с повторами (state-file.mjs).
   await writeTextAtomic(file(tgId), body);
   return JSON.parse(body).at;
+}
+
+/** Отзыв согласия (21 окт 2026): копия данных приложения и страховочная копия удаляются. */
+export async function erase(tgId) {
+  const f = file(tgId);
+  for (const p of [f, f.replace(/\.json$/, ".prev.json"), `${f}.tmp`]) await rm(p, { force: true });
 }
 
 /**

@@ -274,6 +274,16 @@ async function tellSource(tgId, chatId, title, bound) {
 Ваши личные данные — оценки, замечания преподавателей, пропуски, баллы и долги, пересдачи, ваша работа над лабораторными в Doodle — не используются и в беседу не попадают. В беседе видно, что уведомления идут по вашим курсам.
 Выключить: кнопка ниже (в беседе — админ командой ${await cmdFor("/notify off")}).`, undefined, [[{ text: "Отключить мои курсы от беседы", callback_data: `chatoff:${chatId}` }]], { force: true });
 }
+/**
+ * Отзыв согласия (21 окт 2026): человек перестаёт быть источником курсов бесед (беседа получает то же сообщение, что при
+ * выходе) и больше не записан в них тем, кто привязал беседу (by) и источником (source).
+ */
+export async function eraseUser(tgId) {
+  tgId = Number(tgId);
+  const all = await load();
+  for (const id of Object.keys(all)) if (all[id]?.source === tgId) await disable(Number(id), "logout");
+  await update((all2) => { for (const c of Object.values(all2)) if (c && c.by === tgId) c.by = null; });
+}
 /** Нажатие «Отключить мои курсы от беседы» в личке (welcome.mjs): { text } для правки сообщения. */
 export async function sourceOff(tgId, chatId) {
   const all = await load();

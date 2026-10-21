@@ -32,7 +32,7 @@ const WORK = process.env.BACKUP_LABS_SRC || resolve(SRC, "..");
 const isLab = (name) => /^(?:\d+|check-\d+|users|agent-shared)$/.test(name) || name === "wsl-users.json";
 const SKIP_DIRS = new Set(["node_modules", "__pycache__", ".venv", "venv", ".pytest_cache"]);
 const MAX_FILE = Number(process.env.BACKUP_MAX_FILE) || 200 * 2 ** 20;
-const KEEP = Number(process.env.BACKUP_KEEP) || 14;
+const KEEP = Number(process.env.BACKUP_KEEP) || 7; // было 14; 21 окт 2026 сокращено: отозвавший согласие исчезает из копий за неделю
 const HOUR_FROM = 4; // копия делается после четырёх утра по Москве: в это время лабы идут реже всего
 
 const mskDay = (ms = Date.now()) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Moscow" }).format(new Date(ms));

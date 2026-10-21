@@ -202,7 +202,7 @@ let child = null;
 // deadlines-cache\ и отметки moodle-pace переживают перезапуск, как на живом ПК.
 async function startServer() {
   child = spawn(process.execPath, ["server.mjs"], { cwd: SIM, windowsHide: true, env: {
-    ...process.env, PORT: String(PORT), HOST: "127.0.0.1", USERPROFILE: HOME, HOME, APPDATA, LOCALAPPDATA: join(ROOT, "local"), PIN_ASSIGNS: "",
+    ...process.env, CONSENT_ENFORCE: "0", PORT: String(PORT), HOST: "127.0.0.1", USERPROFILE: HOME, HOME, APPDATA, LOCALAPPDATA: join(ROOT, "local"), PIN_ASSIGNS: "",
     GATEWAY_URL: FAKE + "/campus", CAL_TUNNEL: "0", BACKUP: "0", GUARD_WATCH: "0", BOT_UPDATES: "1", MOODLE_NIGHT: "off",
     MISIS_EDUOP_URL: FAKE + "/eduop/", MISIS_SESSION_URL: FAKE + "/session/", MISIS_SCHEDULE_INDEX: FAKE + "/schedule/",
     PYTHONUSERBASE: process.env.PYTHONUSERBASE || join(process.env.APPDATA || "", "Python"), ...(PACE ? {} : { MOODLE_PACE: "0" }),

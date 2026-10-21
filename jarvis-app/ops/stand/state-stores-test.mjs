@@ -30,7 +30,7 @@ symlinkSync(join(APP, "node_modules"), join(SIM, "node_modules"), "junction");
 const HOME = join(root, "home");
 mkdirSync(HOME, { recursive: true });
 // MOODLE_PACE_RELOAD_MS — непрочитанный при старте moodle-load.json перечитывается в фоне не раз в 15 с, а раз в 0,2 с.
-Object.assign(process.env, { USERPROFILE: HOME, HOME, APPDATA: join(root, "appdata"), LOCALAPPDATA: join(root, "local"), MOODLE_PACE: "0", MOODLE_PACE_DIR: join(SIM, "usage"), MOODLE_PACE_RELOAD_MS: "200",
+Object.assign(process.env, { CONSENT_ENFORCE: "0", USERPROFILE: HOME, HOME, APPDATA: join(root, "appdata"), LOCALAPPDATA: join(root, "local"), MOODLE_PACE: "0", MOODLE_PACE_DIR: join(SIM, "usage"), MOODLE_PACE_RELOAD_MS: "200",
   BOT_STATS_DIR: join(SIM, "usage"), USAGE_STORE_DIR: join(SIM, "usage-store"), USAGE_TRANSCRIPTS_DIR: join(root, "transcripts"), USAGE_CHAT_TRANSCRIPTS_DIR: join(root, "transcripts"),
   LESSONS_DIR: join(SIM, "lessons") });
 

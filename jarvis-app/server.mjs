@@ -35,8 +35,10 @@ import { isStateReadError, onCorrupt } from "./state-file.mjs";
 import * as welcome from "./welcome.mjs";
 import * as bots from "./bots.mjs";
 import * as chats from "./chats.mjs";
+import * as purge from "./purge-user.mjs";
 import * as botCommands from "./bot-commands.mjs";
 import * as terms from "./terms.mjs";
+import * as consent from "./consent.mjs";
 import * as cloudBackup from "./cloud-backup.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
@@ -64,7 +66,7 @@ onCorrupt((path, bad) => {
  * зашифрованный токен Moodle, куки журнала, ФИО; в lessons/ — замечания человека, отказавшегося делиться. Раньше их
  * никто не удалял: они переживали выход и каждый день уходили в резервную копию. Теперь копия старше 30 дней удаляется
  * (времени владельцу на ручную правку хватает) — при старте и раз в сутки, по времени файла, содержимое не читается.
- * Выход удаляет копии users/<id>.json.bad-* этого человека сразу (см. /api/logout). Папки — те, где state-file
+ * Выход удаляет копии users/<id>.json.bad-* этого человека сразу (purge-user.mjs). Папки — те, где state-file
  * читает файлы людей; lessons и usage — с теми же переменными окружения, что у их модулей (стенды).
  */
 const BAD_DIRS = ["users", "notify", "jobs", "checks", "cloud", process.env.LESSONS_DIR || "lessons", "course-styles", process.env.USAGE_STORE_DIR || "usage"].map((d) => resolve(DIR, d));
@@ -81,11 +83,6 @@ async function cleanBadCopies() {
   }
   if (n) console.log(`state-file: удалено отложенных испорченных копий старше 30 дней: ${n}`);
   return n;
-}
-/** Выход: копии users/<id>.json.bad-* этого человека (токен, куки журнала) не должны пережить его выход. */
-async function dropUserBadCopies(tgId) {
-  const dir = join(DIR, "users"), pre = `${Number(tgId)}.json.bad-`;
-  for (const f of await readdir(dir).catch(() => [])) if (f.startsWith(pre)) await unlink(join(dir, f)).catch(() => {});
 }
 void cleanBadCopies().catch(() => {});
 // Последняя страховка (17 окт 2026, ревью): забытый .catch у фонового промиса в Node 15+ завершает весь процесс — со
@@ -592,6 +589,12 @@ setInterval(() => { void botCommands.digestTick().then((n) => { if (n) console.l
 // Сессия: сводка за 14 и 3 дня до неё, напоминания накануне и в день экзамена (admission.mjs; о новом расписании
 // экзаменов admission узнаёт сам от session.mjs).
 setInterval(() => { void admission.tick().then((n) => { if (n) console.log(`сессия: отправлено ${n}`); }, (e) => console.log(`сессия: ${e.message || e}`)); }, Number(process.env.SESSION_TICK_MS) || 5 * MIN).unref();
+// Согласие на обработку персональных данных (consent.mjs, 21 окт 2026): вошедшим без согласия бот присылает запрос — через
+// полторы минуты после старта и раз в 6 часов (каждому не чаще раза в сутки и не больше трёх раз). Без согласия Doodle
+// ничего не читает — users.moodleToken() отдаёт null.
+const askConsent = () => consent.askPending().then((n) => { if (n) console.log(`согласие: запрос отправлен ${n}`); }, (e) => console.log(`согласие: ${e.message || e}`));
+setTimeout(() => void askConsent(), Number(process.env.CONSENT_ASK_FIRST_MS) || 90e3).unref();
+setInterval(() => void askConsent(), 6 * 60 * MIN).unref();
 // Сводка владельцу раз в неделю — в понедельник после 10:00 мск (то же по команде /stats): люди, активность, нагрузка.
 setInterval(async () => {
   try {
@@ -830,6 +833,9 @@ createServer(async (req, res) => {
         if (r) { req.resume(); return tooMany(r, `загрузки пользователя ${tgId}`); }
       }
 
+      // Согласие на обработку персональных данных (21 окт 2026, consent.mjs): пока его нет, приложение отвечает только
+      // профилем (в нём consent: false) и выходом. Вход тоже закрыт — форма показывает эту строку.
+      if (path !== "me" && path !== "logout" && !(await users.hasConsent(tgId))) return send(403, { code: "consent_required", error: "Нужно согласие на обработку персональных данных: откройте бота Doodle в Telegram и нажмите «Согласен(на)» (команда /consent)." });
       // Профиль и вход.
       if (path === "me") {
         try { const u = JSON.parse(new URLSearchParams(req.headers["x-telegram-init-data"] || "").get("user") || "null"); if (u && Number(u.id) === tgId) await users.touchTelegram(tgId, u); } catch { /* без имени */ }
@@ -951,14 +957,8 @@ ${who || "без имени"} · id ${tgId}
         }
       }
       if (path === "logout" && req.method === "POST") {
-        ej.forget(tgId);
-        // Токен — до выхода (выход его стирает): дедлайны с оценками и замечаниями не остаются ни в памяти, ни на диске.
-        // revoke (15 окт 2026): токен отзывается — обход, взявший список вошедших до выхода, копию с ним уже не запишет.
-        const t = await users.moodleToken(tgId).catch(() => null);
-        await moodle.forgetDeadlines(t, tgId, { revoke: true });
-        if (t) courseSheets.forget(t);
-        const r = await users.logout(tgId);
-        await dropUserBadCopies(tgId); // отложенные испорченные копии его файла (в них токен и куки журнала) — тоже
+        // Сеанс, кэш дедлайнов, ссылка и лента календаря, отложенные копии записи — purge-user.mjs (21 окт 2026).
+        const { profile: r } = await purge.onLogout(tgId);
         return send(200, r);
       }
 

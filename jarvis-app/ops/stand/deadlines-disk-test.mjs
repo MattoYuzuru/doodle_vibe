@@ -334,7 +334,7 @@ process.exit(0);
 function run(op, env = {}) {
   slowMs = 0; html = false; enrolOnce = 0; deadTok = new Set();
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ["scenario.mjs", op], { cwd: SIM, windowsHide: true, env: { ...process.env, MOODLE_PACE: "0", MOODLE_PACE_DIR: PACE, MOODLE_DISK_DIR: DISK,
+    const child = spawn(process.execPath, ["scenario.mjs", op], { cwd: SIM, windowsHide: true, env: { ...process.env, CONSENT_ENFORCE: "0", MOODLE_PACE: "0", MOODLE_PACE_DIR: PACE, MOODLE_DISK_DIR: DISK,
       USERPROFILE: join(root, "home"), HOME: join(root, "home"), PIN_ASSIGNS: "", MOODLE_DIRECT: "0", ...env } });
     let text = "";
     child.stdout.on("data", (d) => (text += d)); child.stderr.on("data", (d) => (text += d));
@@ -495,7 +495,7 @@ check("MOODLE_DISK=0: папки копий нет, restoreDisk ничего н�
   let srv = null, slog = "", allLog = ""; // slog — журнал последнего запуска, allLog — обоих
   const start = async () => {
     slog = "";
-    srv = spawn(process.execPath, ["server.mjs"], { cwd: SIM, windowsHide: true, env: { ...process.env, PORT: String(SPORT), HOST: "127.0.0.1", USERPROFILE: SHOME, HOME: SHOME, APPDATA: SAPPDATA,
+    srv = spawn(process.execPath, ["server.mjs"], { cwd: SIM, windowsHide: true, env: { ...process.env, CONSENT_ENFORCE: "0", PORT: String(SPORT), HOST: "127.0.0.1", USERPROFILE: SHOME, HOME: SHOME, APPDATA: SAPPDATA,
       LOCALAPPDATA: join(root, "srv-local"), PIN_ASSIGNS: "", GATEWAY_URL: FAKE + "/campus", CAL_TUNNEL: "0", BACKUP: "0", GUARD_WATCH: "0", BOT_UPDATES: "1", MOODLE_NIGHT: "off",
       MOODLE_PACE: "0", MOODLE_DIRECT: "0", MISIS_EDUOP_URL: FAKE + "/eduop/", MISIS_SESSION_URL: FAKE + "/session/", MISIS_SCHEDULE_INDEX: FAKE + "/schedule/",
       MOODLE_DISK_DIR: SDISK, MOODLE_STALE_AFTER_MS: "500" } });

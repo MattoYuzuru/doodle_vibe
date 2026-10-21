@@ -74,6 +74,15 @@ export function firstStart(tgId, ref = null) {
   save();
   return true;
 }
+/** Отзыв согласия (21 окт 2026): дата первого Start и приглашения (его и им) удаляются. Файл не прочитался — false, повторить позже. */
+export function forget(tgId) {
+  if (!reloadDisk()) return false;
+  const id = String(tgId);
+  delete data.started[id]; delete data.invitedBy[id];
+  for (const [k, by] of Object.entries(data.invitedBy)) if (by === Number(tgId)) delete data.invitedBy[k];
+  save();
+  return true;
+}
 /** Скольких человек пригласил этот пользователь. */
 export const invitedCount = (tgId) => Object.values(data.invitedBy).filter((by) => by === Number(tgId)).length;
 /** Сводка за последние days суток: суммы счётчиков, новые люди, пришедшие по приглашениям. */

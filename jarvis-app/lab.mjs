@@ -242,6 +242,7 @@ setInterval(async () => {
 
 const saving = new Map(); // ключ задания → очередь записи (ход агента и сообщение пользователя могут сохранять одновременно)
 async function save(job) {
+  if (job.erased) return job; // человек отозвал согласие (eraseUser): идущий ход агента файл не воскрешает
   job.updatedAt = Date.now();
   await mkdir(JOBS, { recursive: true });
   // Через временный файл (своё имя на каждую запись): при ENOSPC переписка и секрет отчёта не превращаются в пустой файл.
@@ -309,6 +310,7 @@ const LAB_SHORT_EXTRA = Math.max(0, Number(process.env.LAB_SHORT_EXTRA ?? 1) || 
 let activeTurns = 0, activeShort = 0;
 const perUser = new Map(); // tgId → сколько его ходов идёт сейчас
 const waiting = []; // { job, short, resume }
+const eraseLater = new Set(); // отозвали согласие, пока шёл ход агента: данные лаб удаляются, когда ходы кончатся (release)
 const laneFor = (w) => ((perUser.get(w.job.tgId) || 0) >= LAB_PER_USER ? null
   : activeTurns < LAB_PARALLEL ? "main" : w.short && activeShort < LAB_SHORT_EXTRA ? "short" : null);
 function occupy(w, lane) {
@@ -328,12 +330,40 @@ function release(slot) {
   if (slot.lane === "main") activeTurns--; else activeShort--;
   const left = (perUser.get(slot.tgId) || 1) - 1;
   if (left > 0) perUser.set(slot.tgId, left); else perUser.delete(slot.tgId);
+  if (!perUser.has(slot.tgId) && eraseLater.delete(slot.tgId)) void eraseUser(slot.tgId).catch((e) => console.error(`lab ${slot.tgId}: данные лаб не удалены — ${e.message || e}`));
   for (let i = 0; i < waiting.length;) {
     const lane = laneFor(waiting[i]);
     if (!lane) { i++; continue; }
     const [w] = waiting.splice(i, 1);
     w.resume(occupy(w, lane));
   }
+}
+
+/**
+ * Отзыв согласия (21 окт 2026): задания, проверки отчётов, рабочие папки (условие, файлы, отчёты, титульные листы с ФИО,
+ * переписка) и образцы оформления этого человека удаляются. Владельца не касается. Идёт ход агента — ждущие его ходы
+ * снимаются, а удаление повторится, когда ход закончится; уже идущий ход файлы не воскрешает (erased).
+ */
+export async function eraseUser(tgId) {
+  tgId = Number(tgId);
+  if (tgId === OWNER_ID) return;
+  for (let i = waiting.length - 1; i >= 0; i--) if (waiting[i].job.tgId === tgId) waiting.splice(i, 1);
+  for (const [k, j] of jobs) if (j.tgId === tgId) { j.erased = true; jobs.delete(k); }
+  for (const [k, c] of checks) if (c.key?.startsWith(`${tgId}-`)) { c.erased = true; checks.delete(k); }
+  const mine = new RegExp(`^${tgId}-\\d+\\.json(\\.|$)`);
+  for (const dir of [JOBS, CHECKS]) for (const f of await readdir(dir).catch(() => [])) if (mine.test(f)) await rm(join(dir, f), { force: true });
+  for (const f of [...(await readdir(STYLES).catch(() => []))].filter((n) => n.endsWith(".json"))) {
+    const path = join(STYLES, f);
+    try {
+      const data = await readJson(path, { missing: null });
+      if (!data || !Array.isArray(data.entries)) continue;
+      const keep = data.entries.filter((e) => e.tgId !== tgId && e.src !== srcOf(tgId));
+      if (keep.length === data.entries.length) continue;
+      if (keep.length) await writeJsonAtomic(path, { ...data, entries: keep }, { space: 1 }); else await rm(path, { force: true });
+    } catch (e) { console.error(`lab ${tgId}: образцы курса ${f} не очищены — ${e.message || e}`); throw e; }
+  }
+  await rm(join(WORK, "users", String(tgId)), { recursive: true, force: true });
+  if (perUser.has(tgId)) eraseLater.add(tgId); // ход ещё идёт и может дописать файлы — повторим, когда закончится
 }
 
 /**
@@ -2013,6 +2043,7 @@ const checks = new Map(); // ключ → состояние проверки
 const publicCheck = (c) => (c ? { id: c.id, title: c.title, course: c.course, status: c.status, stage: c.stage ?? null, at: c.at, doneAt: c.doneAt ?? null, file: c.file, result: c.result ?? null, error: c.error ?? null, n: c.n } : null);
 
 async function saveCheck(c) {
+  if (c.erased) return;
   await mkdir(CHECKS, { recursive: true });
   await writeJsonAtomic(checkPath(c.key), c, { space: 2 });
 }

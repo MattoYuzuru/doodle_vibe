@@ -19,6 +19,8 @@ import { fileURLToPath } from "node:url";
 import * as bots from "./bots.mjs";
 import * as chats from "./chats.mjs";
 import * as notify from "./notify.mjs";
+import * as users from "./users.mjs";
+import * as consent from "./consent.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const MEDIA = join(DIR, "assets", "welcome", "doodle-welcome.mp4"); // беззвучный ролик 640×360 (Telegram показывает его как гифку)
@@ -44,7 +46,7 @@ export const DESCRIPTION = `Doodle — учёба в МИСИС без лишн�
 
 Нажмите «Старт», откройте приложение кнопкой внизу и войдите с учётной записью Moodle МИСИС.
 
-Нажимая «Старт», вы соглашаетесь с условиями использования и политикой конфиденциальности: /terms и /privacy.`;
+Нажимая «Старт», вы принимаете условия использования и политику конфиденциальности (/terms, /privacy); на обработку персональных данных бот попросит отдельное согласие (/consent).`;
 export const SHORT_DESCRIPTION = "Дедлайны, расписание, журнал и напоминания МИСИС — в одном приложении. Ранний доступ.";
 const WELCOME = `👋 Привет! Это Doodle — учёба в МИСИС без лишних вкладок.
 
@@ -179,6 +181,21 @@ async function handle(u) {
       await notify.tg("answerCallbackQuery", { callback_query_id: cb.id, ...(toast ? { text: toast } : {}) });
       return;
     }
+    if (chat && cb.message?.chat?.type === "private" && /^(consent|revoke):/.test(data)) {
+      // Согласие на обработку персональных данных (consent.mjs): кнопка заменяет сообщение, а после «Согласен(на)» уходит приветствие.
+      const r = await consent.onCallback(cb.from?.id ?? chat, data).catch((e) => { console.log(`welcome: согласие: ${e.message || e}`); return null; });
+      if (r) {
+        await notify.tg("editMessageText", { chat_id: chat, message_id: cb.message.message_id, text: r.text });
+        await notify.tg("answerCallbackQuery", { callback_query_id: cb.id });
+        if (r.granted) { await sendWelcome(chat, { callbacks: true }); await notify.withState(chat, (state) => { (state.welcome ??= {}).start = Date.now(); }).catch(() => {}); }
+        return;
+      }
+    }
+    if (chat && cb.message?.chat?.type === "private" && !/^(tour:|how$)/.test(data) && !(await users.hasConsent(cb.from?.id ?? chat).catch(() => true))) {
+      // Без согласия кнопки настроек и ответов не работают: Doodle ничего не читает.
+      await notify.tg("answerCallbackQuery", { callback_query_id: cb.id, text: "Сначала нужно согласие: /consent", show_alert: true });
+      return;
+    }
     if (chat && cb.message?.chat?.type === "private") {
       const t = /^tour:(new|\d+)$/.exec(data);
       if (t) {
@@ -211,12 +228,17 @@ async function handle(u) {
     // Telegram сам шлёт «/start chat», приветствие повторно не шлём (16 окт 2026, владелец: «если уже нажал на старт —
     // ничего не отправляется»). Первый Start по этой ссылке — обычное приветствие.
     if (payload === "chat" && (!first || (await notify.peekState(m.chat.id).catch(() => ({}))).welcome?.start)) return;
-    await sendWelcome(m.chat.id, { callbacks: true });
+    // Согласие на обработку персональных данных (consent.mjs): нет его — вместо приветствия запрос, приветствие уйдёт после «Согласен(на)».
+    if (await users.hasConsent(m.chat.id).catch(() => true)) await sendWelcome(m.chat.id, { callbacks: true });
+    else await consent.ask(m.chat.id);
     await notify.withState(m.chat.id, (state) => { (state.welcome ??= {}).start = Date.now(); }).catch(() => {});
     return;
   }
+  if (/^\/consent(\s|@|$)/.test(text)) { await consent.show(m.chat.id); return; }
+  if (/^\/revoke(\s|@|$)/.test(text)) { await consent.askRevoke(m.chat.id); return; }
   // Быстрые команды (/today, /deadlines, /grades): ответ собирает сервер из уже загруженных данных (bot-commands.mjs).
   const cmd = /^\/([a-z_]+)(@\w+)?(\s|$)/i.exec(text)?.[1]?.toLowerCase();
+  if (cmd && !consent.OPEN_COMMANDS.has(cmd) && !(await users.hasConsent(m.chat.id).catch(() => true))) { await consent.ask(m.chat.id, { old: true }); return; }
   const reply = cmd && commands ? await commands(m.chat.id, cmd) : null;
   if (reply) { const app = await appUrl(); await notify.send(m.chat.id, reply.text, undefined, [...(reply.buttons || []), ...(app ? [[openButton(app)]] : [])], { force: true }); return; }
   if (/^\/help(\s|@|$)/.test(text)) { await notify.send(m.chat.id, HOW, undefined, [[{ text: "Что умеет Doodle", callback_data: "tour:new" }]], { force: true }); return; }

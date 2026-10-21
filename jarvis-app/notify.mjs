@@ -2,7 +2,7 @@
 // Каждые 15 минут server.mjs вызывает check(tgId, items, courses): новые работы (внезапные тесты), напоминания за сутки и за 3 часа по настройкам
 // пользователя, новые оценки из Moodle. Что уже отправлено — в notify/<tgId>.json, чтобы не дублировать.
 import { spawn } from "node:child_process";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -326,6 +326,16 @@ async function saveState(tgId, s) {
   await mkdir(STATE_DIR, { recursive: true });
   await writeJsonAtomic(stateFile(tgId), s, { space: 2 });
 }
+
+/**
+ * Отзыв согласия (21 окт 2026): состояние уведомлений (оценки, пропуски, расписание, замечания, настройки) удаляется
+ * целиком вместе с отложенными испорченными копиями. По общей очереди, чтобы идущая проверка не вернула файл.
+ */
+export const eraseState = (tgId) => withLock(tgId, async () => {
+  await rm(stateFile(tgId), { force: true });
+  const pre = `${tgId}.json.`;
+  for (const f of await readdir(STATE_DIR).catch(() => [])) if (f.startsWith(pre)) await rm(join(STATE_DIR, f), { force: true });
+});
 
 /**
  * Состояние уведомлений пользователя для других модулей (объявления и материалы — news.mjs, журнал — attendance.mjs):

@@ -279,7 +279,7 @@ const child = spawn(process.execPath, ["server.mjs"], { cwd: SIM, windowsHide: t
     MISIS_EDUOP_URL: FAKE + "/eduop/", MISIS_SESSION_URL: FAKE + "/session/", SESSION_REFRESH_MS: "2000", SESSION_TICK_MS: "2000",
     // Обращения к Moodle: без пауз между запросами и без ночного режима (иначе прогон зависел бы от часа), дедлайны
     // перечитываются на каждом обходе, опрос тестов раз в 10 с, «Обновить» — до 10 раз в минуту (как раньше).
-    BOT_UPDATES: "1", MOODLE_PACE: "0", MOODLE_NIGHT: "off", MOODLE_FULL_EVERY_MS: "1000", QUICK_EVERY_MS: "10000", QUICK_FULL_EVERY_MS: "10000", MOODLE_STALE_AFTER_MS: "20000", RATE_REFRESH_PER_MIN: "10", QUIZ_OPEN_RETRY_MS: "3000", PYTHONUSERBASE: join(process.env.APPDATA || "", "Python"), NEWS_EVERY_MS: "1000", MATERIALS_EVERY_MS: "1000", NOTIFY_EVERY_MS: "20000", CHATS_TICK_MS: "2000", CHATS_RELAY_MS: "2000", CHATS_QUIET: "off" } });
+    CONSENT_ENFORCE: "0", BOT_UPDATES: "1", MOODLE_PACE: "0", MOODLE_NIGHT: "off", MOODLE_FULL_EVERY_MS: "1000", QUICK_EVERY_MS: "10000", QUICK_FULL_EVERY_MS: "10000", MOODLE_STALE_AFTER_MS: "20000", RATE_REFRESH_PER_MIN: "10", QUIZ_OPEN_RETRY_MS: "3000", PYTHONUSERBASE: join(process.env.APPDATA || "", "Python"), NEWS_EVERY_MS: "1000", MATERIALS_EVERY_MS: "1000", NOTIFY_EVERY_MS: "20000", CHATS_TICK_MS: "2000", CHATS_RELAY_MS: "2000", CHATS_QUIET: "off" } });
 const startedAt = Date.now();
 child.stdout.on("data", (d) => appendFileSync(serverLog, d));
 child.stderr.on("data", (d) => appendFileSync(serverLog, d));

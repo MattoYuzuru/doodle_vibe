@@ -7,7 +7,7 @@
 // Поэтому лента отдаётся через постоянный адрес из calendar-base.txt (бесплатный домен ngrok; его держит cal-tunnel.mjs,
 // и снаружи через него открыт только путь /cal/). Нет такого файла — подписки нет, приложение предлагает разовый файл.
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as moodle from "./moodle.mjs";
@@ -156,6 +156,11 @@ export async function feed(tgId) {
 }
 /** Группа, подгруппа или список курсов изменились — ленту собрать заново при следующем запросе. */
 export const forget = (tgId) => { mem.delete(tgId); };
+/** Выход и отзыв согласия (21 окт 2026): лента с парами и сроками работ человека удаляется и из памяти, и с диска. */
+export async function erase(tgId) {
+  mem.delete(tgId);
+  for (const f of [file(tgId), `${file(tgId)}.tmp`]) await rm(f, { force: true });
+}
 
 /**
  * Ссылки для экрана «Календарь в телефоне». stable — есть ли постоянный адрес (тогда подписка обновляется сама);

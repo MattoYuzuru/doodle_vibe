@@ -408,6 +408,8 @@ export const LIST = [
   { command: "stop", description: "Выключить все сообщения" },
   { command: "terms", description: "Условия использования" },
   { command: "privacy", description: "Политика конфиденциальности" },
+  { command: "consent", description: "Согласие на обработку данных" },
+  { command: "revoke", description: "Отозвать согласие" },
 ];
 /**
  * Ответ на команду: { text, buttons? } или null, если такой команды нет. Сбой Moodle или расписания — понятная строка,

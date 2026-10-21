@@ -22,7 +22,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StateReadError, readJson, writeJsonAtomic } from "./state-file.mjs";
 import * as usage from "./usage.mjs";
-import { OWNER_ID, knownUserIds, labsAllowed, moodleUserIdOf } from "./users.mjs";
+import { OWNER_ID, knownUserIds, labsAllowed, moodleUserIdOf, pseudonym } from "./users.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 // Пути — переменными только для тестов (копия сервера во временной папке).
@@ -134,6 +134,7 @@ export async function stateOf(tgId) {
   const l = await load();
   const t = l.trials[tgId];
   const mu = await moodleUserIdOf(tgId);
+  const hT = await pseudonym(tgId), hM = mu ? await pseudonym(mu) : null; // записи отозвавших согласие лежат под обезличенными ключами (forgetUser)
   if (t) {
     if (t.closedAt) return { via: null, trial: t, reason: "labs_not_allowed" };
     // Пробный привязан и к учётке Moodle: под другой (одногруппника) вести его нельзя — attach и submit ушли бы в чужой Moodle.
@@ -141,7 +142,7 @@ export async function stateOf(tgId) {
     return { via: "trial", trial: t };
   }
   if (!mu) return { via: null, reason: "labs_not_allowed" }; // не вошёл в Moodle — предлагать нечего (и сверить учётку не с чем)
-  if (l.used.tg[tgId] || l.used.mu[mu] || Object.values(l.trials).some((x) => x.mu === mu)) return { via: null, reason: "labs_not_allowed" };
+  if (l.used.tg[tgId] || l.used.tg[hT] || l.used.mu[mu] || l.used.mu[hM] || l.trials[hT] || Object.values(l.trials).some((x) => x.mu === mu || x.mu === hM)) return { via: null, reason: "labs_not_allowed" };
   if (!(await config()).enabled) return { via: null, reason: "labs_not_allowed" };
   if (await historyOf(tgId)) return { via: null, reason: "labs_not_allowed" };
   return { via: null, offer: true };
@@ -166,7 +167,8 @@ export async function claim(tgId, id, { title = "" } = {}) {
   let record = null;
   await change(async (l) => {
     const mu = await moodleUserIdOf(tgId);
-    const ok = cfg.enabled && mu && !l.trials[tgId] && !l.used.tg[tgId] && !l.used.mu[mu] && !Object.values(l.trials).some((x) => x.mu === mu) && !(await historyOf(tgId));
+    const hT = await pseudonym(tgId), hM = mu ? await pseudonym(mu) : null;
+    const ok = cfg.enabled && mu && !l.trials[tgId] && !l.trials[hT] && !l.used.tg[tgId] && !l.used.tg[hT] && !l.used.mu[mu] && !l.used.mu[hM] && !Object.values(l.trials).some((x) => x.mu === mu || x.mu === hM) && !(await historyOf(tgId));
     if (!ok) throw Object.assign(new Error("trial_used"), { status: 403 });
     record = l.trials[tgId] = { id: String(id), at: Date.now(), mu, title: String(title || "").slice(0, 200), model: cfg.model };
   });
@@ -183,6 +185,29 @@ export async function markFull(tgId) {
   await change((n) => {
     if (n.used.tg[tgId] && (!mu || n.used.mu[mu])) return false; // пока ждали очереди, отметку уже поставили — не переписывать файл
     n.used.tg[tgId] ??= "full"; if (mu) n.used.mu[mu] ??= String(tgId);
+  });
+}
+
+/**
+ * Отзыв согласия (21 окт 2026): Telegram id и номер учётки Moodle в учёте заменяются обезличенными ключами (HMAC ключом
+ * users.key), название работы стирается. Сам учёт остаётся: иначе отозвавший, вернувшись, получил бы пробный отчёт ещё раз
+ * (его задания, по которым это видно, удаляются вместе с остальным). Вызывать ДО удаления заданий и записи пользователя.
+ */
+export async function forgetUser(tgId) {
+  tgId = Number(tgId);
+  if (tgId === OWNER_ID) return;
+  const used = (await historyOf(tgId)) || (await labsAllowed(tgId));
+  const mu = await moodleUserIdOf(tgId);
+  const hT = await pseudonym(tgId), hM = mu ? await pseudonym(mu) : null;
+  await change((l) => {
+    const t = l.trials[tgId];
+    const reason = l.used.tg[tgId] ?? (t ? "trial" : used ? "history" : null);
+    const muUsed = mu && (l.used.mu[mu] !== undefined || reason || t);
+    if (!reason && !t && !muUsed) return false;
+    if (reason) l.used.tg[hT] = reason;
+    delete l.used.tg[tgId];
+    if (t) { l.trials[hT] = { ...t, title: "", mu: hM }; delete l.trials[tgId]; }
+    if (muUsed) { l.used.mu[hM] = "erased"; delete l.used.mu[mu]; }
   });
 }
 

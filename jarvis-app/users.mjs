@@ -5,7 +5,7 @@
 // Владелец (OWNER_ID) до первого входа пользуется старым токеном из ~/.openclaw/moodle-token.txt — но только пока не нажал
 // «Выйти из Moodle» (флаг loggedOut): после выхода старый токен не подставляется, и приложение показывает форму входа.
 import { execFile } from "node:child_process";
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { Agent, fetch as undiciFetch } from "undici";
 import * as pace from "./moodle-pace.mjs";
+import { CONSENT_V } from "./terms.mjs";
 import { StateReadError, isStateReadError, readJson, readText as readStateText, writeJsonAtomic, writeTextAtomic } from "./state-file.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
@@ -304,9 +305,57 @@ async function save(u) {
   return u;
 }
 
-/** Токен Moodle пользователя (расшифрованный) или null. Владелец без учётки — из файла OpenClaw, пока не выходил (loggedOut). */
+/*
+ * Согласие на обработку персональных данных (21 окт 2026, письмо системного администратора МИСИС). Отдельный документ
+ * (terms.mjs CONSENT), подтверждается кнопкой в боте (consent.mjs); хранится запись { v: редакция, at: когда }. Пока
+ * согласия нет (или оно дано на прежнюю редакцию), moodleToken() отдаёт null — а через него идут ВСЕ чтения Moodle и
+ * журнала: приложение, команды бота, фоновые обходы, календарь, беседы. Владелец (автор сервиса) — оператор, а не
+ * пользователь: его согласие считается данным. CONSENT_ENFORCE=0 выключает запрет (откат, если что-то пошло не так).
+ */
+const CONSENT_ENFORCE = process.env.CONSENT_ENFORCE !== "0";
+export async function hasConsent(tgId) {
+  tgId = Number(tgId);
+  if (!CONSENT_ENFORCE || tgId === OWNER_ID) return true;
+  return (await load(tgId))?.consent?.v === CONSENT_V;
+}
+/** Согласие дано: записываются редакция и время; счётчик напоминаний сбрасывается. */
+export async function giveConsent(tgId) {
+  const u = await ensure(Number(tgId));
+  u.consent = { v: CONSENT_V, at: Date.now() };
+  delete u.consentAsk; delete u.consentRevokedAt;
+  await save(u);
+  return u.consent;
+}
+/** Отзыв согласия: запись стирается, а вход — как «Выйти»: токен, сеанс и пароль журнала удаляются с сервера. */
+export async function revokeConsent(tgId) {
+  const u = await ensure(Number(tgId));
+  delete u.consent; delete u.consentAsk;
+  u.consentRevokedAt = Date.now();
+  await save(u);
+  return logout(Number(tgId));
+}
+export async function consentInfo(tgId) { const c = (await load(Number(tgId)))?.consent; return c ? { v: c.v, at: c.at, current: c.v === CONSENT_V } : null; }
+/** Вошедшие без действующего согласия: им бот присылает запрос. ask — прежние запросы { at, n } (не чаще раза в сутки, не больше трёх). */
+export async function consentPending() {
+  if (!CONSENT_ENFORCE) return [];
+  const out = [];
+  for (const id of await userIds()) {
+    if (id === OWNER_ID) continue;
+    try { const u = await load(id); if (u?.token && u.consent?.v !== CONSENT_V) out.push({ tgId: id, ask: u.consentAsk || null }); }
+    catch (e) { skipped(id, e); }
+  }
+  return out;
+}
+export async function noteConsentAsk(tgId) {
+  const u = await ensure(Number(tgId));
+  u.consentAsk = { at: Date.now(), n: (u.consentAsk?.n || 0) + 1 };
+  await save(u);
+}
+
+/** Токен Moodle пользователя (расшифрованный) или null. Владелец без учётки — из файла OpenClaw, пока не выходил (loggedOut). Без согласия — null. */
 export async function moodleToken(tgId) {
   const u = await load(tgId);
+  if (!(await hasConsent(tgId))) return null;
   if (u?.token) return decrypt(u.token);
   if (tgId === OWNER_ID && !u?.loggedOut) return (await readText(join(homedir(), ".openclaw", "moodle-token.txt"))) || null; // занят — ошибка, а не «не вошёл»
   return null;
@@ -324,8 +373,9 @@ export async function profile(tgId) {
       if (info.userid) { await save(Object.assign(await ensure(tgId), { moodleUserId: info.userid, fullName: info.fullname, username: info.username })); return profile(tgId); }
     } catch { /* Moodle недоступен — покажем без имени */ }
   }
+  const consented = await hasConsent(tgId);
   return {
-    tgId, loggedIn: hasToken,
+    tgId, loggedIn: hasToken && consented, consent: consented,
     moodle: u?.fullName ? { userId: u.moodleUserId, fullName: u.fullName, username: u.username } : (hasToken ? { fullName: "вход выполнен" } : null),
     group: u?.group ?? null, groupCandidates: u?.groupCandidates ?? [], subgroup: u?.subgroup ?? "1", variant: u?.variant ?? null,
     labsAllowed: await labsAllowed(tgId),
@@ -648,6 +698,26 @@ export async function logout(tgId) {
   return profile(tgId);
 }
 
+/**
+ * Отзыв согласия (21 окт 2026): из записи уходит всё, что относится к человеку, — ФИО, логин, имя и @username в Telegram,
+ * группа, выбор дисциплин, настройки, терминал, номер учётки Moodle. Остаётся пустая запись: номер Telegram, время
+ * создания, отметка об отзыве и «вышел». Из белого списка лаб он тоже убирается. Вызывать после logout (purge-user.mjs).
+ */
+export async function eraseProfile(tgId) {
+  tgId = Number(tgId);
+  const u = await ensure(tgId);
+  if (u.cal?.token) calIndex.delete(u.cal.token);
+  const keep = { tgId, createdAt: u.createdAt, consentRevokedAt: u.consentRevokedAt || Date.now(), loggedOut: true };
+  for (const k of Object.keys(u)) delete u[k];
+  Object.assign(u, keep);
+  await save(u);
+  if ((await labsAllowed(tgId).catch(() => false))) await setLabAccess(tgId, false);
+}
+/** Обезличенный ключ для учёта, который нельзя стирать (пробный отчёт): HMAC от значения ключом users.key. */
+export async function pseudonym(value) {
+  return "h:" + createHmac("sha256", await getKey()).update(String(value)).digest("hex").slice(0, 32);
+}
+
 /** Группа для расписания (подтверждённая пользователем или найденная сама), подгруппа и вариант для титульного листа. */
 /*
  * Терминал для снимков в отчётах (правило владельца, 5 окт 2026): берётся из методички, а если она молчит — агент
@@ -739,6 +809,14 @@ export async function calToken(tgId, { reset = false } = {}) {
   }
   calIndex.set(u.cal.token, tgId);
   return u.cal.token;
+}
+/** «Выйти» (21 окт 2026): секретная ссылка календаря стирается, старая перестаёт работать; при входе выдаётся новая. */
+export async function dropCalToken(tgId) {
+  const u = await load(Number(tgId));
+  if (!u?.cal) return;
+  if (u.cal.token) calIndex.delete(u.cal.token);
+  delete u.cal;
+  await save(u);
 }
 /**
  * Чей это календарь: Telegram id по секрету из ссылки, или null. Если секрет не нашёлся, а чей-то файл не прочитался,

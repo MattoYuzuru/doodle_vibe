@@ -18,7 +18,7 @@ const APP = new URL("../../", import.meta.url).pathname.replace(/^\/([A-Z]:)/i, 
 const PORT = 9933, FAKE = `http://127.0.0.1:${PORT}`;
 const TMP = mkdtempSync(join(tmpdir(), "ej-cred-test-"));
 const patch = { "https://ej.misis.ru": `${FAKE}/ej`, "https://newlms.misis.ru": `${FAKE}/moodle` };
-for (const f of ["ej.mjs", "users.mjs", "moodle-pace.mjs", "state-file.mjs"]) {
+for (const f of ["ej.mjs", "users.mjs", "moodle-pace.mjs", "state-file.mjs", "terms.mjs"]) {
   let src = readFileSync(join(APP, f), "utf8");
   for (const [a, b] of Object.entries(patch)) src = src.split(a).join(b);
   // Вход в журнал хранится только для *.misis.ru — поддельный журнал на 127.0.0.1, его cookies тоже оставляем (как ui-sim).
