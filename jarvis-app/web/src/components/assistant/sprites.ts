@@ -9,7 +9,14 @@ import type { CharacterId } from "../../theme/assistant-state";
 
 export type Eyes = "open" | "up" | "closed" | "half" | "happy" | "wide" | "stern";
 export const EYES: readonly Eyes[] = ["open", "up", "closed", "half", "happy", "wide", "stern"];
-export type SpriteOptions = { dark: boolean; nightcap: boolean; /** Уникальный id фильтра обводки Вари на странице. */ ringId?: string };
+export type SpriteOptions = {
+  dark: boolean;
+  nightcap: boolean;
+  /** Бег на месте (загрузка): вместо ног два кадра owl-run-a / owl-run-b, их меняет CSS. */
+  running?: boolean;
+  /** Уникальный id фильтра обводки Вари на странице. */
+  ringId?: string;
+};
 export type Sprite = { character: CharacterId; viewBox: string; svg: string; props: readonly string[] };
 
 // ---------- Дуся (сетка 24×24) ----------
@@ -32,7 +39,7 @@ function layer() {
 const B = "#2f7bf6", BD = "#1f66e0", L = "#6aa2ff", S = "#a9cbff", W = "#ffffff", K = "#0a1a4a", BEAK = "#ffc23d", BEAK2 = "#e09a12";
 const g = (attrs: string, inner: string) => `<g ${attrs}>${inner}</g>`;
 
-function dusyaSvg(dark: boolean, nightcap: boolean) {
+function dusyaSvg(dark: boolean, nightcap: boolean, running = false) {
   const ink = dark ? W : K, cap = dark ? W : K, tas = dark ? S : BD, feet = dark ? W : K;
   const disc = (l: ReturnType<typeof layer>, x: number, y = 11, h = 4) => l.rect(x, y, 4, h, W);
   const eyes: Record<Eyes, () => ReturnType<typeof layer>> = {
@@ -65,7 +72,10 @@ function dusyaSvg(dark: boolean, nightcap: boolean) {
       layer().ell(12, 15, 7.5, 7, B).svg() +
       layer().ell(12, 19, 4, 2.8, L).pts([[10, 18], [12, 19], [14, 18]], S).svg() +
       layer().rect(11, 15, 2, 1, BEAK).set(11, 16, BEAK).set(12, 16, BEAK2).svg() +
-      layer().rect(9, 22, 2, 1, feet).rect(13, 22, 2, 1, feet).svg() +
+      (running
+        ? g('class="owl-run-a"', layer().rect(8, 21, 2, 1, feet).rect(14, 22, 2, 1, feet).svg()) +
+          g('class="owl-run-b"', layer().rect(8, 22, 2, 1, feet).rect(15, 21, 2, 1, feet).svg())
+        : layer().rect(9, 22, 2, 1, feet).rect(13, 22, 2, 1, feet).svg()) +
       (Object.keys(eyes) as Eyes[]).map((k) => g(`data-eye="${k}"`, eyes[k]().svg())).join("") +
       hat.svg()
     ) + Object.entries(props).map(([k, l]) => g(`data-prop="${k}"`, l.svg())).join("")
@@ -110,7 +120,7 @@ const inBeakL: Pred = (x, y) => y === 18 && x >= 8 && x <= 13;
 const inWingR = OR(R(26, 16, 3, 5), R(29, 18, 1, 2));
 const inWingL = OR(R(5, 18, 3, 4), R(4, 19, 1, 2));
 
-function varyaSvg(nightcap: boolean, ringId: string) {
+function varyaSvg(nightcap: boolean, ringId: string, running = false) {
   const { B, BD, L, S, W, K, Y, YD, YL, P } = V;
   const wingL = vlayer().fill(inWingL, BD).outline(inWingL, K, inBody);
   const wingR = vlayer().fill(inWingR, BD).outline(inWingR, K, inBody);
@@ -122,6 +132,10 @@ function varyaSvg(nightcap: boolean, ringId: string) {
   const mouth = vlayer().rect(7, 18, 7, 1, K);
   const beakL = vlayer().fill(inBeakL, YD).outline(inBeakL, K, (x, y) => inBeakU(x, y) || y < 18 || (inBody(x, y) && x > 14));
   const legs = vlayer().pts([[14, 26], [14, 27], [13, 28], [12, 29], [13, 29], [14, 29]], K).pts([[19, 26], [19, 27], [20, 28], [19, 29], [20, 29], [21, 29]], K);
+  // Бег: ноги по очереди выбрасываются вперёд (влево, куда смотрит клюв) и назад.
+  const runA = vlayer().pts([[14, 26], [13, 27], [12, 28], [11, 28], [10, 28]], K).pts([[19, 26], [20, 27], [21, 28], [22, 29], [23, 29]], K);
+  const runB = vlayer().pts([[14, 26], [15, 27], [16, 28], [17, 29], [18, 29]], K).pts([[19, 26], [18, 27], [17, 28], [16, 28], [15, 28]], K);
+  const legsSvg = running ? g('class="owl-run-a"', runA.svg()) + g('class="owl-run-b"', runB.svg()) : legs.svg();
   // Ночью — колпак парит над головой, рядом сама по себе висит кружка кофе.
   const night = nightcap
     ? vlayer().rect(13, 3, 8, 1, W).rect(14, 2, 7, 1, S).rect(16, 1, 6, 1, S).set(17, 2, W).set(19, 1, W).rect(19, 0, 4, 1, S).set(22, 1, S).rect(23, 1, 2, 2, W)
@@ -176,7 +190,7 @@ function varyaSvg(nightcap: boolean, ringId: string) {
       (nightcap ? "" : g('class="owl-tufts"', tuft.svg())) + body.svg() +
       EYES.map((k) => g(`data-eye="${k}"`, eyes[k]().svg())).join("") +
       blush.svg() + mouth.svg() + g('class="varya-beak-l"', beakL.svg()) + beakU.svg() + night.svg()
-    ) + legs.svg() + Object.entries(props).map(([k, s]) => g(`data-prop="${k}"`, s)).join(""));
+    ) + legsSvg + Object.entries(props).map(([k, s]) => g(`data-prop="${k}"`, s)).join(""));
   return { svg, props: Object.keys(props) };
 }
 
@@ -185,8 +199,8 @@ const DUSYA_PROPS = ["excl", "sweat", "zzz", "idea", "q", "spark", "clock", "fea
 /** Спрайт персонажа; неизвестный id — базовая Дуся. */
 export function spriteFor(character: string, opts: SpriteOptions): Sprite {
   if (character === "varya") {
-    const v = varyaSvg(opts.nightcap, opts.ringId ?? "varya-ring");
+    const v = varyaSvg(opts.nightcap, opts.ringId ?? "varya-ring", !!opts.running);
     return { character: "varya", viewBox: "-4 -8 40 40", svg: v.svg, props: v.props };
   }
-  return { character: "dusya", viewBox: "0 0 24 24", svg: dusyaSvg(opts.dark, opts.nightcap), props: DUSYA_PROPS };
+  return { character: "dusya", viewBox: "0 0 24 24", svg: dusyaSvg(opts.dark, opts.nightcap, !!opts.running), props: DUSYA_PROPS };
 }

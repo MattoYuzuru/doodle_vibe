@@ -53,6 +53,9 @@ platform fixtures для пространств, discovery, auth, jobs и retrie
 Они проверяются в `backend/test`; frontend cutover и live интеграции остаются
 отдельными критериями приёмки.
 
+Браузерный набор дополнительно открывает каталог маскотов на dev-сервере Vite (порт `14174`,
+меняется через `E2E_CATALOG_PORT`) и проверяет огонь, бейджи, однократную реакцию и reduced motion.
+
 Web unit-тесты лежат в `jarvis-app/web/tests/*.test.mjs` и запускаются через
 `node --test` с загрузчиком `scripts/web-ts-hooks.mjs` (Node сам убирает типы;
 допустим только стираемый синтаксис TypeScript). В CI они идут в задаче
