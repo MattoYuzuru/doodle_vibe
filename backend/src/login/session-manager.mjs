@@ -38,7 +38,7 @@ export const DEFAULT_LIMITS = Object.freeze({
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'expired']);
 const sha = value => createHash('sha256').update(value).digest('hex');
 
-export function createLoginSessionManager({ store, factory = createBrowserFactory(), limits = {}, now = Date.now, presetFor = loginPresetFor } = {}) {
+export function createLoginSessionManager({ store, factory = createBrowserFactory(), limits = {}, now = Date.now, presetFor = loginPresetFor, learn } = {}) {
   const limit = { ...DEFAULT_LIMITS, ...limits };
   const sessions = new Map(); const byUser = new Map(); const starts = new Map(); const failures = new Map(); const tickets = new Map();
   const iso = ms => new Date(ms).toISOString();
@@ -102,10 +102,16 @@ export function createLoginSessionManager({ store, factory = createBrowserFactor
     try {
       const session = await captureSession(s.handle, { preset: s.preset, origin: s.origin, now, keepCalendar: s.keepCalendar });
       if (!session.cookies.length && !session.bearer) throw new AppError('LOGIN_EMPTY_SESSION', 409);
-      store.replaceSession(s.userId, s.connectionId, session, { clearData: false });
+      // A different account behind the same connection must not inherit the former account's data.
+      let previous; try { previous = store.readSecret(s.userId, s.connectionId)?.session?.identityDigest; } catch { previous = undefined; }
+      const sameAccount = !previous || !session.identityDigest || previous === session.identityDigest;
+      store.replaceSession(s.userId, s.connectionId, session, { clearData: !sameAccount });
       store.enqueueJob(s.userId, s.connectionId, { type: 'sync' });
       failures.delete(s.connectionId);
+      const observations = s.handle.observations();
       await end(s, 'succeeded');
+      // Best effort and in memory: the observations are handed over and dropped, never persisted by the manager.
+      if (learn && observations.length) void Promise.resolve().then(() => learn({ userId: s.userId, connectionId: s.connectionId, observations })).catch(() => {});
     } catch (error) {
       if (error instanceof AppError && error.status === 404) await end(s, 'cancelled'); else await fail(s, 'source_login_unrecognized');
     }

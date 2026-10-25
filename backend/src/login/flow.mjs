@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { DEFAULT_LOGIN_PATHS } from './presets.mjs';
 
 // Page classification and the declarative password/MFA steps. Page text is only tested
@@ -9,16 +10,37 @@ const visible = async (page, selector) => { try { return await page.locator(sele
 
 export const onLoginPath = pathname => DEFAULT_LOGIN_PATHS.some(path => pathname === path || pathname.startsWith(`${path}/`) || pathname.startsWith(`${path}.`));
 
-export async function isSuccess(handle, preset, origin) {
-  let url; try { url = new URL(handle.page.url()); } catch { return false; }
-  if (url.origin !== origin || onLoginPath(url.pathname)) return false;
-  const { cookieNames, pathPrefixes, requireBearer } = preset.success ?? {};
-  if (pathPrefixes && !pathPrefixes.some(prefix => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))) return false;
-  if (requireBearer && !handle.observed.bearer) return false;
-  const cookies = await handle.cookies();
-  if (cookieNames) return cookies.some(cookie => cookieNames.includes(cookie.name)) || Boolean(requireBearer && handle.observed.bearer);
-  return cookies.length > 0 || Boolean(handle.observed.bearer);
+// Same-origin read-only probes run inside the page, so they use the browser's own session.
+async function runProbe(handle, preset) {
+  const { pageProbe, probe } = preset.success ?? {};
+  const page = handle.page;
+  if (pageProbe === 'moodleUserId') {
+    const id = await page.evaluate(() => { const value = window.M?.cfg?.userId; return value ? String(value) : null; }).catch(() => null);
+    return { ok: Boolean(id && id !== '0'), id };
+  }
+  if (!probe) return { ok: true };
+  const result = await page.evaluate(async path => {
+    try { const response = await fetch(path, { credentials: 'include' }); return { status: response.status, json: await response.json().catch(() => null) }; } catch { return { status: 0, json: null }; }
+  }, probe.path).catch(() => ({ status: 0, json: null }));
+  const json = result.json && typeof result.json === 'object' ? result.json : null;
+  const ok = result.status === (probe.expectStatus ?? 200) && (!probe.jsonHas || probe.jsonHas.every(key => json && key in json));
+  const id = ['sub', 'id', 'userId'].map(key => json?.[key]).find(value => typeof value === 'string' || typeof value === 'number');
+  return { ok, id: id === undefined ? null : String(id) };
 }
+
+export async function successDetails(handle, preset, origin) {
+  let url; try { url = new URL(handle.page.url()); } catch { return { ok: false }; }
+  if (url.origin !== origin || onLoginPath(url.pathname)) return { ok: false };
+  const { cookieNames, pathPrefixes, requireBearer } = preset.success ?? {};
+  if (pathPrefixes && !pathPrefixes.some(prefix => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))) return { ok: false };
+  if (requireBearer && !handle.observed.bearer) return { ok: false };
+  const cookies = await handle.cookies();
+  const hasCredential = cookieNames ? cookies.some(cookie => cookieNames.includes(cookie.name)) || Boolean(requireBearer && handle.observed.bearer)
+    : cookies.length > 0 || Boolean(handle.observed.bearer);
+  if (!hasCredential) return { ok: false };
+  return runProbe(handle, preset);
+}
+export const isSuccess = async (handle, preset, origin) => (await successDetails(handle, preset, origin)).ok;
 
 export async function pageState(handle, preset, origin, { attempted = false } = {}) {
   const page = handle.page;
@@ -112,6 +134,9 @@ async function captureCalendar(handle, origin, preset) {
 
 // Builds the StoredSession of docs/architecture/auth-sessions-contract.md section 4.
 export async function captureSession(handle, { preset, origin, now = Date.now, keepCalendar = false }) {
+  // Let the signed-in page finish its first requests: bearer headers and API responses appear only then.
+  await handle.page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+  const identity = (await successDetails(handle, preset, origin)).id;
   const capturedAt = now();
   const cookies = await handle.cookies();
   let bearer;
@@ -126,6 +151,7 @@ export async function captureSession(handle, { preset, origin, now = Date.now, k
   for (const cookie of cookies) if (cookie.expires && (named ? named.includes(cookie.name) : cookie.httpOnly)) bounds.push(cookie.expires * 1000);
   if (bearer?.expiresAt) bounds.push(Date.parse(bearer.expiresAt));
   const calendarUrl = keepCalendar && preset.calendarExport ? await captureCalendar(handle, origin, preset) : undefined;
-  return { version: 2, capturedAt: new Date(capturedAt).toISOString(), expiresAt: new Date(Math.max(Math.min(...bounds), capturedAt + 60_000)).toISOString(), cookies,
+  const identityDigest = identity ? createHash('sha256').update(`${origin}|${identity}`).digest('hex').slice(0, 32) : undefined;
+  return { version: 2, capturedAt: new Date(capturedAt).toISOString(), ...(identityDigest ? { identityDigest } : {}), expiresAt: new Date(Math.max(Math.min(...bounds), capturedAt + 60_000)).toISOString(), cookies,
     ...(bearer ? { bearer } : {}), ...(calendarUrl ? { calendarUrl } : {}) };
 }

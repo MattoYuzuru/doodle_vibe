@@ -27,7 +27,8 @@ async function main() {
     const service=createSourceService({store:guardedStore,proposeRecipe:model?.proposeRecipe,proposeLearnedRecipe:model?.proposeLearnedRecipe,agentModel:model});
     return {...service,sync:async args=>{ await oauth?.refresh(args.userId,args.connectionId,{storage:guardedStore}); return service.sync(args); }};
   };
-  const login=createLoginSessionManager({store,config});
+  const learn=args=>createSourceService({store,proposeLearnedRecipe:model?.proposeLearnedRecipe}).learn(args);
+  const login=createLoginSessionManager({store,config,learn});
   const loginRoutes=createLoginRoutes({store,login,config});
   const server=createApp({store,config,createSources,model,oauth,login,loginRoutes,devAuth:createDevAuth(),onLog:log,retrieveWeb:createWebRetriever({store}),
     staticDir:resolve(dirname(fileURLToPath(import.meta.url)),'../..','jarvis-app/web/dist'),

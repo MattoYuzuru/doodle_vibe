@@ -10,6 +10,7 @@ import { createStore } from '../src/store.mjs';
 import { createApp } from '../src/http.mjs';
 import { createBrowserFactory } from '../src/login/browser.mjs';
 import { createLoginSessionManager } from '../src/login/session-manager.mjs';
+import { loginPresetFor } from '../src/login/presets.mjs';
 import { createLoginRoutes } from '../src/login/routes.mjs';
 import { createHostPolicy } from '../src/login/policy.mjs';
 import { startEgressProxy } from '../src/login/egress-proxy.mjs';
@@ -25,14 +26,14 @@ async function until(fn, ms = 40_000) {
   const end = Date.now() + ms;
   for (;;) { const value = await fn(); if (value) return value; if (Date.now() > end) throw new Error('timeout waiting for condition'); await sleep(100); }
 }
-async function environment(t, fixtureOptions = {}, limits = {}, { sourceUrl = 'https://edu.hse.ru/' } = {}) {
+async function environment(t, fixtureOptions = {}, limits = {}, { sourceUrl = 'https://edu.hse.ru/', presetFor, learn } = {}) {
   const fixture = await startFixture(fixtureOptions);
   const dir = mkdtempSync(join(tmpdir(), 'doodle-login-test-'));
   const dbPath = join(dir, 'state.sqlite');
   const store = createStore({ dbPath, masterKey });
   store.ensureUser({ id: 'u1', displayName: 'U1' }); store.ensureUser({ id: 'u2', displayName: 'U2' });
   const space = store.createSpace('u1', { universityId: 'x', name: 'X' });
-  const manager = createLoginSessionManager({ store, factory: createBrowserFactory(fixture.factoryOptions), limits });
+  const manager = createLoginSessionManager({ store, factory: createBrowserFactory(fixture.factoryOptions), limits, presetFor, learn });
   t.after(async () => { await manager.close(); await fixture.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   const connection = store.createConnection('u1', space.id, { sourceUrl, kind: 'lms' });
   const wait = (id, statuses) => until(() => { const login = manager.get('u1', id); return statuses.includes(login.status) ? login : null; });
@@ -249,7 +250,9 @@ test('interactive login through the stream: ticket, frames, keyboard input, auto
 });
 
 test('interactive login on a bearer-token SPA stores the observed Authorization token with its expiry', { skip }, async t => {
-  const e = await environment(t, { jwtSeconds: 3600 }, {}, { sourceUrl: 'https://my.centraluniversity.ru/' });
+  // A university whose SPA sends a bearer token: success needs the observed Authorization header, not a probe.
+  const bearerPreset = origin => ({ ...loginPresetFor(origin), success: { pathPrefixes: ['/learn'], requireBearer: true } });
+  const e = await environment(t, { jwtSeconds: 3600 }, {}, { sourceUrl: 'https://my.centraluniversity.ru/', presetFor: bearerPreset });
   const started = await e.manager.start('u1', e.connection.id, { mode: 'interactive' });
   await e.wait(started.id, ['awaiting_user']);
   const sink = { frame() {}, json() {}, close() {}, buffered: 0 };
@@ -317,7 +320,7 @@ test('websocket endpoint: handshake validation, masked frames only, size cap, pi
   assert.equal(closedWith, 1002); assert.ok(unmasked.data().includes(Buffer.from([0x88, 0x02, 0x03, 0xea])), 'protocol error close frame (1002)');
 });
 
-test('owner login check: scripted password+MFA run prints cookie names only and reads the calendar feed', { skip }, async t => {
+test('owner login check: scripted password+MFA run prints cookie names only and runs the first sync', { skip }, async t => {
   const { runLoginCheck, parseArgs } = await import('../src/login-check.mjs');
   assert.deepEqual(parseArgs(['--university', 'hse', '--mode', 'interactive', '--headed']), { university: 'hse', mode: 'interactive', headed: true, keepCalendar: false, envFile: null, db: null, help: false });
   assert.throws(() => parseArgs(['--mode', 'telepathy']), /--mode/); assert.throws(() => parseArgs(['--password', 'x']), /Unknown option/);
@@ -325,14 +328,68 @@ test('owner login check: scripted password+MFA run prints cookie names only and 
   const store = createStore({ dbPath: ':memory:', masterKey }); t.after(() => store.close());
   const printed = []; const asked = []; const answers = [USER, OTP]; const secrets = [PASSWORD];
   const io = { print: line => printed.push(line), ask: async question => { asked.push(question); return answers.shift(); }, askSecret: async question => { asked.push(question); return secrets.shift(); } };
-  const ics = 'BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nSUMMARY:Task\r\nDTSTART:20261030T200000Z\r\nEND:VEVENT\r\nEND:VCALENDAR';
-  const request = async () => ({ status: 200, headers: { 'content-type': 'text/calendar' }, body: ics });
+  const request = async () => ({ status: 401, headers: { 'content-type': 'application/json' }, body: '{}' });
   const result = await runLoginCheck({ store, io, university: 'hse', mode: 'password', keepCalendar: true, factory: createBrowserFactory(fixture.factoryOptions), request });
   assert.equal(result.status, 'succeeded');
   const output = printed.join('\n');
-  assert.match(output, /cookies \d+ \[.*MoodleSession.*\]/); assert.match(output, /загрузка по ссылке календаря: ready/);
+  assert.match(output, /cookies \d+ \[.*MoodleSession.*\]/); assert.match(output, /первая синхронизация по сессии: user_action_required \(source_session_expired\)/);
   for (const forbidden of [PASSWORD, OTP, CALENDAR_TOKEN]) assert.ok(!output.includes(forbidden) && !asked.join('\n').includes(forbidden), forbidden);
   assert.ok(output.includes('awaiting_mfa')); assert.deepEqual([answers, secrets], [[], []]);
   const none = await runLoginCheck({ store, io, university: 'mars', mode: 'password', factory: createBrowserFactory(fixture.factoryOptions) });
   assert.equal(none.errorCode, 'unknown_university');
+});
+
+const signIn = async (e, started) => {
+  await e.wait(started.id, ['awaiting_user']);
+  const viewer = e.manager.attach('u1', started.id, { frame() {}, json() {}, close() {}, buffered: 0 });
+  await sleep(500);
+  await viewer.input({ type: 'key', action: 'down', key: 'Enter' }); await viewer.input({ type: 'key', action: 'up', key: 'Enter' });
+  return e.wait(started.id, ['succeeded', 'failed', 'expired']);
+};
+
+test('ЦУ preset: cookie gateway session is recognised by the /api/account/me probe; a different account clears the former data', { skip }, async t => {
+  const e = await environment(t, {}, {}, { sourceUrl: 'https://my.centraluniversity.ru/' });
+  const first = await signIn(e, await e.manager.start('u1', e.connection.id, { mode: 'interactive' }));
+  assert.equal(first.status, 'succeeded', first.errorCode);
+  const secret = e.store.readSecret('u1', e.connection.id);
+  assert.ok(secret.session.cookies.some(c => c.name === 'sid' && c.httpOnly && c.domain === 'my.centraluniversity.ru'));
+  assert.match(secret.session.identityDigest, /^[0-9a-f]{32}$/);
+  const keep = { kind: 'courses', items: [{ id: 'c1', title: 'Old course' }], fetchedAt: new Date().toISOString(), complete: true };
+  e.store.putSnapshot('u1', e.connection.id, keep);
+  const again = await signIn(e, await e.manager.start('u1', e.connection.id, { mode: 'interactive' }));
+  assert.equal(again.status, 'succeeded');
+  assert.equal(e.store.listSnapshots('u1', e.space.id, { kind: 'courses' }).length, 1, 're-login by the same account keeps the data');
+  assert.equal(e.store.readSecret('u1', e.connection.id).session.identityDigest, secret.session.identityDigest);
+  e.fixture.state.sub = 'cu-2';
+  const other = await signIn(e, await e.manager.start('u1', e.connection.id, { mode: 'interactive' }));
+  assert.equal(other.status, 'succeeded');
+  assert.equal(e.store.listSnapshots('u1', e.space.id, { kind: 'courses' }).length, 0, 'a different account never inherits the former data');
+  assert.notEqual(e.store.readSecret('u1', e.connection.id).session.identityDigest, secret.session.identityDigest);
+});
+
+test('API responses seen during the login are handed to learn() in memory and never persisted', { skip }, async t => {
+  const handed = [];
+  const e = await environment(t, {}, {}, { sourceUrl: 'https://my.centraluniversity.ru/', learn: async args => { handed.push(args); } });
+  const done = await signIn(e, await e.manager.start('u1', e.connection.id, { mode: 'interactive' }));
+  assert.equal(done.status, 'succeeded', done.errorCode);
+  await until(() => handed.length);
+  assert.equal(handed[0].userId, 'u1'); assert.equal(handed[0].connectionId, e.connection.id);
+  const seen = handed[0].observations.find(o => o.url.endsWith('/api/me'));
+  assert.deepEqual([seen.method, seen.status, seen.body.title], ['GET', 200, 'Fixture course']);
+  assertNoPlaintext(e, 'Fixture course');
+});
+
+test('HSE success needs a signed-in Moodle page: an anonymous MoodleSession cookie alone is not a login', { skip }, async t => {
+  const e = await environment(t);
+  const { createHostPolicy: policyOf } = await import('../src/login/policy.mjs');
+  const { successDetails } = await import('../src/login/flow.mjs');
+  const handle = await createBrowserFactory(e.fixture.factoryOptions).open({ policy: policyOf({ hosts: ['edu.hse.ru', 'saml.hse.ru'] }) });
+  t.after(() => handle.close());
+  e.fixture.state.sessions.add('anonymous-cookie');
+  await handle.context.addCookies([{ name: 'MoodleSession', value: 'anonymous-cookie', domain: 'edu.hse.ru', path: '/', secure: true, httpOnly: true }]);
+  await handle.page.goto('https://edu.hse.ru/my/', { timeout: 15_000 });
+  assert.equal((await successDetails(handle, loginPresetFor('https://edu.hse.ru'), 'https://edu.hse.ru')).ok, true, 'M.cfg.userId is set on the fixture page');
+  await handle.page.goto('https://edu.hse.ru/redirect-away', { timeout: 15_000 }).catch(() => {});
+  await handle.page.goto('data:text/html,<p>no moodle</p>').catch(() => {});
+  assert.equal((await successDetails(handle, loginPresetFor('https://edu.hse.ru'), 'https://edu.hse.ru')).ok, false);
 });

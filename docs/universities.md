@@ -144,5 +144,5 @@ npm --prefix backend run login -- --env-file "$HOME/doodle-live.env" --universit
 npm --prefix backend run login -- --env-file "$HOME/doodle-live.env" --university cu --mode interactive --headed
 ```
 
-Первая команда сама заполняет форму `saml.hse.ru` и спрашивает код второго фактора; `--keep-calendar` дополнительно получает ссылку календаря и читает по ней дедлайны.
+(`--university elk` — личный кабинет `lk.hse.ru`; тот же Keycloak ВШЭ.) Первая команда сама заполняет форму `saml.hse.ru` и спрашивает код второго фактора; `--keep-calendar` дополнительно получает ссылку календаря и читает по ней дедлайны.
 Вторая открывает видимое окно Chromium: войди в ЦУ любым способом (CAPTCHA решаешь ты), проверка завершится сама.

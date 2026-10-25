@@ -82,6 +82,9 @@ Disconnect подключения отменяет его активную се�
   calendarUrl? }                                // по согласию, см. ADR-0004
 ```
 
+- `identityDigest` (формула A): `sha256(origin + '|' + id)` в hex, первые 32 знака; `id` — `M.cfg.userId` (Moodle) либо `sub|id|userId` ответа same-origin пробы пресета (`/api/account/me` у ЦУ, `/api/get-user` у ЕЛК). При повторном входе менеджер сравнивает со старым значением: другой аккаунт → `replaceSession(…, {clearData:true})`.
+- Менеджер отдаёт задаче B наблюдения (`createSourceService(...).learn({userId, connectionId, observations})`): JSON-ответы XHR/fetch (GET, 200, ≤ 256 КБ, до 80 штук) разрешённых хостов, только в памяти, после записи сессии, best effort; сам менеджер их не хранит.
+- Успех входа для пресета = нужный путь + учётные данные (cookie по имени/любые, bearer при `requireBearer`) **и** проба в странице под её же сессией: Moodle `M.cfg.userId ≠ 0` (анонимный `MoodleSession` выдаётся и гостю) либо `GET` проба пресета.
 - Не сохраняются: весь `localStorage`/`sessionStorage` целиком, IndexedDB, HTML, скриншоты, заголовки кроме `Authorization`, refresh-токены (пока пресет не включил `allowRefresh` и рецепт не описал обновление).
 - Bearer выбирается правилом: значение, которое **браузер сам отправлял** в `Authorization` на API origin источника (приоритет), либо ключ storage, совпавший с этим значением; произвольные JWT из storage не берутся.
 - Запись — `store.replaceSession(userId, connectionId, session, {clearData:boolean})` (реализовано; переходно кладёт `calendarUrl` ещё и на верхний уровень секрета, где его читает календарный исполнитель ADR-0004): `setSecret` без удаления jobs; снимки/документы не трогаются (reauth), кроме `clearData:true` при смене `identityDigest`. Исполнитель sync читает секрет только внутри задачи.

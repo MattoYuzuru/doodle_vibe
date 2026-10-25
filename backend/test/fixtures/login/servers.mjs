@@ -30,7 +30,7 @@ const jwt = seconds => `${Buffer.from('{"alg":"none"}').toString('base64url')}.$
 export async function startFixture({ mfa = false, bot = false, unknown = false, jwtSeconds = 7200 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'doodle-login-fixture-'));
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(dir, 'k.pem'), '-out', join(dir, 'c.pem'), '-days', '2', '-subj', '/CN=fixture'], { stdio: 'ignore' });
-  const state = { mfa, bot, unknown, hits: {}, sessions: new Set(), codes: new Map(), otpAttempts: 0, passwordPosts: 0 };
+  const state = { mfa, bot, unknown, sub: 'cu-1', hits: {}, sessions: new Set(), codes: new Map(), otpAttempts: 0, passwordPosts: 0 };
   const body = req => new Promise(resolve => { const chunks = []; req.on('data', c => chunks.push(c)); req.on('end', () => resolve(new URLSearchParams(Buffer.concat(chunks).toString()))); });
   const cookie = req => Object.fromEntries((req.headers.cookie ?? '').split(/;\s*/).filter(Boolean).map(part => part.split(/=(.*)/s).slice(0, 2)));
   const send = (res, status, html, headers = {}) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', ...headers }); res.end(html); };
@@ -68,7 +68,7 @@ export async function startFixture({ mfa = false, bot = false, unknown = false, 
       if (url.pathname === '/redirect-away') return redirect(res, 'https://evil.example/steal');
       const authed = state.sessions.has(cookie(req).MoodleSession);
       if (!authed) return redirect(res, '/login/index.php');
-      if (url.pathname === '/my/') return send(res, 200, page('Панель', '<h1>Мои курсы</h1>', '<script>var M = {cfg: {"sesskey":"abc123def4"}};</script>'));
+      if (url.pathname === '/my/') return send(res, 200, page('Панель', '<h1>Мои курсы</h1>', '<script>var M = {cfg: {"sesskey":"abc123def4","userId":7}};</script>'));
       if (url.pathname === '/calendar/export.php') {
         if (req.method === 'POST') return send(res, 200, page('Экспорт', `<div class="calendarurl">https://edu.hse.ru/calendar/export_execute.php?userid=7&authtoken=${CALENDAR_TOKEN}&preset_what=all&preset_time=recentupcoming</div>`));
         return send(res, 200, page('Экспорт', `<form method="post" action="/calendar/export.php"><select name="events[exportevents]"><option value="all">all</option></select>
@@ -78,9 +78,11 @@ export async function startFixture({ mfa = false, bot = false, unknown = false, 
     }
     if (host === 'my.centraluniversity.ru') {
       if (url.pathname === '/') return send(res, 200, page('Вход', '<input id="u" autofocus placeholder="login">', `<script>
-        document.addEventListener('keydown', e => { if (e.key === 'Enter') { localStorage.setItem('access_token', ${JSON.stringify(jwt(jwtSeconds))}); location.href = '/learn'; } });</script>`));
-      if (url.pathname === '/learn') return send(res, 200, page('Обучение', '<h1>Курсы</h1>', `<script>fetch('/api/me', {headers: {Authorization: 'Bearer ' + localStorage.getItem('access_token')}});</script>`), { 'set-cookie': 'sid=fixture; Path=/; Secure; HttpOnly' });
-      if (url.pathname === '/api/me') return send(res, 200, '{"id":1}', { 'content-type': 'application/json' });
+        document.addEventListener('keydown', e => { if (e.key === 'Enter') { localStorage.setItem('access_token', ${JSON.stringify(jwt(jwtSeconds))}); location.href = '/login-done'; } });</script>`));
+      if (url.pathname === '/login-done') return redirect(res, '/learn', { 'set-cookie': 'sid=fixture; Path=/; Secure; HttpOnly' });
+      if (url.pathname.startsWith('/learn')) return !cookie(req).sid ? redirect(res, '/') : send(res, 200, page('Обучение', '<h1>Курсы</h1>', `<script>fetch('/api/me', {headers: {Authorization: 'Bearer ' + localStorage.getItem('access_token')}});</script>`));
+      if (url.pathname === '/api/me') return send(res, 200, '{"id":1,"title":"Fixture course"}', { 'content-type': 'application/json' });
+      if (url.pathname === '/api/account/me') return cookie(req).sid ? send(res, 200, JSON.stringify({ sub: state.sub, roles: [] }), { 'content-type': 'application/json' }) : send(res, 401, '{"status":401}', { 'content-type': 'application/problem+json' });
       return send(res, 404, page('404', ''));
     }
     return send(res, 200, page('Hostile', '<p>should never be reached</p>'));

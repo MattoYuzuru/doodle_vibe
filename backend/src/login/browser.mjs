@@ -46,6 +46,17 @@ export function createBrowserFactory({ executablePath = process.env.CHROMIUM_PAT
         let host; try { host = new URL(request.url()).hostname; } catch { return; }
         if (policy.allows(host, { contact: false })) observed.bearer = { token: match[1], host, at: Date.now() };
       });
+      // API responses seen during the login, kept in memory only so the origin can be learned (task B); never persisted here.
+      const observations = [];
+      context.on('response', async response => {
+        try {
+          const request = response.request();
+          if (request.method() !== 'GET' || !['xhr', 'fetch'].includes(request.resourceType()) || response.status() !== 200 || observations.length >= 80) return;
+          if (!/json/i.test(response.headers()['content-type'] ?? '') || !policy.allows(new URL(response.url()).hostname, { contact: false })) return;
+          const body = await response.body();
+          if (body.length <= 262_144) observations.push({ method: 'GET', url: response.url(), status: 200, body: JSON.parse(body.toString('utf8')) });
+        } catch { /* Not JSON or the page moved on. */ }
+      });
       const page = await context.newPage();
       page.on('dialog', dialog => void dialog.dismiss().catch(() => {}));
       page.on('download', download => void download.cancel().catch(() => {}));
@@ -62,6 +73,7 @@ export function createBrowserFactory({ executablePath = process.env.CHROMIUM_PAT
       let screencast = null;
       const handle = {
         page, context, observed, proxy,
+        observations: () => observations.slice(),
         viewport: () => page.viewportSize() ?? size,
         // origin + path only: query strings and fragments can carry tokens.
         safeUrl() { try { const url = new URL(page.url()); return url.protocol === 'https:' ? url.origin + url.pathname : null; } catch { return null; } },

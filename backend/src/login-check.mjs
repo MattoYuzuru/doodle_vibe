@@ -12,13 +12,13 @@ import { terminalIo } from './live-check.mjs';
 // Telegram or HTTP. Password mode: the owner types the credentials (hidden) and any MFA code
 // in this terminal. Interactive mode with --headed: a visible Chromium window opens and the
 // owner signs in by hand (SSO, MFA, CAPTCHA). Only cookie names and counts are printed.
-const targets = { hse: { url: 'https://edu.hse.ru/', label: 'ВШЭ' }, cu: { url: 'https://my.centraluniversity.ru/', label: 'Центральный университет' } };
+const targets = { hse: { url: 'https://edu.hse.ru/', label: 'ВШЭ' }, cu: { url: 'https://my.centraluniversity.ru/', label: 'Центральный университет' }, elk: { url: 'https://lk.hse.ru/', label: 'ВШЭ (личный кабинет)' } };
 const usage = `Проверка входа в вуз (без Telegram и HTTP).
 
   npm --prefix backend run login -- --env-file <файл> --university hse --mode password
   npm --prefix backend run login -- --env-file <файл> --university cu --mode interactive --headed
 
-Опции: --university hse|cu, --mode password|interactive, --headed (видимое окно Chromium для interactive),
+Опции: --university hse|elk|cu, --mode password|interactive, --headed (видимое окно Chromium для interactive),
 --keep-calendar (сохранить ссылку календаря Moodle), --db <путь> (по умолчанию .live/login-check.sqlite).
 Нужны DATA_ENCRYPTION_KEY в файле окружения и Chromium (CHROMIUM_PATH или playwright install chromium).
 Логин, пароль и код вводятся в терминале скрыто и не печатаются.`;
@@ -72,11 +72,10 @@ export async function runLoginCheck({ store, io, university, mode, keepCalendar 
     if (login.status !== 'succeeded') return { status: login.status, errorCode: login.errorCode };
     const { session } = store.readSecret(userId, connection.id);
     io.print(`Сессия сохранена (зашифрована): cookies ${session.cookies.length} [${[...new Set(session.cookies.map(c => c.name))].join(', ')}], bearer ${session.bearer ? `есть (${session.bearer.source})` : 'нет'}, действует до ${session.expiresAt}`);
-    if (session.calendarUrl) {
-      const sources = createSourceService({ store, request, now });
-      const result = await sources.sync({ userId, connectionId: connection.id });
-      io.print(`  загрузка по ссылке календаря: ${result.status}${result.counts ? ` ${JSON.stringify(result.counts)}` : ''}${result.errorCode ? ` (${result.errorCode})` : ''}`);
-    } else io.print('  чтение данных по сессии подключается задачей B; здесь проверен только вход.');
+    // The first sync reads by the stored session (learned recipe, seed or agent) with the same executor the worker uses.
+    const sources = createSourceService({ store, request, now });
+    const result = await sources.sync({ userId, connectionId: connection.id });
+    io.print(`  первая синхронизация по сессии: ${result.status}${result.counts ? ` ${JSON.stringify(result.counts)}` : ''}${result.errorCode ? ` (${result.errorCode})` : ''}`);
     return { status: 'succeeded', cookies: session.cookies.length, bearer: Boolean(session.bearer), calendar: Boolean(session.calendarUrl) };
   } finally { await manager.close(); }
 }
