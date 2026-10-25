@@ -40,8 +40,10 @@ npx playwright install chromium
 | `npm run test:unit` | Выбранные локальные проверки функций и форматов |
 | `npm run test:web` | Unit-тесты чистых модулей Mini App (логика маскота) в Node с фиксированными часами |
 | `npm run test:integration` | Изолированные проверки модулей с локальными поддельными сервисами |
+| `npm run test:platform` | SQLite, HTTP, auth, источники и retrieval на синтетических данных |
+| `npm run test:deploy` | Python-фикстуры release/backup/rollback без SSH |
 | `npm run test:e2e` | Браузерные smoke-сценарии собранного UI с синтетическим API |
-| `npm test` | Unit, web unit и integration; не включает browser smoke и сборку |
+| `npm test` | Unit, web unit, integration и platform; не включает browser smoke и сборку |
 | `npm run ci` | Check, typecheck, test, build и browser smoke последовательно |
 
 После изменения зависимостей обновляй соответствующий lockfile. Наличие
@@ -74,6 +76,11 @@ Loopback-guard проверяет сетевые обращения Node.js в �
 сценариях; он не является sandbox для произвольного сгенерированного кода.
 Browser smoke использует отдельный порт `14173`; при конфликте задай `E2E_PORT`.
 Не останавливай чужой процесс и не подключай тест к уже запущенному серверу.
+
+Новый backend: `npm --prefix backend start`, с внешней приватной конфигурацией.
+Требования к env и API — в [Backend API](backend-api.md). Legacy UI требует
+перевода на v1; маршруты не считаются автоматически совместимыми. Основной
+runtime порт — `18110` на loopback.
 
 Отчёты создаются в `artifacts/` и не коммитятся. Не помещай туда реальные
 браузерные профили, личные ответы, токены или дампы. Перед общим прогоном в

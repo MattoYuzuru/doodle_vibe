@@ -14,7 +14,7 @@ function walk(directory, recursive = true) {
     return entry.isDirectory() ? recursive ? walk(path) : [] : entry.isFile() ? [path] : [];
   });
 }
-const javascript = [...walk(join(root, "scripts")), ...walk(join(root, "tests")), ...walk(join(root, "jarvis-app"), false), ...walk(join(root, "jarvis-app", "ops", "stand"))].filter((file) => /\.(mjs|cjs)$/.test(file));
+const javascript = [...walk(join(root, "scripts")), ...walk(join(root, "tests")), ...walk(join(root,"backend","src")), ...walk(join(root,"backend","test")), ...walk(join(root, "jarvis-app"), false), ...walk(join(root, "jarvis-app", "ops", "stand"))].filter((file) => /\.(mjs|cjs)$/.test(file));
 for (const file of javascript) {
   const result = spawnSync(process.execPath, ["--check", file], { encoding: "utf8" });
   if (result.status !== 0) fail(result.stderr || "Cannot check " + file);

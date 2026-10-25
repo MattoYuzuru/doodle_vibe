@@ -1,0 +1,9 @@
+{
+  "name": "doodle-platform-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24 <25" },
+  "scripts": { "start": "node src/main.mjs", "test": "node --test test/*.test.mjs" },
+  "dependencies": { "undici": "8.12.3" }
+}
