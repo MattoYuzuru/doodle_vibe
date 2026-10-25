@@ -20,6 +20,14 @@ DES-001–DES-010, не описание уже работающего API. Вх
 
 ## Модель поведения
 
+Реализовано в DES-004: [`theme/assistant-state.ts`](../../jarvis-app/web/src/theme/assistant-state.ts),
+тесты — [`web/tests/assistant-state.test.mjs`](../../jarvis-app/web/tests/assistant-state.test.mjs)
+(`npm run test:web`). Отличия от исходного предложения ниже: персонаж выбирается
+по пространству (ВШЭ — ворона Варя, МИСИС — сова Дуся, остальные — Дуся),
+к intents добавлены `retry` и `connect` для ошибок и пустого состояния,
+в контекст — необязательный `acknowledgedEventIds` для дедупликации реакции.
+Реестр событий (`eventRegistry`) добавит DES-007 вторым параметром конфигурации.
+
 Предлагаемый `AssistantContext` содержит:
 
 ```ts

@@ -9,8 +9,9 @@
     "check": "node scripts/check.mjs",
     "typecheck": "npm --prefix jarvis-app/web run typecheck",
     "build": "npm --prefix jarvis-app/web run build",
-    "test": "npm run test:unit && npm run test:integration",
+    "test": "npm run test:unit && npm run test:web && npm run test:integration",
     "test:unit": "node scripts/test.mjs unit",
+    "test:web": "node scripts/test-web.mjs",
     "test:integration": "node scripts/test.mjs integration",
     "test:e2e": "playwright test && node scripts/check-e2e-report.mjs",
     "ci": "npm run check && npm run typecheck && npm test && npm run build && npm run test:e2e"
