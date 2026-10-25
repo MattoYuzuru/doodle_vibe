@@ -1,0 +1,12 @@
+# Dedicated Doodle site; imported alongside the preserved Mnema configuration.
+doodle.mnema.app {
+	header X-Content-Type-Options nosniff
+	header Referrer-Policy no-referrer
+	reverse_proxy 127.0.0.1:18110 {
+		flush_interval -1
+		transport http {
+			dial_timeout 2s
+			response_header_timeout 45s
+		}
+	}
+}

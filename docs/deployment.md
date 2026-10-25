@@ -37,6 +37,9 @@ Repository configuration:
 - Secret `DOODLE_DEPLOY_KNOWN_HOSTS`: existing independently trusted server host key.
 - Variable `DOODLE_DEPLOY_HOST`: selected server address.
 - Secret `DEEPSEEK_API_KEY`: owner-authorized provider key; never printed in logs.
+- Secret `TELEGRAM_BOT_TOKEN`: confirmed intended bot credential.
+- Secret `TELEGRAM_WEBHOOK_SECRET`: independent webhook authentication secret.
+- Variables `PUBLIC_BASE_URL` and `PUBLIC_BOT_USERNAME`: public app/bot metadata.
 
 Application credentials are supplied directly to `/etc/doodle/backend.env`, not
 included in release archives. Setting the GitHub DeepSeek secret alone does not
@@ -121,8 +124,11 @@ For a manual rollback, query `status`, review its exact `previous` SHA and call
 health gate. Keep the master key, environment and DB outside release directories.
 Do not run broad service restarts, Docker cleanup or network changes.
 
-Public proxy setup is a separate one-time administrator action after the owner
-chooses a hostname and DNS resolves to the target. Add only the Doodle hostname,
+The public hostname is `doodle.mnema.app`, with DNS pointing to the selected
+server. Its dedicated site is `/etc/caddy/doodle.caddy` (source:
+`ops/deploy/doodle.caddy`), imported by the preserved existing Caddyfile. Public
+proxy setup is a separate one-time administrator action after DNS resolves to
+the target. Add only the Doodle hostname,
 validate the complete existing Caddy configuration, reload once and verify all
 pre-existing routes. Never replace the server’s Caddyfile with this application’s
 configuration.
@@ -142,9 +148,12 @@ sh -n ops/deploy/forced-entry.sh
 The isolated infrastructure and dedicated GitHub deployment secrets are provisioned.
 The restricted identity’s status succeeds and arbitrary `id` command is denied.
 The service is disabled/inactive and no application release has been installed.
-Runtime encryption/DeepSeek keys exist without being exposed. Telegram and public
-hostname are pending owner choice; `PUBLIC_BASE_URL` is empty. The optional
-webhook secret is configured; no webhook has been registered.
-No public Doodle route, live bot smoke, release activation or rollback on this
-server is claimed yet. Existing Mnema containers and supporting units remain
+Runtime encryption/DeepSeek and Telegram credentials exist without being exposed.
+The intended bot is `@botAI_agent_bot`, verified through read-only `getMe`; its
+existing webhook is empty and pending update count was zero. `PUBLIC_BASE_URL`
+is `https://doodle.mnema.app`. The independent webhook secret is configured;
+no webhook has been registered. The dedicated Caddy import is installed and
+HTTPS certificate verification succeeds. The new route currently returns 502
+while the application is intentionally inactive. No live bot message, release
+activation or rollback on this server is claimed yet. Existing Mnema containers and supporting units remain
 healthy. Update this paragraph after the reviewed first rollout.
