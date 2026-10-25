@@ -17,7 +17,7 @@ P0 — первый работающий набор; P1 — следующая �
 | DES-003 | P0 | B | Примитивы и компоненты состояний | DES-002 | planned / — / — |
 | DES-004 | P0 | A | Чистая модель поведения маскота (Дуся и Варя) | — | review / Валентина / [PR #4](https://github.com/MattoYuzuru/doodle_vibe/pull/4) |
 | DES-005 | P0 | A | Выделенный renderer маскота (Дуся и Варя) | DES-004 | review / Валентина / [PR #7](https://github.com/MattoYuzuru/doodle_vibe/pull/7) |
-| DES-006 | P0 | A | Огонь дедлайнов, корректные реакции и бег при загрузке | DES-005 | review / Валентина / ветка `des-006-fire-and-loading` |
+| DES-006 | P0 | A | Огонь дедлайнов, корректные реакции и бег при загрузке | DES-005 | review / Валентина / [PR #8](https://github.com/MattoYuzuru/doodle_vibe/pull/8) |
 | DES-007 | P1 | A | Реестр событий и новогодняя шапочка | DES-005 | planned / — / — |
 | DES-008 | P0 | B | Каталог компонентов и состояний | DES-002; DES-003/DES-005 подключаются по готовности | planned / — / — |
 | DES-009 | P0 | A+B | Доступность, движение и облегчённый режим | Своя DES-003 / DES-005 | planned / — / — |
