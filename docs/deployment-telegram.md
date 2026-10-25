@@ -5,6 +5,11 @@ only**. Its student API requests, source credentials and uploaded authentication
 data go directly to the owner’s server. The intended bot is `@botAI_agent_bot`.
 The bot’s WebApp menu points to the direct Mini App URL.
 
+`telegram.org` is unreachable from Russian networks, so the Mini App serves a
+pinned copy of `telegram-web-app.js` from its own origin
+(`jarvis-app/web/public/`). Its boot path must not load scripts from Telegram
+domains: a blocking external script hangs the page for students without a VPN.
+
 Telegram webhook updates use the separate host
 `https://doodle-hook.mnema.app/api/telegram/webhook`. Only this hostname is
 proxied through Cloudflare. It has an explicit A record for the owner-selected
