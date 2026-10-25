@@ -202,7 +202,11 @@ export function createStore({ dbPath, masterKey, now = Date.now }) {
       return tx(() => {
         api.assertClaim(jid, token);
         const result = callback();
-        if (result && typeof result.then === 'function') fail('ASYNC_CLAIM_CALLBACK', 500);
+        if (result && typeof result.then === 'function') {
+          // Reject async use without leaving an unhandled rejected Promise.
+          Promise.resolve(result).catch(() => {});
+          fail('ASYNC_CLAIM_CALLBACK', 500);
+        }
         return result;
       });
     },

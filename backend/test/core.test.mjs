@@ -236,7 +236,7 @@ test('withClaim atomically fences snapshot writes and nested rollback across sto
   assert.equal(read(), 'current');
   code(() => first.withClaim(job.id, firstClaim.claimToken, () => {
     first.putSnapshot('1', c[0].id, { ...value, items: [{ id: 'async-rolled-back' }] });
-    return Promise.resolve('forbidden');
+    return Promise.reject(new Error('forbidden async result'));
   }), 'ASYNC_CLAIM_CALLBACK');
   assert.equal(read(), 'current');
   time += 101;
