@@ -1,0 +1,90 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: doodle-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify trusted CI run and latest main
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          workflow_id=$(gh api "repos/$REPOSITORY/actions/workflows/ci.yml" --jq .id)
+          gh api "repos/$REPOSITORY/actions/runs/$RUN_ID" > "$RUNNER_TEMP/ci-run.json"
+          jq -e --arg sha "$RELEASE_SHA" --arg repo "$REPOSITORY" --argjson workflow "$workflow_id" \
+            '.head_sha == $sha and .head_branch == "main" and .event == "push" and .conclusion == "success" and .head_repository.full_name == $repo and .workflow_id == $workflow' \
+            "$RUNNER_TEMP/ci-run.json"
+          test "$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$RELEASE_SHA"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            jarvis-app/web/package-lock.json
+      - name: Build exact tested revision
+        run: |
+          set -euo pipefail
+          npm ci --prefix backend --omit=dev --ignore-scripts
+          npm ci --prefix jarvis-app/web --ignore-scripts
+          npm run build
+          python3 ops/deploy/package.py "$RELEASE_SHA" "$RUNNER_TEMP/release.tar.gz"
+      - name: Install dedicated SSH identity
+        env:
+          DEPLOY_KEY: ${{ secrets.DOODLE_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DOODLE_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/doodle-deploy"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/doodle-known-hosts"
+          test -s "$HOME/.ssh/doodle-deploy"
+          test -s "$HOME/.ssh/doodle-known-hosts"
+      - name: Activate release with health and rollback gate
+        env:
+          DEPLOY_HOST: ${{ vars.DOODLE_DEPLOY_HOST }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$RELEASE_SHA"
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          digest=$(sha256sum "$RUNNER_TEMP/release.tar.gz" | cut -d ' ' -f 1)
+          ssh -T -i "$HOME/.ssh/doodle-deploy" \
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/doodle-known-hosts" \
+            -o ConnectTimeout=15 "doodle-deploy@$DEPLOY_HOST" \
+            "install $RELEASE_SHA $digest" < "$RUNNER_TEMP/release.tar.gz"
+      - name: Remove runner identity
+        if: always()
+        run: rm -f "$HOME/.ssh/doodle-deploy" "$HOME/.ssh/doodle-known-hosts"

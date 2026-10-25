@@ -1,0 +1,41 @@
+[Unit]
+Description=Doodle Vibe backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=doodle
+Group=doodle
+WorkingDirectory=/srv/doodle/current
+EnvironmentFile=/etc/doodle/backend.env
+EnvironmentFile=/srv/doodle/current/release.env
+ExecStart=/opt/doodle/node/bin/node backend/src/main.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/doodle
+MemoryMax=768M
+CPUQuota=100%
+TasksMax=64
+LimitNOFILE=4096
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

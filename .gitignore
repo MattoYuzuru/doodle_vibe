@@ -20,6 +20,7 @@
 !/.nvmrc
 !/.node-version
 !/playwright.config.mjs
+!/backend/
 
 # Development tooling and synthetic test artifacts; never commit runtime secrets/state.
 .venv/
