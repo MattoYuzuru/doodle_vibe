@@ -133,7 +133,7 @@ validate the complete existing Caddy configuration, reload once and verify all
 pre-existing routes. Never replace the server’s Caddyfile with this application’s
 configuration.
 
-## Checks and current readiness (2026-10-25)
+## Checks and initial provisioning (2026-10-25)
 
 The deployment handler has synthetic tests for checksum rejection, traversal,
 symlink rejection, immutable releases, version files, failed startup/first-release
@@ -145,15 +145,20 @@ bash -n ops/deploy/bootstrap.sh
 sh -n ops/deploy/forced-entry.sh
 ```
 
-The isolated infrastructure and dedicated GitHub deployment secrets are provisioned.
-The restricted identity’s status succeeds and arbitrary `id` command is denied.
-The service is disabled/inactive and no application release has been installed.
-Runtime encryption/DeepSeek and Telegram credentials exist without being exposed.
-The intended bot is `@botAI_agent_bot`, verified through read-only `getMe`; its
-existing webhook is empty and pending update count was zero. `PUBLIC_BASE_URL`
-is `https://doodle.mnema.app`. The independent webhook secret is configured;
-no webhook has been registered. The dedicated Caddy import is installed and
-HTTPS certificate verification succeeds. The new route currently returns 502
-while the application is intentionally inactive. No live bot message, release
-activation or rollback on this server is claimed yet. Existing Mnema containers and supporting units remain
-healthy. Update this paragraph after the reviewed first rollout.
+Initial provisioning created the isolated infrastructure, dedicated GitHub secrets
+and runtime configuration without exposing credentials. The restricted identity’s
+status succeeded and arbitrary `id` was denied. The service was deliberately left
+disabled/inactive until the first reviewed release; this is a provisioning record,
+not a statement of the current runtime version.
+
+The intended bot is `@botAI_agent_bot`, verified through read-only `getMe`.
+Before cutover its webhook was empty with zero pending updates. `PUBLIC_BASE_URL`
+is `https://doodle.mnema.app`; the independent webhook secret and dedicated Caddy
+import are configured. TLS verification succeeded before application activation.
+The configured `deepseek-flash` model was present in an authenticated model-list
+response. This does not verify generated answers or university access.
+
+For the current release, consult the successful Deploy run and
+`https://doodle.mnema.app/healthz`, then verify private API rejection and webhook
+configuration as described above. Record actual rollout evidence on the release
+PR; do not infer current readiness from this initial provisioning snapshot.
