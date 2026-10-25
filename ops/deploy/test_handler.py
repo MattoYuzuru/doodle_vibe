@@ -182,5 +182,31 @@ class HandlerTests(unittest.TestCase):
         self.assertIn('chromiumSandbox: true', (Path(__file__).parents[2] / 'backend/scripts/chromium-smoke.mjs').read_text())
 
 
+class PackageTests(unittest.TestCase):
+    def package(self, link_in):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ('backend/src', 'backend/scripts', 'backend/node_modules/.bin', 'backend/node_modules/lib', 'jarvis-app/web/dist'):
+                (root / name).mkdir(parents=True)
+            (root / 'backend/src/main.mjs').write_text('')
+            (root / 'jarvis-app/web/dist/index.html').write_text('x')
+            (root / 'backend/node_modules/lib/cli.js').write_text('')
+            (root / link_in).symlink_to('../lib/cli.js' if '.bin' in link_in else 'cli.js')
+            result = subprocess.run(['python3', str(Path(__file__).with_name('package.py')), A, str(root / 'out.tgz')], cwd=root, capture_output=True, text=True)
+            names = tarfile.open(root / 'out.tgz').getnames() if result.returncode == 0 else []
+            return result, names
+
+    def test_npm_bin_symlinks_are_skipped(self):
+        result, names = self.package('backend/node_modules/.bin/tool')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('backend/node_modules/lib/cli.js', names)
+        self.assertFalse([name for name in names if '.bin' in name])
+
+    def test_other_symlinks_are_still_rejected(self):
+        result, _ = self.package('backend/node_modules/lib/link')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('symlinks are forbidden', result.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()
