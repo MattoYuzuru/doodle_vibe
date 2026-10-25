@@ -92,6 +92,9 @@ for (const width of [320, 390, 768, 195]) {
     }).toPass({ timeout: 15_000 });
     // Лента вкладок доезжает анимацией — ждём, пока экран встанет на место.
     await expect.poll(() => outside("[data-space-deadlines]")).toEqual([]);
+    // Название работы не сжато соседями до нуля (в CI на Linux так и было: видны были только сроки).
+    const titleWidth = await page.locator("[data-space-deadlines]").getByText(LONG).evaluate((el) => el.getBoundingClientRect().width);
+    expect(titleWidth).toBeGreaterThanOrEqual(100);
   });
 }
 
