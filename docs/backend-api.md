@@ -49,6 +49,10 @@ connection status, старые данные не исчезают. UI пока�
 РУЗ, токен, логин и пароль, OAuth. Коды `note`/`notes`/`errorCode` переводятся в слова там же. Со старым сервером МИСИС (без `platformApi`)
 работают прежние экраны. Данные вузов не пишутся в облачную копию прежнего хранилища.
 
+Dev-авторизация: при `DOODLE_DEV_AUTH=1` (только loopback `HOST`, без `PUBLIC_BASE_URL`, не production) запросы без `x-telegram-init-data`
+получают одного синтетического пользователя, а same-origin `Origin` на loopback принимается; см. [локальный запуск](DEVELOPMENT.md).
+
+
 ## Login-сессии, удалённый браузер и выученные рецепты
 
 Статус: маршруты login-сессий **реализованы** (`backend/src/login`, фикстуры с настоящим Chromium; без Chromium на хосте — `LOGIN_UNAVAILABLE`, `authMethods` их не предлагает); чтение данных по сохранённой сессии и выученные рецепты (`recipe.version = 2`) — **planned** (задача B). Контракт — в

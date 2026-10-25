@@ -91,7 +91,7 @@ export function createApp({store, config, createSources, model = null, retrieveW
           'referrer-policy':'strict-origin-when-cross-origin','cache-control':extname(file)==='.html'?'no-cache':'public, max-age=3600'});
         return res.end(req.method === 'HEAD' ? undefined : content);
       }
-      if (req.headers.origin && req.headers.origin !== config.publicBaseUrl) throw new AppError('ORIGIN_REJECTED',403);
+      if (req.headers.origin && req.headers.origin !== config.publicBaseUrl && !devAuth?.allowsOrigin?.(req.headers.origin)) throw new AppError('ORIGIN_REJECTED',403);
       // Dev identity (contract: src/dev-auth.mjs) only answers requests without Telegram init data.
       const identity = (!req.headers['x-telegram-init-data'] && devAuth?.identify(req)) || verifyTelegramInitData(req.headers['x-telegram-init-data'],config.botToken,{now});
       store.ensureUser(identity);

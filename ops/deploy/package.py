@@ -20,6 +20,8 @@ for root in roots:
 with tarfile.open(a.output, 'w:gz') as archive:
     for root in roots:
         for path in sorted(root.rglob('*')):
+            if root == Path('backend/node_modules') and path.relative_to(root).parts[0] == '.bin':
+                continue  # npm bin links are symlinks and never needed at runtime
             if path.is_symlink():
                 p.error('symlinks are forbidden')
             if path.is_file():
