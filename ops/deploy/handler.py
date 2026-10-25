@@ -19,6 +19,7 @@ import urllib.request
 
 BASE = Path('/srv/doodle')
 SERVICE = 'doodle-backend.service'
+SMOKE_SERVICE = 'doodle-chromium-smoke.service'
 MAX_ARCHIVE = 100 * 1024 * 1024
 MAX_CONTENT = 250 * 1024 * 1024
 SHA = r'[0-9a-f]{40}'
@@ -143,7 +144,7 @@ def install(sha, digest):
                     raise RuntimeError('too many archive members')
                 name = member.name
                 parts = PurePosixPath(name).parts
-                allowed = name == 'release.json' or (name.startswith('backend/src/') and name.endswith('.mjs')) or name.startswith('backend/node_modules/') or name.startswith('jarvis-app/web/dist/')
+                allowed = name == 'release.json' or ((name.startswith('backend/src/') or name.startswith('backend/scripts/')) and name.endswith('.mjs')) or name.startswith('backend/node_modules/') or name.startswith('jarvis-app/web/dist/')
                 if any(part.startswith('.env') or part == 'users.key' for part in parts):
                     allowed = False
                 if member.size < 0 or not allowed or not parts or name.startswith('/') or '..' in parts or name in seen or not member.isfile():
@@ -175,6 +176,23 @@ def install(sha, digest):
     activate(sha)
 
 
+def smoke(sha):
+    """Run the Chromium runtime smoke for the active release in a hardened, memory-limited oneshot unit."""
+    if sha != current_sha():
+        raise RuntimeError('smoke must name the current release')
+    if not (BASE / 'releases' / sha / 'backend/scripts/chromium-smoke.mjs').is_file():
+        raise RuntimeError('release has no chromium smoke script')
+    try:
+        run('/usr/bin/systemctl', 'start', '--wait', SMOKE_SERVICE)
+    except subprocess.CalledProcessError:
+        log = subprocess.run(['/usr/bin/journalctl', '-u', SMOKE_SERVICE, '-n', '20', '--no-pager', '-o', 'cat'], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10).stdout
+        print(log[-4000:], file=sys.stderr)
+        raise RuntimeError('chromium smoke failed')
+    lines = subprocess.run(['/usr/bin/journalctl', '-u', SMOKE_SERVICE, '-n', '10', '--no-pager', '-o', 'cat'], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10).stdout.splitlines()
+    result = next((line for line in reversed(lines) if line.startswith('{')), '')
+    print(json.dumps({'status': 'chromium-ok', 'sha': sha, 'result': result[:2000]}))
+
+
 def main():
     if os.getuid() != 0 or len(sys.argv) != 2:
         raise RuntimeError('restricted handler requires exactly one command')
@@ -186,6 +204,8 @@ def main():
             print(json.dumps({'current': current_sha(), 'previous': current_sha('previous')}))
         elif match := re.fullmatch(f'install ({SHA}) ([0-9a-f]{{64}})', command):
             install(*match.groups())
+        elif match := re.fullmatch(f'smoke ({SHA})', command):
+            smoke(match[1])
         elif match := re.fullmatch(f'rollback ({SHA})', command):
             sha = match[1]
             if sha != current_sha('previous'):

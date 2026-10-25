@@ -16,7 +16,8 @@
     "test:web": "node scripts/test-web.mjs",
     "test:integration": "node scripts/test.mjs integration",
     "test:e2e": "playwright test && node scripts/check-e2e-report.mjs",
-    "ci": "npm run check && npm run typecheck && npm test && npm run test:deploy && npm run build && npm run test:e2e"
+    "test:chromium": "npm --prefix backend run chromium:smoke",
+    "ci": "npm run check && npm run typecheck && npm test && npm run test:deploy && npm run build && npm run test:e2e && npm run test:chromium"
   },
   "devDependencies": { "@playwright/test": "1.63.0" }
 }

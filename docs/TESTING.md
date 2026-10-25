@@ -14,6 +14,7 @@ platform fixtures для пространств, discovery, auth, jobs и retrie
 | Platform | `npm run test:platform` | SQLite, ACL 2×2, crypto, Telegram HMAC, jobs/fencing/restart, SSRF, OAuth/refresh и retrieval/chat | Живые вузовские аккаунты и ответы настоящей модели |
 | Deploy | `npm run test:deploy` | Release, health gate, backup и rollback в фикстурах | Работоспособность реального сервера |
 | Browser smoke | `npm run build`, `npm run test:e2e` | Запуск собранного UI и выбранные действия пользователя с fixture API | Полный production E2E или новую многовузовскую архитектуру |
+| Chromium runtime | `npm run test:chromium` | Запуск Chromium с sandbox, рендер `data:`-страницы и кадр CDP screencast без внешней сети; тот же скрипт после деплоя на mnema | Вход в вуз, SSO/MFA и стабильность долгих сессий |
 | Live acceptance | Отдельный согласованный сценарий | Конкретный разрешённый аккаунт/источник в зафиксированное время | Все роли, факультеты, вузы и бессрочную работоспособность |
 
 `npm run ci` последовательно запускает обязательный автоматический набор.

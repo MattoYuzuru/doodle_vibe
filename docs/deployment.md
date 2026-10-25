@@ -23,6 +23,8 @@ Doodle uses these isolated resources:
 | `/var/backups/doodle` | Root-only consistent pre-release SQLite snapshots |
 | `doodle-backend.service` | Sandboxed nonroot service, loopback `127.0.0.1:18110` |
 | `doodle-deploy` | Dedicated SSH identity; fixed deployment commands only |
+| `/opt/doodle/browsers` | Root-owned, read-only Playwright Chromium for the pinned `playwright-core` (`PLAYWRIGHT_BROWSERS_PATH`) |
+| `doodle-chromium-smoke.service` | Hardened one-shot unit that runs `backend/scripts/chromium-smoke.mjs` |
 
 `ops/deploy/bootstrap.sh` is a **one-time administrator script**. It deliberately
 refuses existing Doodle accounts/directories/configuration rather than overwriting
@@ -91,6 +93,7 @@ RC or use password authentication. Its forced handler accepts only:
 ```text
 status
 install <40-character Git SHA> <64-character archive SHA-256>
+smoke <exact current SHA>
 rollback <exact previous SHA>
 ```
 
@@ -109,6 +112,60 @@ are retained: there is no automated cleanup or database restore.
 CI concurrency serializes deployment and never cancels an in-progress activation.
 Runtime does not require repository checkout, GitHub access, npm installation,
 Docker or proxy reloads. Normal releases do not touch Caddy.
+
+## Chromium runtime (remote login browser)
+
+The backend drives a headless Chromium through the pinned `playwright-core`
+(`backend/package.json`, exact version, no browser download on `npm ci`). The
+browser is **not** part of release archives and is not installed by CI deploys;
+the handler cannot reach the network. It is provisioned by the owner and lives at
+`/opt/doodle/browsers`, selected by `PLAYWRIGHT_BROWSERS_PATH` in both units.
+Several browser revisions may coexist, so rollback to an older release still finds
+its Chromium (`PLAYWRIGHT_SKIP_BROWSER_GC=1`).
+
+Provision or upgrade (idempotent, on mnema, as root; does not restart the app):
+
+```sh
+# backend dir = a checkout after `npm ci --prefix backend`, or /srv/doodle/current/backend
+sudo bash ops/deploy/provision-chromium.sh <backend dir>
+```
+
+It installs the Chromium system libraries (additive `apt` packages), the browser for the
+pinned version, and the unit files, and refuses to continue if unprivileged user namespaces
+are restricted. **Sandbox:** Chromium runs with its OS sandbox, never `--no-sandbox`
+(`chromiumSandbox: true`; Playwright disables it by default, so launchers must set it). It works
+under the service hardening on Ubuntu 24.04 (`kernel.apparmor_restrict_unprivileged_userns=0`
+on mnema). If a host restricts user namespaces, add a scoped AppArmor `userns` profile for
+`/opt/doodle/browsers/chromium-*/…/chrome`; do not switch the sandbox off.
+
+Limits: Chromium is a child of `doodle-backend.service`, so it shares that cgroup:
+`MemoryMax=2G` (was 768M), `TasksMax=512` (was 64; Chromium uses many threads), `CPUQuota=100%`,
+same nonroot user `doodle` and sandboxing as before. The browser session manager must bound
+concurrent browsers (budget about 300–500 MB each) and close idle ones; the cgroup limit is the
+last-resort guard and an OOM kill restarts the whole service. The smoke unit has its own
+`MemoryMax=1G`/`TasksMax=512` and identical hardening (guarded by `test_handler.py`).
+
+After every activation `deploy.yml` runs `smoke <current SHA>` through the restricted identity.
+The handler starts `doodle-chromium-smoke.service`, which launches Chromium, renders a `data:`
+page, requires one CDP `Page.startScreencast` frame, blocks all external requests and closes the
+browser. A smoke failure fails the Deploy run but does **not** roll back (health gate is unchanged;
+login features are not live yet). Run it by hand:
+
+```sh
+ssh -i <deploy key> doodle-deploy@<host> "smoke $(…current sha…)"
+```
+
+Updating `handler.py`, `forced-entry.sh`, unit files or this provisioning is an owner action
+(`install -m 0755 ops/deploy/handler.py /usr/local/sbin/doodle-deploy`, rerun the provisioning
+script); a release deploy never changes them. `package.py` and the handler allow
+`backend/scripts/*.mjs` in releases, and the handler must be updated **before** the first release
+that carries them.
+
+Rollback of the Chromium runtime: roll the release back as usual (old releases ignore the
+browser). To remove it entirely: delete `/etc/systemd/system/doodle-chromium-smoke.service`,
+`/opt/doodle/browsers`, restore the previous `doodle-backend.service` limits from Git history
+(`MemoryMax=768M`, `TasksMax=64`), `systemctl daemon-reload`. Installed apt libraries are
+harmless and left in place.
 
 ## Verification and rollback
 
