@@ -109,8 +109,12 @@ test("a new user connects a university from the empty home screen", async ({ pag
   await page.goto("/");
   await page.getByRole("button", { name: "Подключить учёбу" }).click();
   await expect(page.getByRole("heading", { name: "Подключить учёбу" })).toBeVisible();
-  await page.getByRole("button", { name: "ВШЭ", exact: true }).click();
-  await expect(page.getByText("Выбран: ВШЭ")).toBeVisible();
+  // Первые 350 мс после открытия экрана приложение нарочно гасит нажатия (защита от двойного тапа, App.tsx):
+  // на быстрой машине тест успевает нажать раньше, поэтому нажимаем, пока выбор не сработает.
+  await expect(async () => {
+    await page.getByRole("button", { name: "ВШЭ", exact: true }).click();
+    await expect(page.getByText("Выбран: ВШЭ")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 10_000 });
   await expect(page.getByLabel("Адрес сайта")).toBeVisible();
   expect(created).toEqual([{ universityId: "hse", name: "ВШЭ" }]);
   await page.getByLabel("Адрес сайта").fill("http://lms.example.test/?token=1");
