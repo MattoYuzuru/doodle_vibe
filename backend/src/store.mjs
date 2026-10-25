@@ -69,7 +69,22 @@ export function createStore({ dbPath, masterKey, now = Date.now }) {
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
   const at = () => new Date(now()).toISOString();
-  const tx = fn => { db.exec('BEGIN IMMEDIATE'); try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; } };
+  let transactionDepth = 0, savepointSequence = 0;
+  const tx = fn => {
+    const nested = transactionDepth > 0;
+    const savepoint = `store_tx_${++savepointSequence}`;
+    db.exec(nested ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+    transactionDepth++;
+    try {
+      const result = fn();
+      db.exec(nested ? `RELEASE SAVEPOINT ${savepoint}` : 'COMMIT');
+      return result;
+    } catch (error) {
+      if (nested) db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}; RELEASE SAVEPOINT ${savepoint}`);
+      else db.exec('ROLLBACK');
+      throw error;
+    } finally { transactionDepth--; }
+  };
   const user = id => { const row = get('SELECT * FROM users WHERE id=?', String(id)); if (!row) fail('NOT_FOUND', 404); return row; };
   const space = (id, sid) => { const row = get('SELECT * FROM spaces WHERE user_id=? AND id=?', String(id), sid); if (!row) fail('NOT_FOUND', 404); return row; };
   const connection = (id, cid) => { const row = get('SELECT c.* FROM connections c JOIN spaces s ON s.id=c.space_id AND s.user_id=c.user_id WHERE c.user_id=? AND c.id=?', String(id), cid); if (!row) fail('NOT_FOUND', 404); return row; };
@@ -178,6 +193,17 @@ export function createStore({ dbPath, masterKey, now = Date.now }) {
         const token = randomUUID();
         run("UPDATE jobs SET status='running',worker_id=?,claim_token=?,lease_until=?,attempts=attempts+1,updated_at=? WHERE id=?", workerId, token, now() + leaseMs, at(), r.id);
         return jobRecord(get('SELECT * FROM jobs WHERE id=?', r.id), true);
+      });
+    },
+    // Keep the lease check and a synchronous executor read/write in one SQLite
+    // write transaction. A second process cannot reclaim the job in between.
+    withClaim(jid, token, callback) {
+      if (typeof callback !== 'function') fail();
+      return tx(() => {
+        api.assertClaim(jid, token);
+        const result = callback();
+        if (result && typeof result.then === 'function') fail('ASYNC_CLAIM_CALLBACK', 500);
+        return result;
       });
     },
     assertClaim(jid, token) {

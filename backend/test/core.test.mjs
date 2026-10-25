@@ -215,3 +215,35 @@ test('stable source error codes persist without allowing arbitrary exception tex
   const claim = s.claimJob('fixture');
   assert.equal(s.finishJob(job.id, claim.claimToken, { status: 'failed', errorCode: 'source_timeout' }).errorCode, 'source_timeout');
 });
+
+test('withClaim atomically fences snapshot writes and nested rollback across store handles', t => {
+  let time = now;
+  const { store: first, connections: c, dbPath } = fixture(t, () => time);
+  const second = createStore({ dbPath, masterKey: key, now: () => time });
+  t.after(() => second.close());
+  const value = { kind: 'schedule', items: [{ id: 'old' }], fetchedAt, complete: true };
+  first.putSnapshot('1', c[0].id, value);
+  const job = first.enqueueJob('1', c[0].id, { type: 'sync' });
+  const firstClaim = first.claimJob('worker-a', { leaseMs: 100 });
+  first.withClaim(job.id, firstClaim.claimToken, () => first.putSnapshot('1', c[0].id, { ...value, items: [{ id: 'current' }] }));
+  const read = () => second.listSnapshots('1', c[0].spaceId)[0].items[0].id;
+  assert.equal(read(), 'current');
+  assert.throws(() => first.withClaim(job.id, firstClaim.claimToken, () => {
+    first.putSnapshot('1', c[0].id, { ...value, items: [{ id: 'rolled-back' }] });
+    first.enqueueJob('1', c[0].id, { type: 'discover' });
+    throw new Error('abort');
+  }), { code: 'STORAGE_ERROR' });
+  assert.equal(read(), 'current');
+  code(() => first.withClaim(job.id, firstClaim.claimToken, () => {
+    first.putSnapshot('1', c[0].id, { ...value, items: [{ id: 'async-rolled-back' }] });
+    return Promise.resolve('forbidden');
+  }), 'ASYNC_CLAIM_CALLBACK');
+  assert.equal(read(), 'current');
+  time += 101;
+  const reclaimed = second.claimJob('worker-b');
+  assert.equal(reclaimed.id, job.id);
+  code(() => first.withClaim(job.id, firstClaim.claimToken, () => first.putSnapshot('1', c[0].id, { ...value, items: [{ id: 'stale' }] })), 'STALE_CLAIM');
+  assert.equal(read(), 'current');
+  second.withClaim(job.id, reclaimed.claimToken, () => second.putSnapshot('1', c[0].id, { ...value, items: [{ id: 'new-owner' }] }));
+  assert.equal(read(), 'new-owner');
+});
