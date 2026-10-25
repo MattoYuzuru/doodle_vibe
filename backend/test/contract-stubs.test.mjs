@@ -21,17 +21,20 @@ function sign(id) {
   return params.toString();
 }
 
-test('disabled login manager exposes the contract surface and refuses to start', async () => {
-  const manager = createLoginSessionManager({});
-  for (const name of ['capabilities', 'authMethods', 'start', 'get', 'submitMfa', 'handoff', 'cancel', 'issueTicket', 'active', 'cancelForConnection', 'close']) assert.equal(typeof manager[name], 'function', name);
+test('login manager keeps the contract surface; without a runtime it refuses to start', async () => {
+  const store = createStore({ dbPath: ':memory:', masterKey: key });
+  store.ensureUser({ id: 'u', displayName: 'U' });
+  const manager = createLoginSessionManager({ store, factory: { available: () => false, open: async () => { throw new Error('no launch'); } } });
+  for (const name of ['capabilities', 'authMethods', 'start', 'get', 'submitMfa', 'handoff', 'done', 'cancel', 'issueTicket', 'consumeTicket', 'attach', 'active', 'cancelForConnection', 'close']) assert.equal(typeof manager[name], 'function', name);
   assert.deepEqual(manager.capabilities(), { interactive: false, password: false });
-  assert.deepEqual(manager.authMethods({}), []);
+  assert.deepEqual(manager.authMethods({ sourceUrl: 'https://edu.hse.ru/' }), []);
   assert.equal(manager.active('u', 'c'), null);
-  await assert.rejects(manager.start('u', 'c', { mode: 'interactive' }), { code: 'LOGIN_UNAVAILABLE', status: 409 });
   assert.throws(() => manager.get('u', 'x'), { status: 404 });
+  assert.equal(manager.consumeTicket('nope', 'x'), null);
   const routes = createLoginRoutes({});
   assert.equal(await routes.handle({}), false);
-  let destroyed = false; routes.upgrade({}, { destroy: () => { destroyed = true; } }, Buffer.alloc(0)); assert.ok(destroyed);
+  let ended = ''; routes.upgrade({ url: '/api/v1/login/x/stream', headers: {} }, { end: text => { ended = text; } }, Buffer.alloc(0)); assert.match(ended, /^HTTP\/1\.1 404/);
+  store.close();
   assert.equal(createDevAuth({}), null);
 });
 

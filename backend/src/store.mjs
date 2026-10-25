@@ -154,6 +154,23 @@ export function createStore({ dbPath, masterKey, now = Date.now }) {
         return api.updateConnection(id,cid,{status:'pending',errorCode:null});
       });
     },
+    // Stores a captured login session (docs/architecture/auth-sessions-contract.md section 4). Unlike an explicit
+    // new login it keeps jobs and, by default, the former snapshots: a re-authentication must not erase data.
+    replaceSession(id, cid, session, { clearData = false } = {}) {
+      if (!session || typeof session !== 'object' || Array.isArray(session) || session.version !== 2 || !Array.isArray(session.cookies) || session.cookies.length > 200 ||
+          typeof session.expiresAt !== 'string' || !Number.isFinite(Date.parse(session.expiresAt))) fail();
+      json(session);
+      return tx(() => {
+        const c = connection(id, cid);
+        if (clearData) { run('DELETE FROM snapshots WHERE connection_id=?', cid); run('DELETE FROM documents WHERE connection_id=?', cid); }
+        const secret = { origin: new URL(c.source_url).origin, session };
+        // Transitional: the calendar executor of ADR-0004 reads a top-level calendarUrl.
+        if (typeof session.calendarUrl === 'string') secret.calendarUrl = session.calendarUrl;
+        api.setSecret(id, cid, secret);
+        api.updateConnection(id, cid, { status: 'pending', errorCode: null });
+        return { saved: true };
+      });
+    },
     putSnapshot(id, cid, { kind, items, fetchedAt, complete }) {
       const c = connection(id, cid); if (!['courses', 'schedule', 'deadlines'].includes(kind)) fail();
       if (complete !== true) return { saved: false };

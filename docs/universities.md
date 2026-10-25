@@ -128,3 +128,21 @@ npm --prefix backend run live -- --env-file "$HOME/doodle-live.env" --document h
 - показывать `note`/`notes` (`moodle_calendar_export`, `local_accounts_only`, `sso_login_only`, `university_network_only`) и инструкцию получения ссылки;
 - переводить `errorCode` из таблицы выше в понятный текст и CTA, опрашивать job до `succeeded|failed`;
 - выводить `schedule`, `deadlines`, `courses` из общего формата с `fetchedAt`/stale; у курсов из календаря нет ссылки на курс и идентификатора Moodle.
+
+## Проверка входа через браузерную сессию (владелец)
+
+Менеджер входа ([ADR-0005](adr/0005-remote-browser-login-and-learned-recipes.md)) проверяется локально без Telegram и HTTP. Нужны файл окружения с
+`DATA_ENCRYPTION_KEY` (см. выше) и Chromium (`npx playwright install chromium` из корня репозитория либо `CHROMIUM_PATH`). Логин, пароль и код вводятся скрыто
+в терминале; печатаются только имена cookies, их число и срок. Селекторы страницы MFA ВШЭ и ЦУ не подтверждены вживую: расхождение отдаст `source_login_unrecognized`,
+после чего вход можно пройти руками.
+
+```bash
+npm --prefix backend run login -- --env-file "$HOME/doodle-live.env" --university hse --mode password --keep-calendar
+```
+
+```bash
+npm --prefix backend run login -- --env-file "$HOME/doodle-live.env" --university cu --mode interactive --headed
+```
+
+(`--university elk` — личный кабинет `lk.hse.ru`; тот же Keycloak ВШЭ.) Первая команда сама заполняет форму `saml.hse.ru` и спрашивает код второго фактора; `--keep-calendar` дополнительно получает ссылку календаря и читает по ней дедлайны.
+Вторая открывает видимое окно Chromium: войди в ЦУ любым способом (CAPTCHA решаешь ты), проверка завершится сама.

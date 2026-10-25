@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=24 <25" },
-  "scripts": { "start": "node src/main.mjs", "live": "node src/live-check.mjs", "test": "node --test test/*.test.mjs", "chromium:smoke": "node scripts/chromium-smoke.mjs" },
+  "scripts": { "start": "node src/main.mjs", "live": "node src/live-check.mjs", "login": "node src/login-check.mjs", "test": "node --test test/*.test.mjs", "chromium:smoke": "node scripts/chromium-smoke.mjs" },
   "dependencies": { "playwright-core": "1.63.0", "undici": "8.12.3" }
 }

@@ -27,9 +27,11 @@ async function main() {
     const service=createSourceService({store:guardedStore,proposeRecipe:model?.proposeRecipe,proposeLearnedRecipe:model?.proposeLearnedRecipe,agentModel:model});
     return {...service,sync:async args=>{ await oauth?.refresh(args.userId,args.connectionId,{storage:guardedStore}); return service.sync(args); }};
   };
-  const login=createLoginSessionManager({store,config});
-  const loginRoutes=createLoginRoutes({store,login,config});
-  const server=createApp({store,config,createSources,model,oauth,login,loginRoutes,devAuth:createDevAuth(),onLog:log,retrieveWeb:createWebRetriever({store}),
+  const learn=args=>createSourceService({store,proposeLearnedRecipe:model?.proposeLearnedRecipe}).learn(args);
+  const login=createLoginSessionManager({store,config,learn});
+  const devAuth=createDevAuth();
+  const loginRoutes=createLoginRoutes({store,login,config,devAuth});
+  const server=createApp({store,config,createSources,model,oauth,login,loginRoutes,devAuth,onLog:log,retrieveWeb:createWebRetriever({store}),
     staticDir:resolve(dirname(fileURLToPath(import.meta.url)),'../..','jarvis-app/web/dist'),
     onTelegram:config.botToken&&config.webhookSecret?createTelegramHandler({publicBaseUrl:config.publicBaseUrl}):null});
   const worker=createWorker({store,createSources,onError:log});

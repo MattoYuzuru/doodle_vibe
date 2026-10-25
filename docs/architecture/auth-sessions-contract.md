@@ -1,6 +1,6 @@
 # Контракт login-сессий, сохранённой сессии и выученных рецептов
 
-Статус: контракт для параллельной реализации. **Задача B реализована** (рецепты v2, sync по сессии, agent — см. §11); `backend/src/login` пока заглушки.
+Статус: контракт для параллельной реализации. **Задачи A и B реализованы**: A — `backend/src/login/*`, `store.replaceSession`, фикстурные тесты с настоящим Chromium; B — рецепты v2, sync по сессии, agent (см. §11). C (UI, `dev-auth.mjs`) — пока заглушка.
 Решение — [ADR-0005](../adr/0005-remote-browser-login-and-learned-recipes.md). Типы — [contracts.d.ts](../../backend/contracts.d.ts), маршруты —
 [Backend API](../backend-api.md) (раздел «Planned»). Общие правила секретов и ACL — [backend-contract.md](backend-contract.md).
 Слова «MUST/SHOULD» — требования к реализации; всё, что не названо, меняется только через ADR/RFC.
@@ -16,7 +16,7 @@
 
 Состояния: `starting` → (`awaiting_user` для interactive | `filling` для password) → `awaiting_mfa` (password; в interactive MFA вводит человек в кадре) →
 `capturing` → `succeeded`. Из любого нетерминального: `failed` (с `errorCode`), `cancelled`, `expired`. Терминальные состояния читаются 5 минут, затем забываются.
-`password` MAY перейти в `awaiting_user` (`POST …/handoff`), если форма не распознана или нужна CAPTCHA: дальше вход делает человек в кадре.
+`password` переходит в `awaiting_user` **автоматически**, если появилась CAPTCHA/защита от ботов (`errorCode:'source_bot_protection'`) или страница входа не распознана (`source_login_unrecognized`): `errorCode` на нетерминальном `awaiting_user` означает «автозаполнение остановлено, продолжи сам»; пароль в такую страницу не вводится. Из `awaiting_mfa` человек может перейти вручную (`POST …/handoff`). В `awaiting_user` ручной вход завершается сам (проверка успеха раз в секунду, два совпадения подряд) либо `POST …/done` («я вошёл»; 409 `LOGIN_NOT_COMPLETE`, если cookies и токена ещё нет).
 
 | Параметр | Значение |
 |---|---|
@@ -45,7 +45,8 @@ Disconnect подключения отменяет его активную се�
 | POST `/api/v1/connections/:id/login` | `{mode:'interactive'}` либо `{mode:'password', username, password, keepCalendar?}` → 201 `{login}`; 409 `LOGIN_UNAVAILABLE` (нет Chromium/пресета), 429 `LOGIN_COOLDOWN` / `LOGIN_BUSY` / `RATE_LIMITED` |
 | GET `/api/v1/login/:id` | `{login}` — только владелец; чужой/неизвестный/забытый → 404 |
 | POST `/api/v1/login/:id/mfa` | `{code}` (`^[0-9A-Za-z -]{4,12}$`) → 202 `{login}`; 409 `LOGIN_NOT_WAITING_MFA` |
-| POST `/api/v1/login/:id/handoff` | `{}` → `{login}` (password → awaiting_user) |
+| POST `/api/v1/login/:id/handoff` | `{}` → `{login}` (awaiting_mfa → awaiting_user) |
+| POST `/api/v1/login/:id/done` | `{}` → `{login}` — «я вошёл»; 409 `LOGIN_NOT_COMPLETE` |
 | POST `/api/v1/login/:id/cancel` | `{}` → `{login}` |
 | POST `/api/v1/login/:id/ticket` | `{}` → 200 `{ticket, expiresAt, path}` — одноразовый тикет потока: 30 с, привязан к пользователю и сессии, хранится как хэш |
 | GET (Upgrade: websocket) `/api/v1/login/:id/stream?ticket=…` | WebSocket потока кадров и ввода (§3) |
@@ -58,7 +59,7 @@ Disconnect подключения отменяет его активную се�
 ## 3. Поток кадров и ввода
 
 Аутентификация: initData проверяется на `POST …/ticket` (браузер не умеет ставить заголовки на WebSocket); upgrade принимает **только** валидный непросроченный
-тикет, помечает его использованным, проверяет `Origin` (= `PUBLIC_BASE_URL` или loopback в dev) и состояние сессии; иначе закрывает 4401/4403/4404.
+тикет, проверяет `Origin` (= `PUBLIC_BASE_URL`; dev-origin добавляет C через `origins`) **до** погашения тикета и помечает его использованным при успехе. До рукопожатия отказы — HTTP 401 (тикет), 403 (Origin), 404 (путь/сессия); после — закрытие 1008/1009/1002.
 Второе подключение к сессии вытесняет первое только по новому тикету. Закрытие потока не отменяет сессию (idle-таймер идёт); `cancel` — отменяет.
 
 Сервер → клиент: **binary** — один JPEG-кадр на сообщение (размер из последнего `hello`/`resize`); **text JSON**:
@@ -81,9 +82,12 @@ Disconnect подключения отменяет его активную се�
   calendarUrl? }                                // по согласию, см. ADR-0004
 ```
 
+- `identityDigest` (формула A): `sha256(origin + '|' + id)` в hex, первые 32 знака; `id` — `M.cfg.userId` (Moodle) либо `sub|id|userId` ответа same-origin пробы пресета (`/api/account/me` у ЦУ, `/api/get-user` у ЕЛК). При повторном входе менеджер сравнивает со старым значением: другой аккаунт → `replaceSession(…, {clearData:true})`.
+- Менеджер отдаёт задаче B наблюдения (`createSourceService(...).learn({userId, connectionId, observations})`): JSON-ответы XHR/fetch (GET, 200, ≤ 256 КБ, до 80 штук) разрешённых хостов, только в памяти, после записи сессии, best effort; сам менеджер их не хранит.
+- Успех входа для пресета = нужный путь + учётные данные (cookie по имени/любые, bearer при `requireBearer`) **и** проба в странице под её же сессией: Moodle `M.cfg.userId ≠ 0` (анонимный `MoodleSession` выдаётся и гостю) либо `GET` проба пресета.
 - Не сохраняются: весь `localStorage`/`sessionStorage` целиком, IndexedDB, HTML, скриншоты, заголовки кроме `Authorization`, refresh-токены (пока пресет не включил `allowRefresh` и рецепт не описал обновление).
 - Bearer выбирается правилом: значение, которое **браузер сам отправлял** в `Authorization` на API origin источника (приоритет), либо ключ storage, совпавший с этим значением; произвольные JWT из storage не берутся.
-- Запись — `store.replaceSession(userId, connectionId, session, {clearData:boolean})`: `setSecret` без удаления jobs; снимки/документы не трогаются (reauth), кроме `clearData:true` при смене `identityDigest`. Исполнитель sync читает секрет только внутри задачи.
+- Запись — `store.replaceSession(userId, connectionId, session, {clearData:boolean})` (реализовано; переходно кладёт `calendarUrl` ещё и на верхний уровень секрета, где его читает календарный исполнитель ADR-0004): `setSecret` без удаления jobs; снимки/документы не трогаются (reauth), кроме `clearData:true` при смене `identityDigest`. Исполнитель sync читает секрет только внутри задачи.
 - Удаление: disconnect (каскад), новая сессия (замена), истечение `expiresAt` (секрет остаётся до замены, но sync не использует и ставит `user_action_required`).
 - Cookie header формируется исполнителем по домену/пути/secure; запрос уходит только на origin, связанный с подключением; редиректы не следуются на другой origin с секретом.
 
@@ -139,7 +143,7 @@ LLM-агент — резерв, когда нет детерминирован�
 
 ## 9. Рантайм Chromium в проде
 
-Зависимость `playwright-core` (бэкенд) и Chromium на хосте (`CHROMIUM_PATH` или `npx playwright install --with-deps chromium` на хосте-сервисе, не в общем окружении). Запас ОЗУ 400 МБ на активную сессию × 3; `--disable-dev-shm-usage` или `/dev/shm` ≥ 256 МБ;
+Зависимость `playwright-core` (бэкенд) и Chromium на хосте. Переменные: `CHROMIUM_PATH` (исполняемый файл), `CHROMIUM_SANDBOX=0` (отключить OS-sandbox, только в контейнере без user namespaces), `CHROMIUM_HEADED=1` (видимое окно, только для локальной проверки владельца). Установка (`CHROMIUM_PATH` или `npx playwright install --with-deps chromium` на хосте-сервисе, не в общем окружении). Запас ОЗУ 400 МБ на активную сессию × 3; `--disable-dev-shm-usage` или `/dev/shm` ≥ 256 МБ;
 сервис — непривилегированный пользователь, лимиты cgroup (память/CPU/процессы), исходящий HTTPS только к хостам пресетов (фильтр на хосте поверх прокси), без `--no-sandbox` вне контейнера с seccomp; временный профиль в `tmpfs`, удаляется при закрытии. Без Chromium менеджер возвращает `LOGIN_UNAVAILABLE`, а `authMethods` не предлагает `remote_login`/`sso_password`.
 Деплой не входит в эти задачи; изменения runbook — отдельным PR ([deployment.md](../deployment.md)).
 
@@ -147,7 +151,7 @@ LLM-агент — резерв, когда нет детерминирован�
 
 | Задача | Владеет | Не трогает |
 |---|---|---|
-| **A** — менеджер browser-сессий: remote browser, CDP-кадры, WebSocket, password+MFA, пресеты входа ВШЭ/ЦУ, egress-прокси, `StoredSession` | `backend/src/login/**` (кроме stub-экспортов, которые сохраняют форму), `backend/test/login*.test.mjs`, `backend/test/fixtures/login/**`, `store.replaceSession` (`backend/src/store.mjs`, только этот метод), `backend/package.json` (`playwright-core`) | `sources/learned.mjs`, `jarvis-app/web/**` |
+| **A** (реализовано) — менеджер browser-сессий: remote browser, CDP-кадры, WebSocket, password+MFA, пресеты входа ВШЭ/ЦУ, egress-прокси, `StoredSession` | `backend/src/login/**` (кроме stub-экспортов, которые сохраняют форму), `backend/test/login*.test.mjs`, `backend/test/fixtures/login/**`, `store.replaceSession` (`backend/src/store.mjs`, только этот метод), `backend/package.json` (`playwright-core`) | `sources/learned.mjs`, `jarvis-app/web/**` |
 | **B** — learned recipes, sync по сохранённой сессии, reauth, agent retrieval | `backend/src/sources/learned.mjs`, `backend/src/sources/session-sync.mjs` (новый), `backend/src/sources/agent.mjs` (новый), `backend/src/sources/index.mjs` (ветка выбора исполнителя), `network.mjs` (режим запроса с сессией), `backend/test/learned*.test.mjs`, `backend/test/session-sync*.test.mjs`, `deepseek.mjs` | `backend/src/login/**`, `jarvis-app/web/**` |
 | **C** — UI Mini App на `/api/v1`, просмотрщик удалённого браузера, dev-авторизация | `jarvis-app/web/**` (включая `src/api/v1.ts`), `tests/e2e/**`, `backend/src/dev-auth.mjs`, `docs/DEVELOPMENT.md` (раздел локального запуска) | остальной `backend/**` |
 

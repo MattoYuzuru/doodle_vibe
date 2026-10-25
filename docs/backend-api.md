@@ -52,9 +52,10 @@ connection status, старые данные не исчезают. UI пока�
 Dev-авторизация: при `DOODLE_DEV_AUTH=1` (только loopback `HOST`, без `PUBLIC_BASE_URL`, не production) запросы без `x-telegram-init-data`
 получают одного синтетического пользователя, а same-origin `Origin` на loopback принимается; см. [локальный запуск](DEVELOPMENT.md).
 
-## Planned: login-сессии, удалённый браузер и выученные рецепты
 
-Статус **planned**: маршруты ниже не реализованы (в коде только заглушки `backend/src/login`), контракт — в
+## Login-сессии, удалённый браузер и выученные рецепты
+
+Статус: маршруты login-сессий **реализованы** (`backend/src/login`, фикстуры с настоящим Chromium; без Chromium на хосте — `LOGIN_UNAVAILABLE`, `authMethods` их не предлагает); чтение данных по сохранённой сессии и выученные рецепты (`recipe.version = 2`) — **planned** (задача B). Контракт — в
 [auth-sessions-contract.md](architecture/auth-sessions-contract.md), решение — [ADR-0005](adr/0005-remote-browser-login-and-learned-recipes.md),
 типы — `LoginSession`, `StoredSession`, `LearnedRecipe` в [contracts](../backend/contracts.d.ts). Вход любым способом (SSO, MFA, CAPTCHA) выполняет человек в
 удалённом браузере; пароль не хранится, хранится только зашифрованная сессия.
@@ -63,12 +64,13 @@ Dev-авторизация: при `DOODLE_DEV_AUTH=1` (только loopback `H
 |---|---|
 | POST `/api/v1/connections/:id/login` | `{mode:'interactive'}` либо `{mode:'password',username,password,keepCalendar?}` → 201 `{login}` |
 | GET `/api/v1/login/:id` | `{login}` — состояние, TTL, `mfa:{kind,attemptsLeft}` |
-| POST `/api/v1/login/:id/mfa` · `/handoff` · `/cancel` | `{code}` / `{}` / `{}` → `{login}` |
+| POST `/api/v1/login/:id/mfa` · `/handoff` · `/done` · `/cancel` | `{code}` / `{}` / `{}` / `{}` → `{login}` |
 | POST `/api/v1/login/:id/ticket` | `{ticket,expiresAt,path}` — одноразовый тикет WebSocket (30 с) |
 | GET `/api/v1/login/:id/stream?ticket=…` | WebSocket: JPEG-кадры сервер→клиент, мышь/клавиатура клиент→сервер |
 | GET `/api/v1/connections/:id` | дополнительно `login` (активная сессия или null); `authMethods` включает `remote_login` и `sso_password`, когда на сервере есть Chromium |
 
-Ошибки login-маршрутов: `LOGIN_UNAVAILABLE` 409, `LOGIN_COOLDOWN` 429, `LOGIN_BUSY` 429, `LOGIN_NOT_WAITING_MFA` 409.
+Ошибки login-маршрутов: `LOGIN_UNAVAILABLE` 409, `LOGIN_COOLDOWN` 429, `LOGIN_BUSY` 429, `LOGIN_NOT_WAITING_MFA` 409, `LOGIN_NOT_COMPLETE` 409.
+Успешный вход сохраняет зашифрованную сессию и ставит `sync`-job; до подключения чтения по сессии (задача B) такой sync возвращает `source_auth_required`, если не сохранена ссылка календаря (`keepCalendar`).
 Коды источников: `source_session_expired`, `source_login_failed`, `source_bot_protection`, `source_login_unrecognized`, `source_login_form_ambiguous`, `mfa_failed`, `mfa_expired`, `login_credentials_lost`.
 Выученный рецепт (`recipe.version = 2`) — адаптер общий на origin без личных данных; sync по нему использует токены конкретного пользователя.
 

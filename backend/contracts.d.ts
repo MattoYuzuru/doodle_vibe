@@ -59,7 +59,7 @@ export type StreamClientMessage =
   | { type: 'key'; action: 'down' | 'up'; key: string; code?: string }
   | { type: 'text'; text: string } | { type: 'resize'; width: number; height: number } | { type: 'ping' };
 /** HTTP error codes of the login routes. */
-export type LoginErrorCode = 'LOGIN_UNAVAILABLE' | 'LOGIN_COOLDOWN' | 'LOGIN_BUSY' | 'LOGIN_NOT_WAITING_MFA' | 'RATE_LIMITED';
+export type LoginErrorCode = 'LOGIN_UNAVAILABLE' | 'LOGIN_COOLDOWN' | 'LOGIN_BUSY' | 'LOGIN_NOT_WAITING_MFA' | 'LOGIN_NOT_COMPLETE' | 'RATE_LIMITED';
 /** connection/job errorCodes added by login and sync-by-session. */
 export type LoginSourceErrorCode = 'source_session_expired' | 'source_login_failed' | 'source_bot_protection' | 'source_login_unrecognized'
   | 'source_login_form_ambiguous' | 'mfa_failed' | 'mfa_expired' | 'login_credentials_lost';
