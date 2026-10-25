@@ -109,9 +109,12 @@ export function normalizeRecipe(recipe, parsed, { connection, fetchedAt, url }) 
     const ancestors = [envelope];
     for (const key of recipe.itemsPath?.split('.') ?? []) { envelope = envelope?.[key]; ancestors.push(envelope); }
     for (const envelope of ancestors.filter(plain)) {
-      const partial = ['next', 'nextPage', 'next_page', 'nextPageToken', 'continuation', 'has_more', 'hasMore', 'partial', 'truncated', 'pagination'].some(key => !!envelope[key]);
-      const total = envelope.total ?? envelope.total_count ?? envelope.totalCount;
-      if (partial || envelope.complete === false || (typeof total === 'number' && total > (rows?.length ?? 0))) throw new AppError('source_mapping_required', 400);
+      const partial = ['next', 'nextPage', 'next_page', 'nextPageToken', 'nextCursor', 'next_cursor', 'nextToken', 'next_token', 'continuation', 'continuationToken', 'continuation_token', 'has_more', 'hasMore', 'hasNextPage', 'partial', 'truncated', 'pagination', 'paging', 'pageInfo'].some(key => !!envelope[key]);
+      const pageMarker = ['page', 'page_number', 'pageNumber', 'offset', 'cursor'].some(key => Object.hasOwn(envelope, key));
+      const nextLink = envelope.links?.next || envelope._links?.next;
+      const rawTotal = envelope.total ?? envelope.total_count ?? envelope.totalCount;
+      const total = typeof rawTotal === 'string' && /^\d+$/.test(rawTotal) ? Number(rawTotal) : rawTotal;
+      if (partial || pageMarker || nextLink || envelope.complete === false || (typeof total === 'number' && total > (rows?.length ?? 0))) throw new AppError('source_mapping_required', 400);
     }
   }
   if (!Array.isArray(rows) || rows.length > 1000) throw new AppError('source_mapping_required', 400);

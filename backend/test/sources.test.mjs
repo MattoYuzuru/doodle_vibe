@@ -189,7 +189,7 @@ test('paginated/partial public envelopes preserve the previous complete snapshot
   const f = fixture(); let response = json({ events: [event] });
   const service = createSourceService({ store: f.store, request: async () => response });
   await service.discover(args); const previous = f.snapshots.get('schedule');
-  for (const marker of [{ next: '/?page=2' }, { has_more: true }, { partial: true }, { complete: false }, { total_count: 2 }, { pagination: { page: 1, pages: 2 } }]) {
+  for (const marker of [{ next: '/?page=2' }, { has_more: true }, { partial: true }, { complete: false }, { total_count: 2 }, { total_count: '2' }, { next_cursor: 'next-page' }, { page: 1 }, { links: { next: '/page-2' } }, { pagination: { page: 1, pages: 2 } }]) {
     response = json({ events: [{ ...event, title: 'Partial new data' }], ...marker });
     assert.equal((await service.sync(args)).status, 'user_action_required'); assert.deepEqual(f.snapshots.get('schedule'), previous);
   }
