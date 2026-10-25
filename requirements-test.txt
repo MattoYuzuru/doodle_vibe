@@ -1,0 +1,4 @@
+# Synthetic XLS/XLSX test fixtures; install into an isolated virtual environment.
+et_xmlfile==2.0.0
+openpyxl==3.1.5
+xlrd==2.0.2

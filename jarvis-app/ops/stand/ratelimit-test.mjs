@@ -1,5 +1,4 @@
-import { pathToFileURL } from "node:url";
-const r = await import(pathToFileURL("C:/Users/User/moodle-work/jarvis-app/ratelimit.mjs").href);
+const r = await import(new URL("../../ratelimit.mjs", import.meta.url));
 let fails = 0; const check = (n, c, e = "") => { if (!c) fails++; console.log((c ? "PASS" : "FAIL") + "  " + n + (e ? "  | " + e : "")); };
 const t0 = 1e12;
 const a = [1, 2, 3, 4].map(() => r.hit("k", 3, 1000, t0));

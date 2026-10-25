@@ -1,8 +1,6 @@
 // Проверка правил «Риск по посещаемости» (attendance.mjs journalAlerts) на образцах данных журнала, без сети.
 // Запуск: MOODLE_DIRECT=0 node attendance-test.mjs
-import { pathToFileURL } from "node:url";
-
-const { journalAlerts, toAsk, withoutNotMine, dropStaleNo, pruneAsk, askText, askButtons } = await import(pathToFileURL("C:/Users/User/moodle-work/jarvis-app/attendance.mjs").href);
+const { journalAlerts, toAsk, withoutNotMine, dropStaleNo, pruneAsk, askText, askButtons } = await import(new URL("../../attendance.mjs", import.meta.url));
 let fails = 0;
 const check = (name, cond, extra = "") => { if (!cond) fails++; console.log((cond ? "PASS" : "FAIL") + "  " + name + (extra ? "  | " + extra : "")); };
 
