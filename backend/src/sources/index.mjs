@@ -6,28 +6,33 @@ import { syncCalendar } from './ical.mjs';
 import { syncRuz } from './ruz.mjs';
 import { describeAuthMethods } from './presets.mjs';
 import { typedRecipe, resolveTyped, probeMoodle, identifyOtherLms } from './detect.mjs';
+import { storedSessionOf, syncWithSession } from './session-sync.mjs';
+import { createAgentRetriever } from './agent.mjs';
+import { learnAndActivate } from './learned.mjs';
 
 export { safeRequest, validateSourceUrl, createBoundTokenRequest } from './network.mjs';
 export { describeAuthMethods } from './presets.mjs';
 const actionCodes = new Set(['source_auth_required', 'source_auth_redirect', 'source_mapping_required', 'source_format_unsupported', 'source_recipe_invalid', 'source_format_changed', 'source_network_restricted', 'source_identifier_not_found', 'source_identifier_ambiguous', 'source_lms_unsupported']);
 const locks = new WeakMap();
 
-export function createSourceService({ store, request = safeRequest, proposeRecipe, now = Date.now }) {
+// `agentModel` (needs `agentStep`) enables the agent fallback; `proposeLearnedRecipe(shapes)` is the optional shape-only model for learning.
+export function createSourceService({ store, request = safeRequest, proposeRecipe, proposeLearnedRecipe, agentModel, now = Date.now }) {
   if (!store || typeof request !== 'function') throw new TypeError('source dependencies required');
+  const agent = createAgentRetriever({ model: agentModel, now });
   if (!locks.has(store)) locks.set(store, new Map());
   const active = locks.get(store);
   async function read(url, options) {
     // Fixtures bypass production sockets only. URL validation, bounded responses,
     // status handling, origin binding and all executor checks remain enabled.
-    validateSourceUrl(url, { allowSecretQuery: options?.secretUrl });
+    validateSourceUrl(url, { allowSecretQuery: options?.secretUrl || !!options?.session });
     let timer;
     try {
       const result = await Promise.race([request(url, options), new Promise((_, reject) => {
         timer = setTimeout(() => reject(new AppError('source_timeout', 504)), TIMEOUT_MS);
       })]);
       if (result?.url) {
-        const final = validateSourceUrl(result.url, { allowSecretQuery: options?.secretUrl });
-        if ((options?.authenticated || options?.secretUrl) && final.origin !== new URL(url).origin) throw new AppError('source_auth_redirect', 400);
+        const final = validateSourceUrl(result.url, { allowSecretQuery: options?.secretUrl || !!options?.session });
+        if ((options?.authenticated || options?.secretUrl || options?.session) && final.origin !== new URL(url).origin) throw new AppError('source_auth_redirect', 400);
       }
       return result;
     } finally { clearTimeout(timer); }
@@ -51,6 +56,9 @@ export function createSourceService({ store, request = safeRequest, proposeRecip
     const origin = url.origin;
     const fetchedAt = new Date(now()).toISOString();
     try {
+      // A stored browser session (ADR-0005) selects the recipe / agent executors instead of the typed token flows.
+      const session = storedSessionOf(store.readSecret(userId, connection.id), origin);
+      if (session) return persist(connection, userId, await syncWithSession({ store, request: read, userId, connection, session, fetchedAt, now: now(), agent }));
       // Known universities are presets (data); any other origin is typed only after a
       // positive identification (Moodle probe, iCal feed) and remembered as an adapter.
       let adapter = connection.adapterId ? store.getAdapter(connection.adapterId) : store.findAdapter(origin);
@@ -144,5 +152,14 @@ export function createSourceService({ store, request = safeRequest, proposeRecip
     active.set(key, pending);
     return pending;
   }
-  return { discover: args => run(args, 'discover'), sync: args => run(args, 'sync') };
+  // Learn this origin from what the login observed (in memory): candidate -> lint -> canary on the observer's session -> revision.
+  async function learn({ userId, connectionId, observations }) {
+    const connection = store.getConnection(userId, connectionId);
+    const origin = validateSourceUrl(connection.sourceUrl).origin;
+    const session = storedSessionOf(store.readSecret(userId, connection.id), origin);
+    if (!session) throw new AppError('source_auth_required', 401);
+    const learned = await learnAndActivate({ store, observations, session, request: read, origin, now: now(), auth: session.bearer && !session.cookies?.length ? 'bearer' : 'cookie', propose: proposeLearnedRecipe });
+    return learned ? { learned: true, created: learned.created, revision: learned.recipe.revision, adapterId: learned.adapter.id } : { learned: false };
+  }
+  return { discover: args => run(args, 'discover'), sync: args => run(args, 'sync'), learn };
 }

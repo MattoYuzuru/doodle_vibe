@@ -14,6 +14,7 @@ platform fixtures для пространств, discovery, auth, jobs и retrie
 | Platform | `npm run test:platform` | SQLite, ACL 2×2, crypto, Telegram HMAC, jobs/fencing/restart, SSRF, OAuth/refresh и retrieval/chat | Живые вузовские аккаунты и ответы настоящей модели |
 | Deploy | `npm run test:deploy` | Release, health gate, backup и rollback в фикстурах | Работоспособность реального сервера |
 | Browser smoke | `npm run build`, `npm run test:e2e` | Запуск собранного UI и выбранные действия пользователя с fixture API | Полный production E2E или новую многовузовскую архитектуру |
+| Chromium runtime | `npm run test:chromium` | Запуск Chromium с sandbox, рендер `data:`-страницы и кадр CDP screencast без внешней сети; тот же скрипт после деплоя на mnema | Вход в вуз, SSO/MFA и стабильность долгих сессий |
 | Live acceptance | Отдельный согласованный сценарий | Конкретный разрешённый аккаунт/источник в зафиксированное время | Все роли, факультеты, вузы и бессрочную работоспособность |
 
 `npm run ci` последовательно запускает обязательный автоматический набор.
@@ -50,6 +51,10 @@ platform fixtures для пространств, discovery, auth, jobs и retrie
 Источники вузов (`backend/test/universities.test.mjs`): iCal-разбор, РУЗ, Moodle за SSO, секретный feed-URL и HTTP-формы входа
 проверены на синтетических фикстурах; формат ответа РУЗ и реальные ответы `edu.hse.ru` остаются live-приёмкой владельца.
 
+Сессионный sync (`backend/test/learned*.test.mjs`, `session-sync*.test.mjs`, фикстуры `backend/test/fixtures/session-sync`): настоящий `createSafeRequest` в режиме сессии поверх loopback-сервера — lint личных данных,
+обучение рецепта, sync двух пользователей по общему рецепту, протухание (401, редирект на логин, HTML-форма, `servicerequireslogin`, `expiresAt`), сбой формата и откат, Moodle AJAX seed и агент с инъекцией из страницы.
+Seed ЦУ/ВШЭ и поведение живого SSO этим не подтверждены.
+
 Критичные platform-сценарии: два пользователя × два пространства; общая версия
 адаптера при разных сессиях; одинаковые внешние ID двух источников; отключение
 подключения во время sync; удаление записи из памяти и поискового индекса.
@@ -67,6 +72,9 @@ platform fixtures для пространств, discovery, auth, jobs и retrie
 действии маскота, ни один элемент экранов вузов не выходит за ширину 320/390/768 px и 195 px
 (390 px при масштабе страницы 200 %) с длинным русским текстом, `aria-live` не объявляет отсчёт.
 Экранный диктор и настоящий телефон этим не проверяются.
+
+`tests/e2e/connect-hse.spec.mjs` — подключение ВШЭ на синтетическом `/api/v1`: Smart LMS ссылкой
+календаря и логином (с пометкой про SSO), РУЗ по идентификатору и отказ вне сети ВШЭ.
 
 Web unit-тесты лежат в `jarvis-app/web/tests/*.test.mjs` и запускаются через
 `node --test` с загрузчиком `scripts/web-ts-hooks.mjs` (Node сам убирает типы;

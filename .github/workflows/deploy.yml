@@ -85,6 +85,17 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/doodle-known-hosts" \
             -o ConnectTimeout=15 "doodle-deploy@$DEPLOY_HOST" \
             "install $RELEASE_SHA $digest" < "$RUNNER_TEMP/release.tar.gz"
+      - name: Chromium runtime smoke on the active release
+        env:
+          DEPLOY_HOST: ${{ vars.DOODLE_DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          ssh -T -i "$HOME/.ssh/doodle-deploy" \
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/doodle-known-hosts" \
+            -o ConnectTimeout=15 "doodle-deploy@$DEPLOY_HOST" \
+            "smoke $RELEASE_SHA" < /dev/null
       - name: Remove runner identity
         if: always()
         run: rm -f "$HOME/.ssh/doodle-deploy" "$HOME/.ssh/doodle-known-hosts"
