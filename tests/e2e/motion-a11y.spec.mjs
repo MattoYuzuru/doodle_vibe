@@ -17,9 +17,11 @@ test("reduced motion: the fire stays as a still sign, the mascot does not move",
   await expect(page.getByText(/Горит · [45] ч/)).toBeVisible();
 });
 
+// Машины CI (4 ядра) приложение считает слабыми и включает облегчённый режим без анимаций (lib/perf.ts). Тесты,
+// которым нужно видеть, как движение останавливается, выключают его явно: ?lite=0.
 test("the calm mascot switch stops animation, keeps the meaning and survives a reload", async ({ page }) => {
   await platformApi(page);
-  await page.goto("/");
+  await page.goto("/?lite=0");
   await expect(page.locator('[data-accent-layer="fire"]')).toBeVisible();
   expect(await fireAnimation(page)).not.toBe("none");
   const pause = page.getByRole("button", { name: "Остановить анимацию маскота" });
@@ -35,7 +37,7 @@ test("the calm mascot switch stops animation, keeps the meaning and survives a r
 
 test("a hidden tab pauses the mascot and resumes when visible again", async ({ page }) => {
   await platformApi(page);
-  await page.goto("/");
+  await page.goto("/?lite=0");
   await expect(page.locator('[data-accent-layer="fire"]')).toBeVisible();
   const setVisibility = (state) => page.evaluate((s) => {
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => s });
@@ -82,10 +84,17 @@ for (const width of [320, 390, 768, 195]) {
       return r.width > 0 && (r.left < -0.5 || r.right > window.innerWidth + 0.5);
     }).map((n) => n.tagName + "." + String(n.className).slice(0, 40)));
     await expect.poll(() => outside("[data-space-home]")).toEqual([]);
-    await page.getByRole("button", { name: "Дедлайны" }).first().click();
-    await expect(page.locator("[data-space-deadlines]").getByText(LONG)).toBeVisible();
+    // На 195 px подписи нижней панели налезают друг на друга, и на медленной машине нажатие может не переключить
+    // вкладку — повторяем, пока вкладка «Дедлайны» не откроется.
+    await expect(async () => {
+      await page.getByRole("button", { name: "Дедлайны" }).first().click();
+      await expect(page.locator("[data-space-deadlines]").getByText(LONG)).toBeVisible({ timeout: 1500 });
+    }).toPass({ timeout: 15_000 });
     // Лента вкладок доезжает анимацией — ждём, пока экран встанет на место.
     await expect.poll(() => outside("[data-space-deadlines]")).toEqual([]);
+    // Название работы не сжато соседями до нуля (в CI на Linux так и было: видны были только сроки).
+    const titleWidth = await page.locator("[data-space-deadlines]").getByText(LONG).evaluate((el) => el.getBoundingClientRect().width);
+    expect(titleWidth).toBeGreaterThanOrEqual(100);
   });
 }
 
