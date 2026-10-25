@@ -28,6 +28,13 @@ DES-001–DES-010, не описание уже работающего API. Вх
 в контекст — необязательный `acknowledgedEventIds` для дедупликации реакции.
 Реестр событий (`eventRegistry`) добавит DES-007 вторым параметром конфигурации.
 
+Отрисовка (DES-005) — `components/assistant/`: `sprites.ts` (спрайты Дуси и Вари, неизвестный
+персонаж → Дуся), `pose.ts` (статус → кадры глаз, значки, анимация), `MascotSprite.tsx`
+(только props, фиксированный размер, `aria-hidden`, при `motion` static/paused без анимации) и
+`MascotCard.tsx` (имя, реплика, одно действие; intent уходит наверх через `onIntent`).
+`OwlAssistant.tsx` берёт спрайт Дуси оттуда же, его поведение не менялось. Каталог —
+`/mascot-catalog.html` в dev-режиме, см. [разработку](../DEVELOPMENT.md).
+
 Предлагаемый `AssistantContext` содержит:
 
 ```ts

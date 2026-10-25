@@ -14,79 +14,19 @@ import { useAppStore } from "../store/useAppStore";
 import { lite, setLite } from "../lib/perf";
 import { addToHomeScreen, haptic, homeScreenStatus, setScheme } from "../telegram/webapp";
 import { TABBAR_H } from "./TabBar";
+import { type Eyes, spriteFor } from "./assistant/sprites";
 
 /*
  * Сова Дуся — помощник в правом нижнем углу, на месте прежнего «+» (18 окт 2026). Нажатие — реплика по ситуации (дедлайн, пара, пропуски,
  * ночь, всё сдано, совет) и анимация; ещё нажатие — следующая фраза. Сама не всплывает: только точка на сове
  * (красная — горит дедлайн, жёлтая — совет про пару или пропуски), и после просмотра точка гаснет до завтра.
- * Пиксельный спрайт 24×24 собирается один раз строкой SVG; анимации — CSS-кадры steps() в index.css (owl-*),
+ * Пиксельный спрайт 24×24 (components/assistant/sprites.ts) собирается один раз строкой SVG; анимации — CSS-кадры steps() в index.css (owl-*),
  * в облегчённом режиме и при «уменьшить движение» сова стоит.
  */
 
 type Mood = "deadline" | "overdue" | "class" | "skips" | "night" | "morning" | "friday" | "done" | "tip" | "party";
-type Eyes = "open" | "up" | "closed" | "half" | "happy" | "wide" | "stern";
 /** Сценки поверх обычной реплики: праздник за сданное, «щекотно» после частых нажатий, «серьёзная сова» после неё, новое звание. */
 type Special = { kind: "party"; title: string } | { kind: "tickle"; lines: string[]; step: number } | { kind: "calm" } | { kind: "rank"; title: string; count: number };
-
-// ---------- спрайт ----------
-const N = 24;
-type Px = [number, number, string];
-function layer() {
-  const g: Px[] = [];
-  const api = {
-    set(x: number, y: number, c: string) { if (x >= 0 && y >= 0 && x < N && y < N) g.push([x, y, c]); return api; },
-    rect(x: number, y: number, w: number, h: number, c: string) { for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) api.set(x + i, y + j, c); return api; },
-    ell(cx: number, cy: number, rx: number, ry: number, c: string) {
-      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry; if (dx * dx + dy * dy <= 1) api.set(x, y, c); }
-      return api;
-    },
-    pts(a: [number, number][], c: string) { a.forEach(([x, y]) => api.set(x, y, c)); return api; },
-    svg() { return g.map(([x, y, c]) => `<rect x="${x}" y="${y}" width="1.02" height="1.02" fill="${c}"/>`).join(""); },
-  };
-  return api;
-}
-const B = "#2f7bf6", BD = "#1f66e0", L = "#6aa2ff", S = "#a9cbff", W = "#ffffff", K = "#0a1a4a", BEAK = "#ffc23d", BEAK2 = "#e09a12";
-const g = (attrs: string, inner: string) => `<g ${attrs}>${inner}</g>`;
-
-function sprite(dark: boolean, nightcap: boolean) {
-  const ink = dark ? W : K, cap = dark ? W : K, tas = dark ? S : BD, feet = dark ? W : K;
-  const disc = (l: ReturnType<typeof layer>, x: number, y = 11, h = 4) => l.rect(x, y, 4, h, W);
-  const eyes: Record<Eyes, () => ReturnType<typeof layer>> = {
-    open: () => { const l = layer(); disc(l, 7); disc(l, 13); return l.rect(8, 12, 2, 2, K).rect(14, 12, 2, 2, K); },
-    up: () => { const l = layer(); disc(l, 7); disc(l, 13); return l.rect(8, 11, 2, 2, K).rect(14, 11, 2, 2, K); },
-    half: () => { const l = layer(); disc(l, 7, 13, 2); disc(l, 13, 13, 2); return l.rect(7, 12, 4, 1, K).rect(13, 12, 4, 1, K).rect(8, 13, 2, 1, K).rect(14, 13, 2, 1, K); },
-    closed: () => layer().rect(7, 13, 4, 1, K).rect(13, 13, 4, 1, K),
-    happy: () => layer().pts([[7, 13], [8, 12], [9, 12], [10, 13]], K).pts([[13, 13], [14, 12], [15, 12], [16, 13]], K),
-    wide: () => { const l = layer(); disc(l, 7, 10, 5); disc(l, 13, 10, 5); return l.set(8, 12, K).set(15, 12, K); },
-    stern: () => { const l = layer(); disc(l, 7, 12, 3); disc(l, 13, 12, 3); return l.rect(8, 13, 2, 2, K).rect(14, 13, 2, 2, K).pts([[7, 10], [8, 10], [9, 11], [10, 11]], K).pts([[13, 11], [14, 11], [15, 10], [16, 10]], K); },
-  };
-  const props: Record<string, ReturnType<typeof layer>> = {
-    excl: layer().rect(20, 2, 2, 4, ink).rect(20, 7, 2, 1, ink),
-    sweat: layer().set(19, 9, tas).rect(19, 10, 2, 2, tas).set(20, 12, tas),
-    zzz: layer().pts([[18, 1], [19, 1], [20, 1], [19, 2], [18, 3], [19, 3], [20, 3]], tas).pts([[21, 4], [22, 4], [22, 5], [21, 6], [22, 6]], tas),
-    idea: layer().rect(19, 1, 3, 3, ink).set(20, 4, tas).pts([[18, 0], [22, 0], [17, 2], [23, 2]], tas),
-    q: layer().rect(19, 1, 3, 1, ink).set(22, 2, ink).rect(20, 3, 2, 1, ink).set(20, 4, ink).set(20, 6, ink),
-    spark: layer().pts([[2, 6], [1, 7], [2, 7], [3, 7], [2, 8]], tas).pts([[21, 9], [20, 10], [21, 10], [22, 10], [21, 11]], tas).pts([[3, 18], [2, 19], [3, 19], [4, 19], [3, 20]], tas),
-    clock: layer().rect(19, 1, 4, 4, ink).rect(20, 2, 2, 2, BD).set(21, 2, ink),
-    feather: layer().pts([[2, 11], [3, 12]], S).pts([[21, 12], [20, 13]], S).pts([[1, 17], [2, 18]], L).pts([[22, 18], [21, 19]], L),
-  };
-  const hat = nightcap
-    ? layer().rect(9, 7, 7, 1, W).rect(10, 5, 5, 2, S).rect(11, 4, 4, 1, S).rect(12, 3, 3, 1, S).rect(14, 2, 2, 1, S).set(16, 2, S).set(17, 3, S).rect(18, 3, 2, 2, W)
-    : layer().rect(9, 3, 6, 1, cap).rect(7, 4, 10, 1, cap).rect(9, 5, 6, 1, cap).rect(10, 6, 4, 2, cap).set(16, 5, tas).set(16, 6, tas).rect(15, 7, 2, 2, tas);
-  return (
-    g('class="owl-rig"',
-      g('class="owl-wing-l"', layer().rect(4, 14, 2, 5, BD).set(5, 19, BD).svg()) +
-      g('class="owl-wing-r"', layer().rect(18, 14, 2, 5, BD).set(18, 19, BD).svg()) +
-      g('class="owl-tufts"', layer().rect(6, 7, 2, 2, B).rect(16, 7, 2, 2, B).set(6, 6, B).set(17, 6, B).svg()) +
-      layer().ell(12, 15, 7.5, 7, B).svg() +
-      layer().ell(12, 19, 4, 2.8, L).pts([[10, 18], [12, 19], [14, 18]], S).svg() +
-      layer().rect(11, 15, 2, 1, BEAK).set(11, 16, BEAK).set(12, 16, BEAK2).svg() +
-      layer().rect(9, 22, 2, 1, feet).rect(13, 22, 2, 1, feet).svg() +
-      (Object.keys(eyes) as Eyes[]).map((k) => g(`data-eye="${k}"`, eyes[k]().svg())).join("") +
-      hat.svg()
-    ) + Object.entries(props).map(([k, l]) => g(`data-prop="${k}"`, l.svg())).join("")
-  );
-}
 
 // ---------- фразы ----------
 interface Ctx { mood: Mood; title?: string; left?: string; lesson?: string; place?: string; mins?: number; attendance?: number | null; absences?: number; deadlineId?: string; lessonsToday?: number; firstAt?: string }
@@ -230,7 +170,7 @@ export function OwlAssistant() {
   const p = mskParts(now);
   const night = p.hh >= 23 || p.hh < 5;
   const dark = useScheme() === "dark";
-  const svg = useMemo(() => sprite(dark, night), [dark, night]);
+  const svg = useMemo(() => spriteFor("dusya", { dark, nightcap: night }).svg, [dark, night]);
 
   // Ситуация — по приоритету: горит дедлайн → скоро пара → пропуски → ночь → утро → вечер пятницы → всё сдано → совет.
   const ctx: Ctx = useMemo(() => {

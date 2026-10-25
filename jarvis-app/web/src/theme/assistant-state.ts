@@ -132,6 +132,7 @@ type Say = { space: string | null; title: string; count: number };
 type Phrasebook = Record<AssistantStatus, (s: Say) => string> & { clear: () => string; undated: (s: Say) => string };
 
 const inSpace = (s: Say) => (s.space ? ` в ${s.space}` : "");
+const who = (s: Say) => s.space ?? "Сайт вуза";
 const more = (s: Say) => (s.count > 1 ? ` И ещё ${s.count - 1} рядом по сроку.` : "");
 
 const shared = {
@@ -148,7 +149,7 @@ const shared = {
 const PHRASES: Record<CharacterId, Phrasebook> = {
   dusya: {
     ...shared,
-    reauth: (s) => `Сайт${inSpace(s)} просит войти заново. Пока показываю то, что было.`,
+    reauth: (s) => `${who(s)} просит войти заново. Пока показываю то, что было.`,
     connecting: (s) => `Подключаю учёбу${inSpace(s)}…`,
     urgent: (s) => `«${s.title}» — осталось меньше суток.${more(s)}`,
     completed: () => "Ух! Сдано. Горжусь.",
@@ -158,7 +159,7 @@ const PHRASES: Record<CharacterId, Phrasebook> = {
   },
   varya: {
     ...shared,
-    reauth: (s) => `Сайт${inSpace(s)} просит войти заново. Пока держу в гнезде то, что было.`,
+    reauth: (s) => `${who(s)} просит войти заново. Пока держу в гнезде то, что было.`,
     connecting: (s) => `Тащу в гнездо учёбу${inSpace(s)}…`,
     urgent: (s) => `Кар! «${s.title}» — осталось меньше суток.${more(s)}`,
     completed: () => "Кар! Сдано. Утащила в гнездо.",

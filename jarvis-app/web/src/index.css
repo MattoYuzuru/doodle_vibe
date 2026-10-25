@@ -379,5 +379,16 @@ html.lite [data-tab-page][aria-hidden="true"] {
 @keyframes owl-fall { 0% { transform: translateY(-2px); opacity: 1; } 100% { transform: translateY(3px); opacity: 0; } }
 .owl-say-tickle { animation: owl-laugh 0.3s steps(1) infinite; }
 @keyframes owl-laugh { 50% { transform: translateY(-1px); } }
+/* Общий рендерер маскота (DES-005, components/assistant): значки Вари, щёлканье клювом и неподвижный режим
+   (motion static/paused из assistant-state — reduced motion, облегчённый и спокойный режимы, скрытая вкладка). */
+.owl.owl-p-bubbles [data-prop="bubbles"], .owl.owl-p-anger [data-prop="anger"] { display: inline; }
+.owl [data-prop="bubbles"] .b2 { animation: owl-appear 0.35s steps(1) both; }
+.owl [data-prop="bubbles"] .b3 { animation: owl-appear 0.9s steps(1) both; }
+@keyframes owl-appear { 0% { opacity: 0; } 100% { opacity: 1; } }
+.owl [data-prop="anger"] { transform-origin: 50% 50%; animation: owl-throb 0.3s steps(1) infinite; }
+@keyframes owl-throb { 50% { transform: scale(1.3); } }
+.owl-a-panic .varya-beak-l { animation: owl-chomp 0.3s steps(1) 6; }
+@keyframes owl-chomp { 50% { transform: translateY(1px); } }
+.owl.owl-static, .owl.owl-static * { animation: none !important; }
 html.lite .owl *, html.lite .owl, html.lite .owl-say-tickle { animation: none !important; }
 @media (prefers-reduced-motion: reduce) { .owl *, .owl-say-tickle { animation: none !important; } }
