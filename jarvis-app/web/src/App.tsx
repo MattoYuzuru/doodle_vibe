@@ -21,7 +21,11 @@ import { LoginScreen } from "./screens/Login";
 import { Onboarding, tourFromLink, tourUnseen } from "./components/Onboarding";
 import { PlanScreen } from "./screens/Plan";
 import { TaskFormScreen } from "./screens/TaskForm";
+import { usePlatformMode } from "./hooks/useSpace";
+import { ConnectScreen } from "./screens/space/Connect";
+import { SpaceCoursesScreen, SpaceDeadlinesScreen, SpaceHomeScreen, SpacePlanScreen } from "./screens/space/SpaceTabs";
 import { useAuth } from "./store/auth";
+import { usePlatform } from "./store/platform";
 import { useAppStore } from "./store/useAppStore";
 import { haptic, inTelegram } from "./telegram/webapp";
 import { spring } from "./theme/motion";
@@ -59,11 +63,16 @@ const CoursesScreen = lazy(() => loadCourses().then((mod) => ({ default: mod.Cou
 const TeachersScreen = lazy(() => loadTeachers().then((mod) => ({ default: mod.TeachersScreen })));
 export const preloadScreens = () => { for (const f of [loadDeadlineDetails, loadDeadlineForm, loadLab, loadProfile, loadAccess, loadEnv, loadCalendar, loadUsage, loadCheck, loadCourse, loadCourses, loadTeachers]) void f().catch(() => {}); };
 
+// Новый backend (DES-010): вкладки показывают выбранный вуз; со старым сервером МИСИС — прежние экраны.
+const HomeTab = () => (usePlatformMode() ? <SpaceHomeScreen /> : <HomeScreen />);
+const DeadlinesTab = () => (usePlatformMode() ? <SpaceDeadlinesScreen /> : <DeadlinesScreen />);
+const PlanTab = () => (usePlatformMode() ? <SpacePlanScreen /> : <PlanScreen />);
+const JournalTab = () => (usePlatformMode() ? <SpaceCoursesScreen /> : <JournalScreen />);
 const TAB_SCREENS: Record<Tab, () => React.ReactNode> = {
-  home: () => <HomeScreen />,
-  deadlines: () => <DeadlinesScreen />,
-  plan: () => <PlanScreen />,
-  journal: () => <JournalScreen />,
+  home: () => <HomeTab />,
+  deadlines: () => <DeadlinesTab />,
+  plan: () => <PlanTab />,
+  journal: () => <JournalTab />,
 };
 
 /**
@@ -89,6 +98,7 @@ function renderScreen(screen: Screen) {
     case "courses": return <CoursesScreen />;
     case "course": return <CourseScreen title={screen.title} subjectId={screen.subjectId} lesson={screen.lesson} />;
     case "deadline-form": return <DeadlineFormScreen id={screen.id} />;
+    case "connect": return <ConnectScreen spaceId={screen.spaceId} />;
   }
 }
 
@@ -427,8 +437,17 @@ export function App() {
   const stack = useNav((s) => s.stack);
   const exitDir = useUi((s) => s.exitDir);
   // Только сам вывод «нужен вход» (проверка 15 окт): подписка на весь useAuth перерисовывала App на каждый его set.
-  const needLogin = useAuth((s) => s.status === "ready" && s.profile !== null && !s.profile.loggedIn);
+  // С новым backend входа в Moodle нет: вуз и сайты подключаются на экране «Подключить учёбу».
+  const needLogin = useAuth((s) => s.status === "ready" && s.profile !== null && !s.profile.loggedIn && s.profile.platformApi !== "/api/v1");
+  const platform = usePlatformMode();
+  const profileSpaces = useAuth((s) => s.profile?.spaces);
   useEffect(() => { void init(); }, [init]);
+  // Вузы пришли вместе с профилем — сразу показываем их, свежий список догружается следом.
+  useEffect(() => {
+    if (!platform) return;
+    if (profileSpaces) usePlatform.getState().seed(profileSpaces);
+    void usePlatform.getState().loadSpaces();
+  }, [platform, profileSpaces]);
   useEffect(() => { const t = setTimeout(preloadScreens, 2500); return () => clearTimeout(t); }, []);
   useCompactOnScroll();
   useKeyboardFlag();
@@ -506,7 +525,8 @@ export function App() {
         <TabTrack />
       </main>
       <RefreshIndicator />
-      <OwlAssistant />
+      {/* С новым backend маскот — карточка на Главной (Варя или Дуся по вузу); плавающая Дуся читает данные Moodle. */}
+      {!platform && <OwlAssistant />}
       <TabBar />
       <Toast />
       <AnimatePresence custom={exitDir}>
