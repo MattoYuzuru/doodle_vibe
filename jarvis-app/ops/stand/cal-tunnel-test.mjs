@@ -1,9 +1,7 @@
 // Проверка решений cal-tunnel.mjs (plan): один агент ngrok на адрес, зомби останавливаются, терпение и пауза.
 // Без ngrok и сети — только чистая функция. Запуск: node cal-tunnel-test.mjs
-import { pathToFileURL } from "node:url";
-
 process.env.MOODLE_DIRECT ??= "0";
-const { plan, GRACE_MS, PATIENCE } = await import(pathToFileURL("C:/Users/User/moodle-work/jarvis-app/cal-tunnel.mjs").href);
+const { plan, GRACE_MS, PATIENCE } = await import(new URL("../../cal-tunnel.mjs", import.meta.url));
 let fails = 0;
 const check = (name, cond, extra = "") => { if (!cond) fails++; console.log((cond ? "PASS" : "FAIL") + "  " + name + (extra ? "  | " + extra : "")); };
 

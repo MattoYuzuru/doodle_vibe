@@ -5,6 +5,32 @@
 !/HANDOFF.md
 !/jarvis-app/
 !/ops/
+!/AGENTS.md
+!/CLAUDE.md
+!/README.md
+!/CONTRIBUTING.md
+!/docs/
+!/.github/
+!/scripts/
+!/tests/
+!/package.json
+!/package-lock.json
+!/requirements-test.txt
+!/.nvmrc
+!/.node-version
+!/playwright.config.mjs
+
+# Development tooling and synthetic test artifacts; never commit runtime secrets/state.
+.venv/
+artifacts/
+playwright-report/
+test-results/
+.env
+.env.*
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
 
 # --- секреты (никогда не добавлять) ---
 jarvis-app/bot-token.txt

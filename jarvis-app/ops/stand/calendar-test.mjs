@@ -1,8 +1,6 @@
 // Проверка формата ленты календаря (calendar.mjs) без сервера: события из образцов пар и работ → текст iCalendar.
 // Запуск: MOODLE_DIRECT=0 node calendar-test.mjs
-import { pathToFileURL } from "node:url";
-
-const cal = await import(pathToFileURL("C:/Users/User/moodle-work/jarvis-app/calendar.mjs").href);
+const cal = await import(new URL("../../calendar.mjs", import.meta.url));
 let fails = 0;
 const check = (name, cond, extra = "") => { if (!cond) fails++; console.log((cond ? "PASS" : "FAIL") + "  " + name + (extra ? "  | " + extra : "")); };
 
