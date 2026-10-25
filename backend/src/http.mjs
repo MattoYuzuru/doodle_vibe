@@ -5,6 +5,8 @@ import { extname, resolve, sep } from 'node:path';
 import { AppError } from './errors.mjs';
 import { verifyTelegramInitData } from './auth.mjs';
 import { createChatService } from './chat.mjs';
+import { buildSecret, AUTH_FIELDS } from './auth-input.mjs';
+import { authMethodsFor } from './sources/presets.mjs';
 
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 function fields(body, allowed) {
@@ -50,6 +52,8 @@ export function createApp({store, config, createSources, model = null, retrieveW
       'x-content-type-options':'nosniff','x-request-id':requestId});
     res.end(JSON.stringify(value));
   };
+  // Credential forms the executor supports for this origin, then operator OAuth providers.
+  const authMethods = connection => [...authMethodsFor(store,connection),...(oauth?.methods(connection)||[])];
   async function handler(req,res) {
     const requestId = randomUUID();
     try {
@@ -146,21 +150,11 @@ export function createApp({store, config, createSources, model = null, retrieveW
       if (match) {
         const [,connectionId,action] = match;
         const connection = store.getConnection(userId,connectionId);
-        if (!action && req.method === 'GET') return send(res,200,{connection:publicConnection(connection),authMethods:oauth?.methods(connection)||[]},requestId);
+        if (!action && req.method === 'GET') return send(res,200,{connection:publicConnection(connection),authMethods:authMethods(connection)},requestId);
         if (!action && req.method === 'DELETE') return send(res,200,store.deleteConnection(userId,connectionId),requestId);
         if (action === 'auth' && req.method === 'POST') {
           limit(userId,'jobs',15);
-          const body = fields(await readBody(req),['origin','token','username','password','service']);
-          if (body.origin !== new URL(connection.sourceUrl).origin) throw new AppError('SECRET_ORIGIN_MISMATCH');
-          const secret = {origin:body.origin};
-          if (body.token && !body.username && !body.password) secret.token = text(body.token,16000);
-          else if (body.username && body.password && !body.token) {
-            secret.username=text(body.username,500);
-            if(typeof body.password!=='string'||body.password.length>4000) throw new AppError('INVALID_AUTH_INPUT');
-            secret.password=body.password;
-            if(body.service) secret.service=text(body.service,100);
-          }
-          else throw new AppError('INVALID_AUTH_INPUT');
+          const secret = buildSecret(fields(await readBody(req),AUTH_FIELDS),connection.sourceUrl);
           store.resetConnectionAuth(userId,connectionId,secret);
           const job = store.enqueueJob(userId,connectionId,{type:'sync'});
           return send(res,202,{saved:true,job},requestId);

@@ -20,8 +20,8 @@ Backend реализован отдельно в `backend/`. Сохраняем 
 | GET / POST `/api/v1/spaces` | `{spaces}` / `{universityId,name}` → 201 `{space}` |
 | GET / DELETE `/api/v1/spaces/:id` | `{space}` / каскадное удаление |
 | GET / POST `/api/v1/spaces/:id/connections` | `{connections}` / `{sourceUrl,kind,label?}` → 202 `{connection,job}` |
-| GET / DELETE `/api/v1/connections/:id` | `{connection,authMethods}` / удаление доступа, задач и данных источника |
-| POST `/api/v1/connections/:id/auth` | `{origin,token}` либо `{origin,username,password,service?}` → 202 `{saved,job}` |
+| GET / DELETE `/api/v1/connections/:id` | `{connection,authMethods}` (формы входа исполнителя, затем OAuth) / удаление доступа, задач и данных источника |
+| POST `/api/v1/connections/:id/auth` | ровно одна форма: `{origin,token}`, `{origin,username,password,service?}`, `{origin,calendarUrl}` или `{origin,identifier}` → 202 `{saved,job}` |
 | POST `/api/v1/connections/:id/discover` или `/sync` | `{}` → 202 `{job}` |
 | GET `/api/v1/jobs/:id` | `{job}`; опрос до terminal status |
 | GET `/api/v1/spaces/:id/schedule`, `/deadlines`, `/courses` | `{spaceId,items,sources,connections}` |
@@ -41,11 +41,14 @@ connection status, старые данные не исчезают. UI пока�
 
 1. Создать пространство, затем один или несколько источников через `+`.
 2. API сразу ставит discovery-job. Произвольный новый вуз не требует релиза.
-3. Проверенный публичный HTML/JSON/CSV читается автоматически; неоднозначная
-   схема и страницы входа возвращают понятное требование действия.
-4. МИСИС Moodle: token либо username/password для штатного обмена token.php.
-   Пароль после успешного обмена удаляется; токен сохраняется зашифрованно.
-   На другом Moodle требуется положительное определение установки.
+3. Проверенный публичный HTML/JSON/CSV и публичный iCal (`text/calendar`) читаются автоматически;
+   неоднозначная схема и страницы входа возвращают понятное требование действия.
+4. Вузы-пресеты (МИСИС, ВШЭ) и любой Moodle, определённый положительно (маркеры либо структурированная ошибка
+   `token.php`/`server.php`, в том числе за SSO), отдают `user_action_required` с `authMethods`: token, username/password
+   (штатный обмен `token.php`, пароль после обмена удаляется), `calendarUrl` (личный экспорт календаря Moodle: дедлайны,
+   события, курсы по названиям). ВШЭ: Smart LMS `edu.hse.ru` — Moodle за SSO, поэтому первой предлагается ссылка календаря;
+   РУЗ `ruz.hse.ru` — `identifier` (почта/ФИО/номер), доступен только из сети ВШЭ (`source_network_restricted` вне её).
+   Подробности, статусы проверок и список неподтверждённого — [universities.md](universities.md).
 5. OAuth: только после регистрации client/callback оператором. Произвольный
    redirect не переносит cookie чужого домена. Продолжение должно оставаться
    в том же браузере с cookie; открытие другого браузера требует нового входа.
@@ -55,7 +58,7 @@ connection status, старые данные не исчезают. UI пока�
    если провайдер его выдал; revoked grant требует нового входа.
 
 ВШЭ и МИСИС — приоритет при live-приёмке. Фикстуры подтверждают протокол и
-границы безопасности, **не подтверждают живой вход** ВШЭ. Универсального
+границы безопасности, **не подтверждают живой вход** ВШЭ; локальная живая проверка владельца — в [universities.md](universities.md#живая-проверка-владельцем). Универсального
 обхода SSO/MFA/CAPTCHA нет. Рецепты — данные, исполнитель не запускает код/curl
 из ответа модели. Нет произвольного shell или доступа LLM к секретам.
 
