@@ -9,6 +9,7 @@ import { createStore } from '../src/store.mjs';
 import { createApp } from '../src/http.mjs';
 import { createWorker } from '../src/worker.mjs';
 import { createSourceService } from '../src/sources/index.mjs';
+import { createTelegramHandler } from '../src/telegram.mjs';
 
 const botToken = 'fixture-bot-token-only';
 const masterKey = Buffer.alloc(32, 71);
@@ -65,6 +66,21 @@ async function connection(h,id,sid,sourceUrl='https://university.example/schedul
   const result=await h.api(id,`/api/v1/spaces/${sid}/connections`,{method:'POST',body:{sourceUrl,kind:'lms'}});
   assert.equal(result.status,202);return result.body;
 }
+
+test('authenticated Telegram webhook returns welcome method without an outgoing API request',async t=>{
+  const store=createStore({dbPath:':memory:',masterKey});t.after(()=>store.close());
+  const server=createApp({store,config:{botToken,publicBaseUrl:origin,webhookSecret:'fixture-webhook-secret'},
+    onTelegram:createTelegramHandler({publicBaseUrl:origin})});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const url=`http://127.0.0.1:${server.address().port}/api/telegram/webhook`;
+  const update={update_id:101,message:{text:'/start',from:{id:1},chat:{id:1,type:'private'}}};
+  const post=secret=>fetch(url,{method:'POST',headers:{'content-type':'application/json','x-telegram-bot-api-secret-token':secret},body:JSON.stringify(update)});
+  assert.equal((await post('wrong')).status,404);
+  const accepted=await post('fixture-webhook-secret');assert.equal(accepted.status,200);
+  const reply=await accepted.json();assert.equal(reply.method,'sendMessage');assert.equal(reply.chat_id,1);
+  assert.deepEqual(await (await post('fixture-webhook-secret')).json(),{ok:true});
+});
 
  test('HTTP verifies real Telegram signatures and rejects missing, forged, expired and duplicate identities',async t=>{
   const h=await harness(t);

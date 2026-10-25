@@ -61,8 +61,8 @@ export function createApp({store, config, createSources, model = null, retrieveW
       }
       if (path === '/api/telegram/webhook' && req.method === 'POST') {
         if (!onTelegram || !sameSecret(req.headers['x-telegram-bot-api-secret-token'], config.webhookSecret)) throw new AppError('NOT_FOUND',404);
-        await onTelegram(await readBody(req));
-        return send(res,200,{ok:true},requestId);
+        const reply=await onTelegram(await readBody(req));
+        return send(res,200,reply||{ok:true},requestId);
       }
       if (path === '/api/v1/oauth/callback' && req.method === 'GET' && oauth) {
         const cookies = (req.headers.cookie||'').split(';').map(x=>x.trim()).filter(x=>x.startsWith('__Secure-doodle-oauth='));

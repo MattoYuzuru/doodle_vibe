@@ -57,6 +57,14 @@ the selected bot and public HTTPS URL. Preserve the external
 master key with encrypted database backups: losing it prevents credential recovery.
 Do not rotate it without a data re-encryption plan.
 
+The `/start` welcome uses Telegram’s supported inline webhook response:
+JSON `method: sendMessage` with the Mini App button. It does not require an
+outgoing connection from mnema to Telegram. The method result is unavailable;
+duplicate welcome replies are suppressed in memory for 24 hours (bounded to 2000
+updates). This is best-effort greeting delivery, not a transactional message queue.
+Future asynchronous notifications still require working outbound Bot API access.
+See [Telegram webhook replies](https://core.telegram.org/bots/faq#how-can-i-make-requests-in-response-to-updates).
+
 `/healthz` reports process health and exact `APP_VERSION` Git SHA. Health alone
 does not prove Telegram/provider readiness, source-account access or public HTTPS.
 A missing bot token must leave protected APIs closed; all authenticated bot users
