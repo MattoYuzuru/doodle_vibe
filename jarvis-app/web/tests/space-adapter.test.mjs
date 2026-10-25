@@ -96,3 +96,19 @@ describe("состояние маскота из данных вуза", () => {
     assert.equal(p.urgency.level, "urgent");
   });
 });
+
+describe("движение (DES-009)", () => {
+  const ctx = (over) => resolveAssistantPresentation(toAssistantContext(hse, data(), { ...env, ...over }), assistantConfig([hse]));
+  it("спокойный маскот — static, огонь-знак и действие остаются", () => {
+    const p = ctx({ calm: true });
+    assert.equal(p.motion, "static");
+    assert.equal(p.accent, "fire");
+    assert.equal(p.action.intent, "open-deadline");
+  });
+  it("скрытая вкладка — paused, «уменьшить движение» и облегчённый режим — static", () => {
+    assert.equal(ctx({ visible: false }).motion, "paused");
+    assert.equal(ctx({ reducedMotion: true }).motion, "static");
+    assert.equal(ctx({ lite: true }).motion, "static");
+    assert.equal(ctx({}).motion, "full");
+  });
+});

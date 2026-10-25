@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { MascotLoader } from "../../components/assistant/MascotCard";
 import { useScheme } from "../../hooks/useScheme";
+import { useMascotMotion } from "../../hooks/useSpace";
 import { characterFor } from "../../lib/space-adapter";
-import { lite } from "../../lib/perf";
 import { type Connection, PlatformError, type SourceKind, type UniversitySpace, usePlatform, v1 } from "../../store/platform";
 import { haptic } from "../../telegram/webapp";
 
@@ -45,6 +45,7 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const dark = useScheme() === "dark";
+  const motion = useMascotMotion();
   const st = usePlatform.getState;
 
   const chooseSpace = async (universityId: string, name: string) => {
@@ -95,7 +96,7 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
   const field = "min-h-11 w-full rounded-2xl bg-raised px-3 text-m text-text outline-none focus-visible:ring-2 focus-visible:ring-accent";
   const primary = "min-h-11 rounded-2xl bg-accent px-4 text-m font-bold text-on-accent disabled:opacity-50";
   return (
-    <div className="flex flex-col gap-4 px-1 pt-2 pb-8" data-connect>
+    <div className="space-ui flex flex-col gap-4 px-1 pt-2 pb-8" data-connect>
       <h1 className="font-display text-l font-extrabold tracking-[-0.03em]">Подключить учёбу</h1>
 
       <section className="flex flex-col gap-2 rounded-[22px] bg-card p-4" aria-label="Вуз">
@@ -155,7 +156,7 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
         </form>
       )}
 
-      {busy && <MascotLoader character={space ? characterFor(space) : "dusya"} label={busy} dark={dark} motion={lite ? "static" : "full"} size={56} />}
+      {busy && <MascotLoader character={space ? characterFor(space) : "dusya"} label={busy} dark={dark} motion={motion} size={56} />}
       {error && <p role="alert" className="rounded-2xl bg-red/10 px-3 py-2 text-m font-semibold text-red">{error}</p>}
       {done && <p role="status" className="rounded-2xl bg-green/10 px-3 py-2 text-m font-semibold text-green">{done}</p>}
     </div>

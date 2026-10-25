@@ -13,12 +13,22 @@ const reducedQuery = typeof matchMedia === "function" ? matchMedia("(prefers-red
 const subscribeReduced = (cb: () => void) => { reducedQuery?.addEventListener("change", cb); return () => reducedQuery?.removeEventListener("change", cb); };
 const subscribeVisible = (cb: () => void) => { document.addEventListener("visibilitychange", cb); return () => document.removeEventListener("visibilitychange", cb); };
 
+/** Режим движения маскотов вне карточки (заставки загрузки): те же правила, что у модели — скрытая вкладка, «уменьшить
+ *  движение», облегчённый режим и спокойный маскот. */
+export function useMascotMotion(): "full" | "static" | "paused" {
+  const calm = usePlatform((s) => s.calm);
+  const reducedMotion = useSyncExternalStore(subscribeReduced, () => !!reducedQuery?.matches);
+  const visible = useSyncExternalStore(subscribeVisible, () => document.visibilityState !== "hidden");
+  return !visible ? "paused" : reducedMotion || lite || calm ? "static" : "full";
+}
+
 /** Активный вуз и его данные в типах прежних экранов, плюс представление маскота. Всё — только этого вуза. */
 export function useSpace() {
   const spaces = usePlatform((s) => s.spaces);
   const activeId = usePlatform((s) => s.activeId);
   const data = usePlatform((s) => s.data);
   const acknowledged = usePlatform((s) => s.acknowledged);
+  const calm = usePlatform((s) => s.calm);
   const now = useNow(60_000);
   const reducedMotion = useSyncExternalStore(subscribeReduced, () => !!reducedQuery?.matches);
   const visible = useSyncExternalStore(subscribeVisible, () => document.visibilityState !== "hidden");
@@ -29,7 +39,7 @@ export function useSpace() {
   const lessons = useMemo(() => toLessons(own?.schedule ?? null), [own]);
   const subjects = useMemo(() => (space ? toSubjects(space.id, own?.courses ?? null) : []), [space, own]);
   const presentation = useMemo(() => space ? resolveAssistantPresentation(
-    toAssistantContext(space, own, { nowMs: now, reducedMotion, lite, visible, acknowledged }), assistantConfig(spaces)) : null,
-  [space, own, now, reducedMotion, visible, acknowledged, spaces]);
-  return { spaces, space, data: own, deadlines, lessons, subjects, presentation, now };
+    toAssistantContext(space, own, { nowMs: now, reducedMotion, lite, visible, acknowledged, calm }), assistantConfig(spaces)) : null,
+  [space, own, now, reducedMotion, visible, acknowledged, calm, spaces]);
+  return { spaces, space, data: own, deadlines, lessons, subjects, presentation, now, calm, reducedMotion, visible };
 }

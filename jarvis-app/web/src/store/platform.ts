@@ -59,6 +59,8 @@ export async function v1<T>(path: string, init?: { method?: string; body?: unkno
 }
 
 const LS = "doodle.activeSpace";
+const CALM = "doodle.calmMascot";
+const readCalm = () => { try { return localStorage.getItem(CALM) === "1"; } catch { return false; } };
 const readActive = () => { try { return localStorage.getItem(LS); } catch { return null; } };
 const writeActive = (id: string) => { try { localStorage.setItem(LS, id); } catch { /* приватный режим */ } };
 const emptyData = (spaceId: string): SpaceData => ({ spaceId, status: "loading", error: null, deadlines: null, schedule: null, courses: null, loadedAt: null });
@@ -70,6 +72,9 @@ interface PlatformState {
   data: SpaceData | null;
   /** Показанные реакции маскота на сдачу (не проигрывать снова). */
   acknowledged: string[];
+  /** Спокойный маскот (DES-009): без анимаций, та же информация. Выбор пользователя, хранится на телефоне. */
+  calm: boolean;
+  setCalm(on: boolean): void;
   /** Профиль с /api/me уже сообщил список вузов — не ждать отдельного запроса. */
   seed(spaces: UniversitySpace[]): void;
   loadSpaces(): Promise<void>;
@@ -102,6 +107,8 @@ export const usePlatform = create<PlatformState>((set, get) => {
     activeId: null,
     data: null,
     acknowledged: [],
+    calm: readCalm(),
+    setCalm(on) { set({ calm: on }); try { localStorage.setItem(CALM, on ? "1" : "0"); } catch { /* приватный режим */ } },
     seed(spaces) { if (get().spacesStatus === "idle") applySpaces(spaces); },
     async loadSpaces() {
       set({ spacesStatus: get().spaces.length ? "ready" : "loading" });
