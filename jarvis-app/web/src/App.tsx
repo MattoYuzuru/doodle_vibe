@@ -22,7 +22,6 @@ import { Onboarding, tourFromLink, tourUnseen } from "./components/Onboarding";
 import { PlanScreen } from "./screens/Plan";
 import { TaskFormScreen } from "./screens/TaskForm";
 import { usePlatformMode } from "./hooks/useSpace";
-import { ConnectScreen } from "./screens/space/Connect";
 import { SpaceCoursesScreen, SpaceDeadlinesScreen, SpaceHomeScreen, SpacePlanScreen } from "./screens/space/SpaceTabs";
 import { useAuth } from "./store/auth";
 import { usePlatform } from "./store/platform";
@@ -98,7 +97,6 @@ function renderScreen(screen: Screen) {
     case "courses": return <CoursesScreen />;
     case "course": return <CourseScreen title={screen.title} subjectId={screen.subjectId} lesson={screen.lesson} />;
     case "deadline-form": return <DeadlineFormScreen id={screen.id} />;
-    case "connect": return <ConnectScreen spaceId={screen.spaceId} />;
   }
 }
 

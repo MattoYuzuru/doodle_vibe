@@ -1,14 +1,14 @@
 import { Plus } from "lucide-react";
-import { useNav } from "../../hooks/useNav";
+import { universitiesLink } from "../../lib/sources";
 import { usePlatform } from "../../store/platform";
 import { haptic } from "../../telegram/webapp";
 
-/** Переключатель вуза: данные всех вкладок и маскот меняются вместе с ним. «+» — подключить ещё один вуз или сайт. */
+/** Переключатель вуза: данные всех вкладок и маскот меняются вместе с ним. «+» — экран «Вузы»: подключить вуз или сайт. */
 export function SpaceSwitcher() {
   const spaces = usePlatform((s) => s.spaces);
   const activeId = usePlatform((s) => s.activeId);
   const setActive = usePlatform((s) => s.setActive);
-  const push = useNav((s) => s.push);
+  const active = spaces.find((s) => s.id === activeId);
   return (
     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Вуз">
       {spaces.map((s) => (
@@ -18,10 +18,10 @@ export function SpaceSwitcher() {
           {s.name}
         </button>
       ))}
-      <button type="button" aria-label="Подключить вуз или сайт" onClick={() => { haptic.tap(); push({ name: "connect" }); }}
+      <a href={universitiesLink(active?.universityId)} aria-label="Подключить вуз или сайт" onClick={() => haptic.tap()}
         className="grid size-11 place-items-center rounded-2xl bg-card text-accent">
         <Plus size={20} strokeWidth={2.5} />
-      </button>
+      </a>
     </div>
   );
 }

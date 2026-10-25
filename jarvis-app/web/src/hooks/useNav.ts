@@ -18,8 +18,6 @@ export type Screen =
   /** Экран курса по нажатию на пару в расписании: lesson — занятие, с которого пришли; subjectId — курс Moodle, если найден. */
   | { name: "course"; title: string; subjectId?: string; lesson?: import("../store/schedule").Lesson }
   | { name: "deadline-form"; id?: string }
-  /** Подключить вуз или учебный сайт (новый API, DES-010). */
-  | { name: "connect"; spaceId?: string }
   | { name: "task-form"; id?: string; date?: string };
 
 /**
