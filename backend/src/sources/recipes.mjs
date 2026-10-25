@@ -74,6 +74,7 @@ export function parseResponse(response) {
     let data; try { data = JSON.parse(text); } catch { throw new AppError('source_response_invalid', 502); }
     return { format: 'json', data, text };
   }
+  if (type.includes('calendar') || (/^\uFEFF?\s*BEGIN:VCALENDAR/i.test(text) && !type.includes('html'))) return { format: 'ical', text };
   if (type.includes('csv')) return { format: 'csv', data: parseCsv(text), text };
   if (type.includes('html')) return { format: 'html', text };
   throw new AppError('source_format_unsupported', 400);

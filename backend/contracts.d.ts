@@ -11,6 +11,15 @@ export interface SourceItem {
   sourceUrl:string; fetchedAt:string; startsAt?:string; endsAt?:string;
   dueAt?:string; location?:string; courseId?:string;
 }
+export type AuthField = 'token'|'username'|'password'|'service'|'calendarUrl'|'identifier';
+/** Credential form offered for a connection; `note`/`notes` are stable codes the UI words itself. */
+export interface AuthMethod {
+  id:string; type:'token'|'password'|'calendar_url'|'identifier'|'oauth'; label:string; fields?:AuthField[];
+  sourceType?:'moodle'|'ical'|'ruz'; note?:string; notes?:string[];
+}
+/** POST /connections/:id/auth: exactly one form, `origin` equals the connection origin. */
+export type AuthRequest = {origin:string} & (
+  {token:string} | {username:string; password:string; service?:string} | {calendarUrl:string} | {identifier:string});
 export interface Job {
   id:string; spaceId:string; connectionId:string; type:'discover'|'sync';
   status:'queued'|'running'|'succeeded'|'failed'; errorCode:string|null;

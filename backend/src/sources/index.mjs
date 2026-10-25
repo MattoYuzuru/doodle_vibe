@@ -2,9 +2,14 @@ import { AppError } from '../errors.mjs';
 import { safeRequest, validateSourceUrl, TIMEOUT_MS } from './network.mjs';
 import { digest, validateRecipe, parseResponse, publicObservation, normalizeRecipe, inferPublicRecipe, redactSecrets } from './recipes.mjs';
 import { syncMoodle, MOODLE_CAPABILITIES } from './moodle.mjs';
+import { syncCalendar } from './ical.mjs';
+import { syncRuz } from './ruz.mjs';
+import { describeAuthMethods } from './presets.mjs';
+import { typedRecipe, resolveTyped, probeMoodle, identifyOtherLms } from './detect.mjs';
 
 export { safeRequest, validateSourceUrl, createBoundTokenRequest } from './network.mjs';
-const actionCodes = new Set(['source_auth_required', 'source_auth_redirect', 'source_mapping_required', 'source_format_unsupported', 'source_recipe_invalid', 'source_format_changed']);
+export { describeAuthMethods } from './presets.mjs';
+const actionCodes = new Set(['source_auth_required', 'source_auth_redirect', 'source_mapping_required', 'source_format_unsupported', 'source_recipe_invalid', 'source_format_changed', 'source_network_restricted', 'source_identifier_not_found', 'source_identifier_ambiguous', 'source_lms_unsupported']);
 const locks = new WeakMap();
 
 export function createSourceService({ store, request = safeRequest, proposeRecipe, now = Date.now }) {
@@ -14,15 +19,15 @@ export function createSourceService({ store, request = safeRequest, proposeRecip
   async function read(url, options) {
     // Fixtures bypass production sockets only. URL validation, bounded responses,
     // status handling, origin binding and all executor checks remain enabled.
-    validateSourceUrl(url);
+    validateSourceUrl(url, { allowSecretQuery: options?.secretUrl });
     let timer;
     try {
       const result = await Promise.race([request(url, options), new Promise((_, reject) => {
         timer = setTimeout(() => reject(new AppError('source_timeout', 504)), TIMEOUT_MS);
       })]);
       if (result?.url) {
-        const final = validateSourceUrl(result.url);
-        if (options?.authenticated && final.origin !== new URL(url).origin) throw new AppError('source_auth_redirect', 400);
+        const final = validateSourceUrl(result.url, { allowSecretQuery: options?.secretUrl });
+        if ((options?.authenticated || options?.secretUrl) && final.origin !== new URL(url).origin) throw new AppError('source_auth_redirect', 400);
       }
       return result;
     } finally { clearTimeout(timer); }
@@ -46,16 +51,17 @@ export function createSourceService({ store, request = safeRequest, proposeRecip
     const origin = url.origin;
     const fetchedAt = new Date(now()).toISOString();
     try {
-      // MISIS Moodle is the only built-in credential flow. Other installations
-      // must first positively identify Moodle through a public discovery read.
+      // Known universities are presets (data); any other origin is typed only after a
+      // positive identification (Moodle probe, iCal feed) and remembered as an adapter.
       let adapter = connection.adapterId ? store.getAdapter(connection.adapterId) : store.findAdapter(origin);
       if (adapter && adapter.origin !== origin) throw new AppError('source_recipe_invalid', 400);
-      const moodle = origin === 'https://newlms.misis.ru' || (adapter?.recipe?.type === 'moodle' && adapter.recipe.version === 1 && Object.keys(adapter.recipe).length === 2);
-      if (moodle) {
-        if (mode === 'discover') return persist(connection, userId, { status: 'user_action_required', capabilities: [...MOODLE_CAPABILITIES], errorCode: 'source_auth_required', auth: 'moodle_token_or_password' });
-        const result = await syncMoodle({ store, request: read, userId, connection, fetchedAt });
-        return persist(connection, userId, result);
-      }
+      const typed = resolveTyped(origin, adapter);
+      if (typed) return persist(connection, userId, await runTyped(typed.type, mode, { userId, connection, origin, fetchedAt }));
+      const adoptMoodle = () => {
+        const adapterId = `moodle:${digest(origin)}`;
+        store.putAdapter({ id: adapterId, origin, version: 1, recipe: typedRecipe('moodle'), capabilities: [...MOODLE_CAPABILITIES] });
+        return persist(connection, userId, { status: 'user_action_required', capabilities: [...MOODLE_CAPABILITIES], errorCode: 'source_auth_required', adapterId, auth: 'moodle_token_or_password', authMethods: describeAuthMethods(origin, typedRecipe('moodle')).map(method => method.id) });
+      };
       let privateToken;
       if (mode === 'sync') {
         const secret = store.readSecret(userId, connection.id);
@@ -67,15 +73,23 @@ export function createSourceService({ store, request = safeRequest, proposeRecip
       const response = await read(url.href, privateToken ? { authenticated: true, boundOrigin: origin, headers: { authorization: `Bearer ${privateToken}` } } : undefined);
       const finalUrl = response.url ? validateSourceUrl(response.url).href : url.href;
       if (new URL(finalUrl).origin !== origin) {
+        if (!privateToken && connection.kind === 'lms' && await probeMoodle(read, origin)) return adoptMoodle();
         return persist(connection, userId, { status: 'user_action_required', capabilities: [], errorCode: 'source_auth_required' });
       }
       const parsed = parseResponse(response);
       if (adapter && (privateToken || !connection.adapterId) && adapter.recipe?.format !== parsed.format) adapter = null;
-      if (!privateToken && parsed.format === 'html' && /(?:name=["']?moodle|moodle\.org|M\.cfg\s*=)/i.test(parsed.text)) {
-        const recipe = { version: 1, type: 'moodle' };
-        const adapterId = `moodle:${digest(origin)}`;
-        store.putAdapter({ id: adapterId, origin, version: 1, recipe, capabilities: [...MOODLE_CAPABILITIES] });
-        return persist(connection, userId, { status: 'user_action_required', capabilities: [...MOODLE_CAPABILITIES], errorCode: 'source_auth_required', adapterId, auth: 'moodle_token_or_password' });
+      if (!privateToken && parsed.format === 'ical') {
+        // A public feed is read once now; the typed adapter then only names the executor.
+        const result = await syncCalendar({ store, request: read, userId, connection, fetchedAt, now: now(), mode: 'schedule', target: finalUrl, fallbackUrl: finalUrl, response });
+        if (!result.counts.schedule && !adapter) throw new AppError('source_mapping_required', 400);
+        const adapterId = `ical:${digest(origin)}`;
+        store.putAdapter({ id: adapterId, origin, version: 1, recipe: typedRecipe('ical'), capabilities: ['schedule'] });
+        return persist(connection, userId, { ...result, adapterId });
+      }
+      if (!privateToken && parsed.format === 'html') {
+        if (/(?:name=["']?moodle|moodle\.org|M\.cfg\s*=)/i.test(parsed.text) || (connection.kind === 'lms' && await probeMoodle(read, origin))) return adoptMoodle();
+        const lms = identifyOtherLms(parsed.text);
+        if (lms) return persist(connection, userId, { status: 'user_action_required', capabilities: [], errorCode: 'source_lms_unsupported', lms });
       }
       let recipe;
       if (adapter) recipe = validateRecipe(adapter.recipe);
@@ -104,6 +118,22 @@ export function createSourceService({ store, request = safeRequest, proposeRecip
       const errorCode = error instanceof AppError ? error.code : 'source_unavailable';
       return persist(connection, userId, { status: actionCodes.has(errorCode) ? 'user_action_required' : 'error', capabilities: [], errorCode });
     }
+  }
+  async function runTyped(type, mode, { userId, connection, origin, fetchedAt }) {
+    const recipe = typedRecipe(type);
+    const methods = describeAuthMethods(origin, recipe).map(method => method.id);
+    const authRequired = { status: 'user_action_required', capabilities: [], errorCode: 'source_auth_required', authMethods: methods };
+    const context = { store, request: read, userId, connection, fetchedAt, now: now() };
+    if (type === 'moodle') {
+      if (mode === 'discover') return { ...authRequired, capabilities: [...MOODLE_CAPABILITIES], auth: 'moodle_token_or_password' };
+      return syncMoodle(context);
+    }
+    if (type === 'ruz') return mode === 'discover' ? { ...authRequired, capabilities: ['schedule'] } : syncRuz(context);
+    const secret = store.readSecret(userId, connection.id);
+    // ical: the feed is the connection URL, or a private URL held in encrypted storage.
+    if (secret && (secret.origin !== origin || typeof secret.calendarUrl !== 'string')) throw new AppError('source_auth_required', 401);
+    const target = secret?.calendarUrl ?? connection.sourceUrl;
+    return syncCalendar({ ...context, mode: 'schedule', target, secret: !!secret, fallbackUrl: connection.sourceUrl });
   }
   function run(args, mode) {
     // Discovery/sync share a lock for a connection, across service instances.

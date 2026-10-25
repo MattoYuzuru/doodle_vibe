@@ -1,15 +1,24 @@
 import { AppError } from '../errors.mjs';
 import { parseResponse, sanitizeText, digest } from './recipes.mjs';
+import { syncCalendar } from './ical.mjs';
 
 export const MOODLE_CAPABILITIES = ['courses', 'deadlines'];
+export const MOODLE_CALENDAR_CAPABILITIES = ['courses', 'deadlines', 'schedule'];
+const calendarPath = /^\/(?:[A-Za-z0-9._~-]+\/)*(?:calendar\/export_execute\.php|[A-Za-z0-9._~-]+\.ics)$/;
 const readFunctions = new Set(['core_webservice_get_site_info', 'core_enrol_get_users_courses', 'mod_assign_get_assignments']);
 const validId = value => (typeof value === 'number' || typeof value === 'string') && /^[1-9]\d{0,14}$/.test(String(value));
 const invalid = () => { throw new AppError('source_response_invalid', 502); };
 
-export async function syncMoodle({ store, request, userId, connection, fetchedAt }) {
+export async function syncMoodle({ store, request, userId, connection, fetchedAt, now = Date.now() }) {
   const origin = new URL(connection.sourceUrl).origin;
   let secret = store.readSecret(userId, connection.id);
   if (!secret || secret.origin !== origin) throw new AppError('source_auth_required', 401);
+  if (!secret.token && !secret.username && !secret.password && typeof secret.calendarUrl === 'string') {
+    // Moodle's self-service calendar export: a per-user feed URL with its own token.
+    const feed = (() => { try { return new URL(secret.calendarUrl); } catch { throw new AppError('source_auth_required', 401); } })();
+    if (feed.origin !== origin || feed.protocol !== 'https:' || feed.username || feed.password || feed.hash || !calendarPath.test(feed.pathname)) throw new AppError('source_auth_required', 401);
+    return syncCalendar({ store, request, userId, connection, fetchedAt, now, mode: 'moodle', target: feed.href, secret: true, fallbackUrl: `${origin}/calendar/view.php?view=upcoming` });
+  }
   const knownSecrets = [secret.password, secret.token].filter(value => typeof value === 'string' && value);
   let token = secret.token;
   if (!token && typeof secret.username === 'string' && typeof secret.password === 'string') {

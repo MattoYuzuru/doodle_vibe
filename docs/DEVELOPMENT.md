@@ -78,6 +78,9 @@ Browser smoke использует отдельный порт `14173`; при �
 Не останавливай чужой процесс и не подключай тест к уже запущенному серверу.
 
 Новый backend: `npm --prefix backend start`, с внешней приватной конфигурацией.
+Живая проверка источников владельцем (ВШЭ и другие вузы, без Telegram/HTTP):
+`npm --prefix backend run live -- --env-file <файл> --university hse`; см.
+[universities.md](universities.md#живая-проверка-владельцем). Агент её не запускает.
 Требования к env и API — в [Backend API](backend-api.md). Legacy UI требует
 перевода на v1; маршруты не считаются автоматически совместимыми. Основной
 runtime порт — `18110` на loopback.

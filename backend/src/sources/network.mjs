@@ -26,7 +26,9 @@ export function isPublicAddress(address) {
     !(first === 0x2001 && (second <= 0x1ff || second === 0xdb8)) && first !== 0x3fff;
 }
 
-export function validateSourceUrl(value) {
+// `allowSecretQuery` is only for an executor-held secret URL (e.g. a Moodle
+// calendar export). Such URLs are never accepted from recipes or stored in public fields.
+export function validateSourceUrl(value, { allowSecretQuery = false } = {}) {
   let url;
   try { url = new URL(value); } catch { throw fail('source_url_invalid'); }
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
@@ -35,7 +37,7 @@ export function validateSourceUrl(value) {
       (!isIP(hostname) && !hostname.includes('.')) || (isIP(hostname) && !isPublicAddress(hostname))) {
     throw fail('source_url_unsafe');
   }
-  for (const [key, val] of url.searchParams) {
+  if (!allowSecretQuery) for (const [key, val] of url.searchParams) {
     if (deniedQuery.test(key) || /[A-Za-z0-9_+-]{32,}/.test(val) || /(?:bearer\s|eyJ[A-Za-z0-9_-]{12,}\.)/i.test(val)) throw fail('source_url_secret');
   }
   if (/%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(url.href)) throw fail('source_url_unsafe');
@@ -52,9 +54,10 @@ export async function resolvePublicAddress(hostname, resolver = lookup) {
 // Per-hop DNS validation and pinned socket lookup prevent DNS rebinding. No
 // global dispatcher, ambient proxy, cookies or credentials are inherited.
 export function createSafeRequest({ resolver = lookup, boundAuthEndpoint, clientFactory = (origin, options) => new Client(origin, options) } = {}) {
-  return async function request(value, { method = 'GET', headers = {}, body, authenticated = false, boundOrigin, signal: callerSignal } = {}) {
-    if (!['GET', 'POST'].includes(method) || (method === 'POST' && !authenticated)) throw fail('source_method_unsafe');
-    let url = validateSourceUrl(value);
+  return async function request(value, { method = 'GET', headers = {}, body, authenticated = false, secretUrl = false, boundOrigin, signal: callerSignal } = {}) {
+    if (!['GET', 'POST'].includes(method) || (method === 'POST' && !authenticated) || (secretUrl && (method !== 'GET' || authenticated))) throw fail('source_method_unsafe');
+    let url = validateSourceUrl(value, { allowSecretQuery: secretUrl });
+    if (secretUrl && (typeof boundOrigin !== 'string' || url.origin !== boundOrigin)) throw fail('source_auth_origin_unsafe');
     if (authenticated && method === 'GET') {
       if (typeof boundOrigin !== 'string' || validateSourceUrl(boundOrigin).origin !== boundOrigin || url.origin !== boundOrigin ||
           typeof headers.authorization !== 'string' || !/^Bearer [A-Za-z0-9._~+\/=-]{8,8192}$/.test(headers.authorization)) throw fail('source_auth_origin_unsafe');
@@ -74,14 +77,14 @@ export function createSafeRequest({ resolver = lookup, boundAuthEndpoint, client
             ? callback(null, [address]) : callback(null, address.address, address.family) },
           headersTimeout: TIMEOUT_MS, bodyTimeout: TIMEOUT_MS, maxResponseSize: MAX_BYTES
         });
-        const allowedHeaders = { accept: 'application/json,text/csv,text/html;q=0.9' };
+        const allowedHeaders = { accept: 'application/json,text/csv,text/calendar,text/html;q=0.9' };
         // Only executor-created form bodies carry credentials, never caller headers.
         if (authenticated && method === 'GET') allowedHeaders.authorization = headers.authorization;
         if (method === 'POST') allowedHeaders['content-type'] = 'application/x-www-form-urlencoded';
         const response = await client.request({ path: url.pathname + url.search, method, headers: allowedHeaders, body, signal, maxRedirections: 0 });
         if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
           response.body.destroy();
-          if (authenticated) throw fail('source_auth_redirect');
+          if (authenticated || secretUrl) throw fail('source_auth_redirect');
           if (hop === 3 || !response.headers.location) throw fail('source_redirect_limit');
           url = validateSourceUrl(new URL(response.headers.location, url).href);
           continue;
