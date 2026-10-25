@@ -3,7 +3,7 @@
 // encrypted secret and are applied by the executor (network.mjs session mode). Learning heuristics: learned-observe.mjs.
 import { AppError } from '../errors.mjs';
 import { digest, sanitizeText, redactSecrets } from './recipes.mjs';
-import { SEED_RECIPES } from './learned-seeds.mjs';
+import { SEED_RECIPES, SUPERSEDED_SEEDS } from './learned-seeds.mjs';
 
 /** Read-only POST endpoints a learned recipe may call. Data, not code; extended only through review. */
 export const READ_ONLY_POST_ALLOWLIST = Object.freeze([
@@ -535,8 +535,13 @@ export function rollbackLearnedRecipe(store, origin, { now = Date.now() } = {}) 
 /** Installs a reviewed seed recipe for an origin without learned revisions (data in learned-seeds.mjs). */
 export function ensureSeedRecipe(store, origin, { now = Date.now() } = {}) {
   const found = findLearnedAdapter(store, origin);
-  if (found) return found;
   const seed = SEED_RECIPES[origin];
+  // A revision installed from an earlier seed follows the reviewed seed; learned and rolled-back revisions are kept.
+  if (found && seed && found.recipe.rollbackOf === undefined
+    && (SUPERSEDED_SEEDS[origin] ?? []).some(old => sameBody(found.recipe, validateLearnedRecipe({ ...old, revision: 1, learnedAt: found.recipe.learnedAt })))) {
+    return activateLearnedRecipe(store, seed, { now });
+  }
+  if (found) return found;
   if (!seed) return null;
   const clean = validateLearnedRecipe({ ...seed, revision: 1, learnedAt: new Date(now).toISOString() });
   return { adapter: put(store, clean), recipe: clean };

@@ -6,6 +6,28 @@
 // `requireKinds` is only `courses`: a student may have no deadlines, and the canary must not fail on that.
 const field = (path, transform) => ({ path, ...(transform ? { transform } : {}) });
 
+// ВШЭ Moodle: `classification: 'all'` also returns every past course (63 courses, 873 KB, 17-19 s on edu.hse.ru, 2026-10-25),
+// which outlives the per-request timeout; `inprogress` (13 courses, 204 KB, 3 s) is what the assistant uses.
+const hseMoodle = classification => Object.freeze({
+  version: 2, type: 'learned', origin: 'https://edu.hse.ru',
+  auth: { type: 'cookie' },
+  // The Moodle `sesskey` is read from the page configuration of /my/ and lives in memory for one sync only.
+  bootstrap: [{ id: 'home', method: 'GET', path: '/my/', extract: { sesskey: '@moodle:sesskey' } }],
+  endpoints: [
+    { id: 'courses', kind: 'courses',
+      request: { method: 'POST', path: '/lib/ajax/service.php',
+        query: { sesskey: '{sesskey}', info: 'core_course_get_enrolled_courses_by_timeline_classification' },
+        body: [{ index: 0, methodname: 'core_course_get_enrolled_courses_by_timeline_classification', args: { classification, limit: 100, offset: 0, sort: 'fullname' } }] },
+      response: { itemsPath: '/0/data/courses', fields: { id: field('/id'), title: field('/fullname'), url: field('/viewurl') } } },
+    { id: 'deadlines', kind: 'deadlines',
+      request: { method: 'POST', path: '/lib/ajax/service.php',
+        query: { sesskey: '{sesskey}', info: 'core_calendar_get_action_events_by_timesort' },
+        body: [{ index: 0, methodname: 'core_calendar_get_action_events_by_timesort', args: { timesortfrom: '{nowUnix}', timesortto: '{plusDaysUnix:56}', limitnum: 50, limittononsuspendedevents: true } }] },
+      response: { itemsPath: '/0/data/events', fields: { id: field('/id'), title: field('/name'), dueAt: field('/timesort', 'unixSeconds'), courseId: field('/course/id'), url: field('/url'), description: field('/course/fullname') } } },
+  ],
+  validation: { requireKinds: ['courses'], minItems: 1 },
+});
+
 export const SEED_RECIPES = Object.freeze({
   'https://my.centraluniversity.ru': Object.freeze({
     version: 2, type: 'learned', origin: 'https://my.centraluniversity.ru',
@@ -21,23 +43,10 @@ export const SEED_RECIPES = Object.freeze({
     ],
     validation: { requireKinds: ['courses'], minItems: 1 },
   }),
-  'https://edu.hse.ru': Object.freeze({
-    version: 2, type: 'learned', origin: 'https://edu.hse.ru',
-    auth: { type: 'cookie' },
-    // The Moodle `sesskey` is read from the page configuration of /my/ and lives in memory for one sync only.
-    bootstrap: [{ id: 'home', method: 'GET', path: '/my/', extract: { sesskey: '@moodle:sesskey' } }],
-    endpoints: [
-      { id: 'courses', kind: 'courses',
-        request: { method: 'POST', path: '/lib/ajax/service.php',
-          query: { sesskey: '{sesskey}', info: 'core_course_get_enrolled_courses_by_timeline_classification' },
-          body: [{ index: 0, methodname: 'core_course_get_enrolled_courses_by_timeline_classification', args: { classification: 'all', limit: 100, offset: 0, sort: 'fullname' } }] },
-        response: { itemsPath: '/0/data/courses', fields: { id: field('/id'), title: field('/fullname'), url: field('/viewurl') } } },
-      { id: 'deadlines', kind: 'deadlines',
-        request: { method: 'POST', path: '/lib/ajax/service.php',
-          query: { sesskey: '{sesskey}', info: 'core_calendar_get_action_events_by_timesort' },
-          body: [{ index: 0, methodname: 'core_calendar_get_action_events_by_timesort', args: { timesortfrom: '{nowUnix}', timesortto: '{plusDaysUnix:56}', limitnum: 50, limittononsuspendedevents: true } }] },
-        response: { itemsPath: '/0/data/events', fields: { id: field('/id'), title: field('/name'), dueAt: field('/timesort', 'unixSeconds'), courseId: field('/course/id'), url: field('/url'), description: field('/course/fullname') } } },
-    ],
-    validation: { requireKinds: ['courses'], minItems: 1 },
-  }),
+  'https://edu.hse.ru': hseMoodle('inprogress'),
+});
+
+// Earlier seed versions: a revision still equal to one of them is replaced by the current seed (`ensureSeedRecipe`).
+export const SUPERSEDED_SEEDS = Object.freeze({
+  'https://edu.hse.ru': [hseMoodle('all')],
 });

@@ -5,6 +5,8 @@ import { AppError } from '../errors.mjs';
 
 export const MAX_BYTES = 1_048_576;
 export const TIMEOUT_MS = 10_000;
+// A stored-session read runs the university's own logged-in API, which answers slower than public pages (ВШЭ Moodle AJAX: 1-5 s).
+export const SESSION_TIMEOUT_MS = 30_000;
 const deniedQuery = /(?:token|password|passwd|secret|cookie|session|authorization|api.?key|signature|credential|csrf|jwt|code)/i;
 const fail = code => new AppError(code, 400);
 
@@ -99,7 +101,8 @@ export function createSafeRequest({ resolver = lookup, boundAuthEndpoint, client
       if (typeof boundOrigin !== 'string' || validateSourceUrl(boundOrigin).origin !== boundOrigin || url.origin !== boundOrigin ||
           typeof headers.authorization !== 'string' || !/^Bearer [A-Za-z0-9._~+\/=-]{8,8192}$/.test(headers.authorization)) throw fail('source_auth_origin_unsafe');
     } else if (authenticated && !(boundAuthEndpoint ? url.href === boundAuthEndpoint : ['/login/token.php', '/webservice/rest/server.php'].includes(url.pathname))) throw fail('source_auth_endpoint_unsafe');
-    const signal = callerSignal ? AbortSignal.any([AbortSignal.timeout(TIMEOUT_MS),callerSignal]) : AbortSignal.timeout(TIMEOUT_MS);
+    const limit = session ? SESSION_TIMEOUT_MS : TIMEOUT_MS;
+    const signal = callerSignal ? AbortSignal.any([AbortSignal.timeout(limit),callerSignal]) : AbortSignal.timeout(limit);
     for (let hop = 0; hop <= 3; hop++) {
       let client;
       try {
@@ -112,7 +115,7 @@ export function createSafeRequest({ resolver = lookup, boundAuthEndpoint, client
         client = clientFactory(url.origin, {
           connect: { timeout: TIMEOUT_MS, lookup: (_host, options, callback) => options.all
             ? callback(null, [address]) : callback(null, address.address, address.family) },
-          headersTimeout: TIMEOUT_MS, bodyTimeout: TIMEOUT_MS, maxResponseSize: MAX_BYTES
+          headersTimeout: limit, bodyTimeout: limit, maxResponseSize: MAX_BYTES
         });
         const allowedHeaders = stored ?? { accept: 'application/json,text/csv,text/calendar,text/html;q=0.9' };
         // Only executor-created form bodies carry credentials, never caller headers.

@@ -2,7 +2,7 @@
 // recipe (or the agent fallback) fetches with the user's own credentials. Expiry never asks for a login: the connection becomes
 // `user_action_required` + `source_session_expired`, previous snapshots stay, and the scheduler stops polling it.
 import { AppError } from '../errors.mjs';
-import { findLearnedAdapter, ensureSeedRecipe, syncLearned, recordRecipeHealth } from './learned.mjs';
+import { ensureSeedRecipe, syncLearned, recordRecipeHealth } from './learned.mjs';
 
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
 /** `{origin, session}` with a v2 StoredSession for exactly this origin, else null (other secret forms belong to other executors). */
@@ -22,7 +22,7 @@ export async function syncWithSession({ store, request, userId, connection, sess
   const origin = new URL(connection.sourceUrl).origin;
   // Known expiry costs no request at all.
   if (!Number.isFinite(Date.parse(session.expiresAt)) || Date.parse(session.expiresAt) <= now) return expiredResult([]);
-  const learned = findLearnedAdapter(store, origin) ?? ensureSeedRecipe(store, origin, { now });
+  const learned = ensureSeedRecipe(store, origin, { now });
   try {
     if (learned) {
       let outcome;

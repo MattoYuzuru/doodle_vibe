@@ -153,6 +153,7 @@ test('moodle AJAX seed for edu.hse.ru: sesskey from the page, read-only POST wit
   assert.equal(snap.dueAt, new Date(1793000000 * 1000).toISOString()); assert.equal(snap.url, `${HSE}/mod/assign/view.php?id=5`);
   const posts = server.requests.filter(r => r.method === 'POST');
   assert.equal(posts.length, 2);
+  assert.equal(JSON.parse(posts[0].body)[0].args.classification, 'inprogress', 'past courses made the call outlive the timeout');
   const events = JSON.parse(posts[1].body)[0].args;
   assert.deepEqual([events.timesortfrom, events.timesortto, events.limitnum, events.limittononsuspendedevents], [NOW / 1000, NOW / 1000 + 56 * 86400, 50, true]);
   assert.ok(server.requests.every(r => r.cookie === 'MoodleSession=moodlecookie12345'));
@@ -213,4 +214,42 @@ test('without a session, a seed or learned origin waits for a login and never st
   assert.equal(result.status, 'user_action_required');
   assert.equal(result.errorCode, 'source_auth_required');
   assert.deepEqual(e.store.listDocuments('u2', e.spaces.u2.id), []);
+});
+
+test('a slow session read gets the session timeout and one retry; a public read keeps 10 s and no retry', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const HSE = 'https://edu.hse.ru';
+  const flush = async (until) => { for (let i = 0; i < 200 && !until(); i++) await new Promise(resolve => setImmediate(resolve)); };
+  const calls = [];
+  const request = (url, options) => {
+    const { pathname, searchParams } = new URL(url); calls.push(searchParams.get('info') ?? pathname);
+    if (pathname === '/my/') return Promise.resolve({ status: 200, headers: { 'content-type': 'text/html' }, url, body: '<script>var M = {cfg: {"sesskey":"Ab12Cd34Ef","userId":7}};</script>' });
+    const info = searchParams.get('info');
+    if (info === 'core_course_get_enrolled_courses_by_timeline_classification' && calls.filter(call => call === info).length === 1) return new Promise(() => {}); // first attempt hangs
+    const data = info === 'core_calendar_get_action_events_by_timesort' ? { events: [] } : { courses: [{ id: 3, fullname: 'Алгебра', viewurl: `${HSE}/course/view.php?id=3` }] };
+    return Promise.resolve({ status: 200, headers: { 'content-type': 'application/json' }, url, body: JSON.stringify([{ error: false, data }]) });
+  };
+  const e = environment();
+  t.after(() => e.store.close());
+  const service = createSourceService({ store: e.store, request, now: () => NOW });
+  const session = { ...sessionOf(PEOPLE.A), cookies: [{ name: 'MoodleSession', value: 'moodlecookie12345', domain: 'edu.hse.ru', path: '/', secure: true, httpOnly: true }] };
+  const c = e.connect('u1', PEOPLE.A, { origin: HSE, session });
+  let settled = false;
+  const pending = service.sync({ userId: 'u1', connectionId: c.id }).finally(() => { settled = true; });
+  await flush(() => calls.length === 2);
+  t.mock.timers.tick(10_001); await flush(() => settled);
+  assert.equal(settled, false, 'the 10 s public limit does not cut a session read');
+  t.mock.timers.tick(20_000); await flush(() => calls.length === 4);
+  const result = await pending;
+  assert.deepEqual([result.status, result.counts], ['ready', { courses: 1, deadlines: 0 }]);
+  assert.deepEqual(calls.filter(call => call.startsWith('core_course')).length, 2, 'retried once');
+
+  const publicCalls = [];
+  const hanging = createSourceService({ store: e.store, request: url => { publicCalls.push(url); return new Promise(() => {}); }, now: () => NOW });
+  const plain = e.store.createConnection('u1', e.spaces.u1.id, { sourceUrl: 'https://timetable.example/', kind: 'schedule' });
+  const discovering = hanging.discover({ userId: 'u1', connectionId: plain.id });
+  await flush(() => publicCalls.length === 1);
+  t.mock.timers.tick(10_001);
+  assert.equal((await discovering).errorCode, 'source_timeout');
+  assert.equal(publicCalls.length, 1);
 });
