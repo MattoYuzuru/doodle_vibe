@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { AuthMethod } from "../lib/sources";
 import { API_TIMEOUT_MS, apiBase, apiHeaders } from "./api";
 
 /*
@@ -82,7 +83,12 @@ interface PlatformState {
   reload(): Promise<void>;
   createSpace(universityId: string, name: string): Promise<UniversitySpace>;
   addSource(spaceId: string, sourceUrl: string, kind: SourceKind, label?: string): Promise<{ connection: Connection; job: Job }>;
-  saveAuth(connectionId: string, auth: { origin: string; token: string } | { origin: string; username: string; password: string }): Promise<{ job: Job }>;
+  /** Ровно одна форма входа: {origin, token} | {origin, username, password} | {origin, calendarUrl} | {origin, identifier}. */
+  saveAuth(connectionId: string, auth: Record<string, string>): Promise<{ job: Job }>;
+  /** Подключение и способы входа, которые предлагает сервер (порядок — рекомендуемый). */
+  getConnection(connectionId: string): Promise<{ connection: Connection; authMethods: AuthMethod[] }>;
+  /** Вход через OAuth-провайдера: сервер отдаёт адрес страницы входа. */
+  startOAuth(connectionId: string, providerId: string): Promise<{ authorizationUrl: string }>;
   sync(connectionId: string): Promise<Job>;
   /** Опрос задачи до конца (до ~40 с): discovery/sync идут в фоне на сервере. */
   waitJob(id: string): Promise<Job>;
@@ -150,6 +156,12 @@ export const usePlatform = create<PlatformState>((set, get) => {
     },
     saveAuth(connectionId, auth) {
       return v1(`connections/${encodeURIComponent(connectionId)}/auth`, { body: auth });
+    },
+    getConnection(connectionId) {
+      return v1(`connections/${encodeURIComponent(connectionId)}`);
+    },
+    startOAuth(connectionId, providerId) {
+      return v1(`connections/${encodeURIComponent(connectionId)}/oauth`, { body: { providerId } });
     },
     async sync(connectionId) {
       return (await v1<{ job: Job }>(`connections/${encodeURIComponent(connectionId)}/sync`, { body: {} })).job;
