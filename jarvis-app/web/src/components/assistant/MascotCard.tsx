@@ -1,4 +1,4 @@
-import { Flame } from "lucide-react";
+import { Flame, Pause, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { formatLeftShort } from "../../lib/dates";
 import { type AssistantIntent, type AssistantPresentation, REACTION_WINDOW_MS } from "../../theme/assistant-state";
@@ -31,6 +31,9 @@ type Props = {
   onIntent?: (intent: AssistantIntent, deadlineId?: string) => void;
   /** Реакция на сдачу доиграна: frontend добавляет eventId в acknowledgedEventIds, и после reload она не повторится. */
   onReactionShown?: (eventId: string) => void;
+  /** Спокойный маскот (DES-009): кнопка паузы анимаций на карточке; выбор хранит вызывающий. */
+  calm?: boolean;
+  onToggleCalm?: (on: boolean) => void;
 };
 
 function UrgencyBadge({ p, nowMs }: { p: AssistantPresentation; nowMs: number }) {
@@ -51,7 +54,7 @@ function UrgencyBadge({ p, nowMs }: { p: AssistantPresentation; nowMs: number })
   );
 }
 
-export function MascotCard({ presentation: p, nowMs, dark, size = 72, nightcap = false, onIntent, onReactionShown }: Props) {
+export function MascotCard({ presentation: p, nowMs, dark, size = 72, nightcap = false, onIntent, onReactionShown, calm, onToggleCalm }: Props) {
   const pose = poseFor(p);
   const live = p.motion === "full";
   const [frame, setFrame] = useState<{ eyes: Eyes; props: readonly string[]; anim: typeof pose.anim }>(
@@ -85,18 +88,29 @@ export function MascotCard({ presentation: p, nowMs, dark, size = 72, nightcap =
   const action = p.action;
   const loading = pose.running ? LOADING_LABEL[p.status] ?? "Загрузка" : null;
   return (
-    <section className="flex items-start gap-3 rounded-[20px] bg-card p-3.5 text-text" aria-label={`${name}: подсказка`}
+    // flex-wrap: если рядом со спрайтом остаётся меньше 10rem (узкий экран, крупный текст), текст и кнопки уходят под него.
+    <section className="space-ui flex flex-wrap items-start gap-3 rounded-[20px] bg-card p-3.5 text-text" aria-label={`${name}: подсказка`}
       data-status={p.status} data-accent={p.accent}>
       <MascotSprite character={p.character} eyes={frame.eyes} props={frame.props} anim={frame.anim} motion={p.motion}
         size={size} dark={dark} nightcap={nightcap} running={pose.running} accent={p.accent} />
-      <div className="min-w-0 flex-1">
-        <p className="text-m font-bold">{name}</p>
+      <div className="min-w-[10rem] flex-1 basis-40">
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-m font-bold">{name}</p>
+          {onToggleCalm && (
+            // Декоративное движение можно остановить (WCAG 2.2.2): смысл, огонь-знак и действие остаются.
+            <button type="button" aria-pressed={!!calm} onClick={() => onToggleCalm(!calm)}
+              aria-label={calm ? "Включить анимацию маскота" : "Остановить анимацию маскота"}
+              className="-mt-2 -mr-1 grid size-11 shrink-0 place-items-center rounded-full text-hint" data-calm-toggle>
+              {calm ? <Play size={18} strokeWidth={2.5} aria-hidden /> : <Pause size={18} strokeWidth={2.5} aria-hidden />}
+            </button>
+          )}
+        </div>
         <UrgencyBadge p={p} nowMs={nowMs} />
         <p className="mt-1 text-m font-medium break-words" aria-live="polite">{p.text}</p>
         {loading && <LoadingTrack label={loading} live={live} />}
         {action && (
           <button type="button" onClick={() => onIntent?.(action.intent, action.deadlineId)}
-            className="mt-3 min-h-11 rounded-2xl bg-accent px-4 text-m font-bold text-on-accent">
+            className="mt-3 min-h-11 max-w-full rounded-2xl bg-accent px-4 text-m font-bold text-on-accent">
             {action.label}
           </button>
         )}

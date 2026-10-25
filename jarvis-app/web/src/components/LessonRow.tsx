@@ -24,7 +24,7 @@ export function LessonRow({ lesson, subject, past, onOpen }: { lesson: Lesson; s
           {lesson.change === "removed" && <span className="font-bold text-red">отменена</span>}
           {lesson.change === "added" && <span className="rounded-full bg-green/15 px-1.5 text-[11px] font-bold text-green">новая</span>}
           <span>{lesson.typeLabel || "Занятие"}</span>
-          {lesson.place && <span className={`flex items-center gap-0.5 ${lesson.change === "place" ? "font-bold text-yellow" : ""}`}><MapPin size={12} strokeWidth={2.5} />{lesson.place}{lesson.change === "place" && lesson.was ? <span className="font-normal text-hint"> (была {lesson.was})</span> : null}</span>}
+          {lesson.place && <span className={`flex min-w-0 max-w-full items-center gap-0.5 break-words ${lesson.change === "place" ? "font-bold text-yellow" : ""}`}><MapPin size={12} strokeWidth={2.5} className="shrink-0" /><span className="min-w-0">{lesson.place}</span>{lesson.change === "place" && lesson.was ? <span className="font-normal text-hint"> (была {lesson.was})</span> : null}</span>}
           {lesson.subgroup && <span>подгр. {lesson.subgroup}</span>}
         </span>
       </span>

@@ -15,13 +15,13 @@ P0 — первый работающий набор; P1 — следующая �
 | DES-001 | P0 | A+B | Короткое визуальное направление и карта владения | — | planned / — / — |
 | DES-002 | P0 | B | Семантические токены и две темы в коде | DES-001 | planned / — / — |
 | DES-003 | P0 | B | Примитивы и компоненты состояний | DES-002 | planned / — / — |
-| DES-004 | P0 | A | Чистая модель поведения маскота (Дуся и Варя) | — | review / Валентина / [PR #4](https://github.com/MattoYuzuru/doodle_vibe/pull/4) |
-| DES-005 | P0 | A | Выделенный renderer маскота (Дуся и Варя) | DES-004 | review / Валентина / [PR #7](https://github.com/MattoYuzuru/doodle_vibe/pull/7) |
-| DES-006 | P0 | A | Огонь дедлайнов, корректные реакции и бег при загрузке | DES-005 | review / Валентина / [PR #8](https://github.com/MattoYuzuru/doodle_vibe/pull/8) |
+| DES-004 | P0 | A | Чистая модель поведения маскота (Дуся и Варя) | — | done / Валентина / [PR #4](https://github.com/MattoYuzuru/doodle_vibe/pull/4) |
+| DES-005 | P0 | A | Выделенный renderer маскота (Дуся и Варя) | DES-004 | done / Валентина / [PR #7](https://github.com/MattoYuzuru/doodle_vibe/pull/7) |
+| DES-006 | P0 | A | Огонь дедлайнов, корректные реакции и бег при загрузке | DES-005 | done / Валентина / [PR #8](https://github.com/MattoYuzuru/doodle_vibe/pull/8) |
 | DES-007 | P1 | A | Реестр событий и новогодняя шапочка | DES-005 | planned / — / — |
 | DES-008 | P0 | B | Каталог компонентов и состояний | DES-002; DES-003/DES-005 подключаются по готовности | planned / — / — |
-| DES-009 | P0 | A+B | Доступность, движение и облегчённый режим | Своя DES-003 / DES-005 | planned / — / — |
-| DES-010 | P0 | Frontend | Подключение системы к экранам и пространствам | DES-003, DES-005; согласованный UI/API-контракт | review / Валентина / [PR #10](https://github.com/MattoYuzuru/doodle_vibe/pull/10) |
+| DES-009 | P0 | A+B | Доступность, движение и облегчённый режим | Своя DES-003 / DES-005 | A: review / Валентина / ветка `des-009-motion-a11y`; B: planned / — / — |
+| DES-010 | P0 | Frontend | Подключение системы к экранам и пространствам | DES-003, DES-005; согласованный UI/API-контракт | done / Валентина / [PR #10](https://github.com/MattoYuzuru/doodle_vibe/pull/10) |
 | DES-011 | P1 | B + Frontend | Визуальные и браузерные регрессии | DES-008, DES-010 | planned / — / — |
 | DES-012 | P1 | B | Единая визуальная история демо/презентации | DES-008; подтверждённая реализация | planned / — / — |
 

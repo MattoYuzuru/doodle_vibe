@@ -270,7 +270,8 @@ export function OwlAssistant() {
     const loop = () => {
       t = window.setTimeout(() => {
         if (!alive) return;
-        if (!anim) { setEyes("closed"); window.setTimeout(() => alive && setEyes(ctx.mood === "done" ? "happy" : "open"), 140); }
+        // На скрытой вкладке не моргаем: декоративный цикл не крутится зря (DES-009).
+        if (!anim && !document.hidden) { setEyes("closed"); window.setTimeout(() => alive && setEyes(ctx.mood === "done" ? "happy" : "open"), 140); }
         loop();
       }, 2500 + Math.random() * 3000);
     };

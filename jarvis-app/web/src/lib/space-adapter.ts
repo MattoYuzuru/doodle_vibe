@@ -81,7 +81,7 @@ export function freshness(d: SpaceData | null): { updatedAt: number | null; stal
 export function toAssistantContext(
   space: UniversitySpace,
   d: SpaceData | null,
-  env: { nowMs: number; reducedMotion: boolean; lite: boolean; visible: boolean; acknowledged: readonly string[] },
+  env: { nowMs: number; reducedMotion: boolean; lite: boolean; visible: boolean; acknowledged: readonly string[]; calm?: boolean },
 ): AssistantContext {
   const own = d && d.spaceId === space.id ? d : null;
   const connections = connectionsOf(own);
@@ -111,7 +111,7 @@ export function toAssistantContext(
     } : null,
     recentEvent: null,
     acknowledgedEventIds: env.acknowledged,
-    preferences: { seasonal: true, motion: "system" },
+    preferences: { seasonal: true, motion: env.calm ? "calm" : "system" },
     reducedMotion: env.reducedMotion,
     lite: env.lite,
     visible: env.visible,

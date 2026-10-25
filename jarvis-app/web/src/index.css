@@ -390,6 +390,8 @@ html.lite [data-tab-page][aria-hidden="true"] {
 .owl-a-panic .varya-beak-l { animation: owl-chomp 0.3s steps(1) 6; }
 @keyframes owl-chomp { 50% { transform: translateY(1px); } }
 .owl.owl-static, .owl.owl-static * { animation: none !important; }
+/* Видимый фокус с клавиатуры на экранах вузов и в карточке маскота (DES-009, зона A; общий UI-kit — зона B). */
+.space-ui :is(button, a, input, select, textarea):focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
 /* DES-006: огонь за маскотом (два кадра пламени), тёплое свечение «скоро», бег на месте и полоска загрузки без процентов.
    В спокойном режиме остаются первый кадр огня, одна пара ног и неподвижная бледная полоска — смысл тот же. */
 .owl-fire-b, .owl-run-b { opacity: 0; }

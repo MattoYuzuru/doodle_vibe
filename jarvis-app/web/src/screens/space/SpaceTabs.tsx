@@ -9,7 +9,7 @@ import { Tile, TileTitle } from "../../components/Tile";
 import { EmptyState } from "../../components/ui";
 import { useNav } from "../../hooks/useNav";
 import { useScheme } from "../../hooks/useScheme";
-import { useSpace } from "../../hooks/useSpace";
+import { useMascotMotion, useSpace } from "../../hooks/useSpace";
 import { DAY, addDays, dayKey, effectiveDue, formatLongDate, formatShortDate, mskParts } from "../../lib/dates";
 import { lite } from "../../lib/perf";
 import { type Connection, usePlatform } from "../../store/platform";
@@ -89,7 +89,7 @@ function SourcesTile() {
   if (!connections.length) return null;
   return (
     <Tile span={2} index={3} className="min-h-0 pb-2">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-2">
         <TileTitle>Источники</TileTitle>
         <button type="button" onClick={() => push({ name: "connect", spaceId: spaceId ?? undefined })} className="-my-1 min-h-8 px-1 text-s font-bold text-accent">Добавить</button>
       </div>
@@ -111,10 +111,11 @@ function SourcesTile() {
 /** Пустой экран без вузов: маскот зовёт подключить учёбу. */
 function NoSpaces() {
   const push = useNav((s) => s.push);
+  const motion = useMascotMotion();
   const dark = useScheme() === "dark";
   return (
     <div className="flex flex-col items-start gap-3 rounded-[22px] bg-card p-4" data-space-empty>
-      <MascotLoader character="varya" label="Гнездо пока пустое" dark={dark} motion={lite ? "static" : "full"} />
+      <MascotLoader character="varya" label="Гнездо пока пустое" dark={dark} motion={motion} />
       <p className="text-m">Выбери свой вуз и скинь ссылки на учебные сайты: LMS, расписание, таблицы. Я соберу сроки и пары в одно место.</p>
       <button type="button" onClick={() => push({ name: "connect" })} className="min-h-11 rounded-2xl bg-accent px-4 text-m font-bold text-on-accent">Подключить учёбу</button>
     </div>
@@ -122,8 +123,10 @@ function NoSpaces() {
 }
 
 export function SpaceHomeScreen() {
-  const { space, data, deadlines, lessons, subjects, presentation, now, spaces } = useSpace();
+  const { space, data, deadlines, lessons, subjects, presentation, now, spaces, calm } = useSpace();
   const spacesStatus = usePlatform((s) => s.spacesStatus);
+  const motion = useMascotMotion();
+  const setCalm = usePlatform((s) => s.setCalm);
   const acknowledge = usePlatform((s) => s.acknowledge);
   const setTab = useNav((s) => s.setTab);
   const dark = useScheme() === "dark";
@@ -135,18 +138,19 @@ export function SpaceHomeScreen() {
   const todays = lessons.filter((l) => l.date === today);
 
   return (
-    <div className="flex flex-col gap-3 pt-1" data-space-home={space?.id ?? "none"}>
+    <div className="space-ui flex flex-col gap-3 pt-1" data-space-home={space?.id ?? "none"}>
       <h1 className="font-display text-[22px] font-extrabold tracking-[-0.02em]">{formatLongDate(today)}</h1>
       {spaces.length > 0 && <SpaceSwitcher />}
       {spacesStatus === "loading" && !spaces.length ? (
-        <MascotLoader character="dusya" label="Загружаю вузы" dark={dark} motion={lite ? "static" : "full"} />
+        <MascotLoader character="dusya" label="Загружаю вузы" dark={dark} motion={motion} />
       ) : !space ? (
         <NoSpaces />
       ) : (
         <>
           <SpaceStatus />
           {presentation && (
-            <MascotCard presentation={presentation} nowMs={now} dark={dark} size={72} onIntent={onIntent} onReactionShown={acknowledge} />
+            <MascotCard presentation={presentation} nowMs={now} dark={dark} size={72} onIntent={onIntent} onReactionShown={acknowledge}
+              calm={calm} onToggleCalm={setCalm} />
           )}
           {data?.deadlines && (
             <div className="grid grid-cols-2 gap-2.5">
@@ -158,7 +162,7 @@ export function SpaceHomeScreen() {
                 </Tile>
               )}
               <Tile span={2} index={1} className="min-h-0 pb-2">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-x-2">
                   <TileTitle>Расписание на сегодня{todays.length > 0 && <span className="ml-1.5 text-hint">{todays.length}</span>}</TileTitle>
                   <button type="button" onClick={() => setTab("plan")} className="-my-1 min-h-8 px-1 text-s font-bold text-accent">Весь план</button>
                 </div>
@@ -178,8 +182,9 @@ export function SpaceHomeScreen() {
 
 function Loading() {
   const { space } = useSpace();
+  const motion = useMascotMotion();
   const dark = useScheme() === "dark";
-  return <MascotLoader character={space ? characterFor(space) : "dusya"} label={`Загружаю ${space?.name ?? ""}`.trim()} dark={dark} motion={lite ? "static" : "full"} />;
+  return <MascotLoader character={space ? characterFor(space) : "dusya"} label={`Загружаю ${space?.name ?? ""}`.trim()} dark={dark} motion={motion} />;
 }
 
 export function SpaceDeadlinesScreen() {
@@ -191,7 +196,7 @@ export function SpaceDeadlinesScreen() {
   }, [deadlines, now]);
   const undated = (data?.deadlines?.items.length ?? 0) - deadlines.length;
   return (
-    <div className="flex flex-col gap-3 pt-1" data-space-deadlines={space?.id ?? "none"}>
+    <div className="space-ui flex flex-col gap-3 pt-1" data-space-deadlines={space?.id ?? "none"}>
       <h1 className="font-display text-[22px] font-extrabold tracking-[-0.02em]">Дедлайны{space ? ` · ${space.name}` : ""}</h1>
       <SpaceSwitcher />
       <SpaceStatus />
@@ -221,7 +226,7 @@ export function SpacePlanScreen() {
   const today = dayKey(now);
   const days = useMemo(() => Array.from({ length: 14 }, (_, i) => addDays(today, i)).map((k) => ({ k, items: lessons.filter((l) => l.date === k) })).filter((d) => d.items.length), [lessons, today]);
   return (
-    <div className="flex flex-col gap-3 pt-1" data-space-plan={space?.id ?? "none"}>
+    <div className="space-ui flex flex-col gap-3 pt-1" data-space-plan={space?.id ?? "none"}>
       <h1 className="font-display text-[22px] font-extrabold tracking-[-0.02em]">План{space ? ` · ${space.name}` : ""}</h1>
       <SpaceSwitcher />
       <SpaceStatus />
@@ -239,7 +244,7 @@ export function SpaceCoursesScreen() {
   const { space, data, subjects } = useSpace();
   const items = data?.courses?.items ?? [];
   return (
-    <div className="flex flex-col gap-3 pt-1" data-space-courses={space?.id ?? "none"}>
+    <div className="space-ui flex flex-col gap-3 pt-1" data-space-courses={space?.id ?? "none"}>
       <h1 className="font-display text-[22px] font-extrabold tracking-[-0.02em]">Курсы{space ? ` · ${space.name}` : ""}</h1>
       <SpaceSwitcher />
       <SpaceStatus />
