@@ -9,10 +9,11 @@
     "check": "node scripts/check.mjs",
     "typecheck": "npm --prefix jarvis-app/web run typecheck",
     "build": "npm --prefix jarvis-app/web run build",
-    "test": "npm run test:unit && npm run test:integration && npm run test:platform",
+    "test": "npm run test:unit && npm run test:web && npm run test:integration && npm run test:platform",
     "test:platform": "node scripts/test-platform.mjs",
     "test:deploy": "python3 -m unittest discover -s ops/deploy -p 'test_*.py'",
     "test:unit": "node scripts/test.mjs unit",
+    "test:web": "node scripts/test-web.mjs",
     "test:integration": "node scripts/test.mjs integration",
     "test:e2e": "playwright test && node scripts/check-e2e-report.mjs",
     "ci": "npm run check && npm run typecheck && npm test && npm run test:deploy && npm run build && npm run test:e2e"

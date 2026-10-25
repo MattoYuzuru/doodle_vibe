@@ -38,11 +38,12 @@ npx playwright install chromium
 | `npm run typecheck` | Проверка TypeScript Mini App |
 | `npm run build` | Сборка Mini App |
 | `npm run test:unit` | Выбранные локальные проверки функций и форматов |
+| `npm run test:web` | Unit-тесты чистых модулей Mini App (логика маскота) в Node с фиксированными часами |
 | `npm run test:integration` | Изолированные проверки модулей с локальными поддельными сервисами |
 | `npm run test:platform` | SQLite, HTTP, auth, источники и retrieval на синтетических данных |
 | `npm run test:deploy` | Python-фикстуры release/backup/rollback без SSH |
 | `npm run test:e2e` | Браузерные smoke-сценарии собранного UI с синтетическим API |
-| `npm test` | Unit, integration и platform; не включает browser smoke и сборку |
+| `npm test` | Unit, web unit, integration и platform; не включает browser smoke и сборку |
 | `npm run ci` | Check, typecheck, test, build и browser smoke последовательно |
 
 После изменения зависимостей обновляй соответствующий lockfile. Наличие

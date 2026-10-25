@@ -106,6 +106,7 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix jarvis-app/web
       - run: npm run typecheck
+      - run: npm run test:web
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e

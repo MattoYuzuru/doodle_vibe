@@ -9,7 +9,7 @@ platform fixtures для пространств, discovery, auth, jobs и retrie
 | Уровень | Команда | Что доказывает | Чего не доказывает |
 |---|---|---|---|
 | Статический | `npm run check`, `npm run typecheck` | Применимый синтаксис, типы, локальные ссылки документов | Исполнение приложения и корректность вузовского API |
-| Unit | `npm run test:unit` | Выбранные функции преобразования и локальные правила на синтетических входах | Связку сервисов и живые данные |
+| Unit | `npm run test:unit`, `npm run test:web` | Выбранные функции преобразования и локальные правила на синтетических входах; `test:web` — чистые TS-модули Mini App | Связку сервисов и живые данные |
 | Integration | `npm run test:integration` | Контракты выбранных модулей, файлы состояния, доступ и отказ поддельных сервисов | Живой SSO, реальное расписание и доставку Telegram |
 | Platform | `npm run test:platform` | SQLite, ACL 2×2, crypto, Telegram HMAC, jobs/fencing/restart, SSRF, OAuth/refresh и retrieval/chat | Живые вузовские аккаунты и ответы настоящей модели |
 | Deploy | `npm run test:deploy` | Release, health gate, backup и rollback в фикстурах | Работоспособность реального сервера |
@@ -52,6 +52,11 @@ platform fixtures для пространств, discovery, auth, jobs и retrie
 подключения во время sync; удаление записи из памяти и поискового индекса.
 Они проверяются в `backend/test`; frontend cutover и live интеграции остаются
 отдельными критериями приёмки.
+
+Web unit-тесты лежат в `jarvis-app/web/tests/*.test.mjs` и запускаются через
+`node --test` с загрузчиком `scripts/web-ts-hooks.mjs` (Node сам убирает типы;
+допустим только стираемый синтаксис TypeScript). В CI они идут в задаче
+`Web build and browser fixtures` после typecheck.
 
 Дизайн-задачи проверяются по [DS-критериям](design/requirements.md) и
 [DES-001–DES-012](design/tasks.md). Чистая модель маскота требует unit-проверок
