@@ -1,8 +1,8 @@
 # ЦУ и ВШЭ: вход и read-only API (исследование)
 
 Статус: исследование от **2026-10-25**; входные данные для пресетов входа, менеджера браузерных сессий и learned recipes.
-Это не контракт: форматы рецептов ниже — **черновики**, их нужно свести с ADR-0005 и
-`auth-sessions-contract.md` (на момент написания в `main` их нет). Связанные документы:
+Это не контракт. Рецепты (раздел 4) приведены к формату `LearnedRecipe` v2 из
+[auth-sessions-contract.md](../architecture/auth-sessions-contract.md); пресеты входа (раздел 3) — черновики, формат пресета входа задаёт задача A. Связанные документы:
 [Вузы](../universities.md), [ADR-0004](../adr/0004-universal-source-types.md).
 
 ## Как это собрано и границы
@@ -108,8 +108,7 @@
 ### 2.2 Read-only методы Moodle AJAX (`/lib/ajax/service.php`) — **предположения**
 
 Метод AJAX вызывается как `POST /lib/ajax/service.php?sesskey=<sesskey>&info=<method>` с телом `[{"index":0,"methodname":"…","args":{…}}]`,
-`sesskey` берётся из страницы (`M.cfg.sesskey`) после входа. Это **POST по транспорту, но чтение по смыслу**: рецепты
-должны явно разрешать такие вызовы по allowlist методов, это нужно решить в ADR-0005. Сегодня не проверено ничего, кроме
+`sesskey` берётся из страницы (`M.cfg.sesskey`) после входа. Это **POST по транспорту, но чтение по смыслу**: [контракт](../architecture/auth-sessions-contract.md) §5 уже допускает эти методы по allowlist в коде. Сегодня не проверено ничего, кроме
 существования эндпоинта (HSE-8); список ниже — из исходников Moodle 4.x, годность на `edu.hse.ru` надо подтвердить с сессией.
 
 | Назначение | `methodname` | Ключевые `args` | Ключевые поля ответа | Ур. |
@@ -149,7 +148,7 @@
 
 ## 3. Черновики пресетов входа
 
-Формат — черновик для A/C; поля сводятся с `auth-sessions-contract.md`. Все пресеты предполагают **удалённый браузер
+Формат — черновик для A/C (в контракте формат пресета входа не фиксирован). Все пресеты предполагают **удалённый браузер
 с входом пользователя**, секреты не вводятся агентом.
 
 ```json
@@ -231,128 +230,155 @@
 }
 ```
 
-## 4. Черновики рецептов эндпоинтов
+## 4. Черновики рецептов эндпоинтов (формат `LearnedRecipe` v2)
 
-Формат черновика: `urlTemplate`, `method`, `auth` (источник авторизации), `bootstrap` (значения, получаемые до основного вызова),
-`map` (поля ответа → общие модели `courses` / `schedule` / `deadlines` / `documents`). Выражения путей — точечные,
-`[]` — перебор массива. **Ничего не отправляющие вызовы:** только `GET`, кроме отдельно помеченного Moodle AJAX.
+Сверено с [ADR-0005](../adr/0005-remote-browser-login-and-learned-recipes.md), [auth-sessions-contract.md](../architecture/auth-sessions-contract.md) §5 и
+`LearnedEndpoint` в `backend/contracts.d.ts`: пути значений — JSON Pointer, `request.query` — объект, поля — `{path, transform?}`,
+шаблоны — `{param}`, `{today}`, `{nowUnix}`, `{plusDaysUnix:N}`. Один рецепт = один origin; личных значений в рецепте нет
+(идентификаторы курсов не подставляются). Ниже — то, что **выразимо сейчас**; невыразимое вынесено в таблицу пробелов 4.4.
 
-### 4.1 ЦУ
-
-```json
-{
-  "draft": "recipe/v0",
-  "university": "cu",
-  "auth": { "kind": "browser-session-cookies", "origin": "https://my.centraluniversity.ru", "headers": "none" },
-  "check": { "method": "GET", "urlTemplate": "https://my.centraluniversity.ru/api/account/me", "ok": 200, "expired": 401 },
-  "endpoints": {
-    "courses": {
-      "method": "GET",
-      "urlTemplate": "https://my.centraluniversity.ru/api/micro-lms/courses/student?limit=100&offset=0&state=published",
-      "paging": { "limit": "limit", "offset": "offset", "total": "paging.totalCount" },
-      "map": { "items": "items[]", "id": "id", "title": "name", "category": "category",
-               "archived": "isArchived", "url": "https://my.centraluniversity.ru/learn/courses/view/actual/{id}",
-               "syllabusUrl": "settings.syllabusUrl" }
-    },
-    "deadlines": {
-      "method": "GET",
-      "urlTemplate": "https://my.centraluniversity.ru/api/micro-lms/deadlines",
-      "map": { "items": "[]", "externalId": "id", "title": "exercise.name", "dueAt": "deadline",
-               "courseId": "course.id", "courseTitle": "course.name", "state": "state",
-               "maxScore": "exercise.maxScore", "startsAt": "exercise.startDate",
-               "group": "theme.name", "url": null }
-    },
-    "schedule": {
-      "method": "GET",
-      "urlTemplate": "https://my.centraluniversity.ru/api/micro-lms/students/me/timetables",
-      "map": {
-        "items": "[].eventRows[].calendarEvent",
-        "context": { "courseId": "[].courseId", "courseTitle": "[].courseName" },
-        "externalId": "calendarEventId", "kind": "eventType", "format": "format",
-        "location": ["location.title", "location.building"], "hosts": "hosts[].name",
-        "recurrence": { "startDate": "schedule.startDate", "endDate": "schedule.endDate", "startTime": "schedule.startTime",
-                        "endTime": "schedule.endTime", "weekday": "schedule.dayOfWeek", "intervalWeeks": "schedule.interval" }
-      },
-      "notes": ["это правило повторения, а не список занятий: нужно развернуть в даты", "часовой пояс не передан — по умолчанию Europe/Moscow (П)", "не сохранять hosts[].email"]
-    },
-    "progress": {
-      "method": "GET",
-      "urlTemplate": "https://my.centraluniversity.ru/api/micro-lms/courses/{courseId}/student/progress",
-      "bootstrap": { "courseId": "courses.items[].id" },
-      "map": { "earned": "earnedScore", "left": "leftToEarnScore", "max": "maxScore" }
-    },
-    "documents": {
-      "method": "GET",
-      "chain": [
-        { "urlTemplate": "https://my.centraluniversity.ru/api/micro-lms/courses/{courseId}/overview",
-          "bootstrap": { "courseId": "courses.items[].id" }, "yields": { "longreadId": "themes[].longreads[].id" } },
-        { "urlTemplate": "https://my.centraluniversity.ru/api/micro-lms/longreads/{longreadId}/materials?limit=100&offset=0",
-          "map": { "items": "items[]", "externalId": "id", "kind": "type", "viewType": "viewType", "state": "state" } }
-      ],
-      "status": "схема `longreads[]` в overview не снята; ссылки на файлы в materials не проверены"
-    }
-  },
-  "forbidden": ["/api/student-hub/students/me", "любые POST/PUT/PATCH/DELETE"]
-}
-```
-
-### 4.2 ВШЭ — Smart LMS (Moodle AJAX, предположение)
+### 4.1 ЦУ (`https://my.centraluniversity.ru`, `auth: cookie`)
 
 ```json
 {
-  "draft": "recipe/v0",
-  "university": "hse",
-  "source": "https://edu.hse.ru",
-  "auth": { "kind": "browser-session-cookies", "origin": "https://edu.hse.ru", "cookie": "MoodleSession" },
+  "version": 2,
+  "type": "learned",
+  "origin": "https://my.centraluniversity.ru",
+  "revision": 1,
+  "learnedAt": "2026-10-25T00:00:00.000Z",
+  "auth": { "type": "cookie" },
   "bootstrap": [
-    { "name": "sesskey", "from": "page-js", "page": "https://edu.hse.ru/my/", "expr": "M.cfg.sesskey", "status": "inferred" }
+    { "id": "account", "method": "GET", "path": "/api/account/me", "extract": { "accountId": "/sub" } }
   ],
-  "transport": {
-    "kind": "moodle-ajax",
-    "request": "POST https://edu.hse.ru/lib/ajax/service.php?sesskey={sesskey}&info={methodname}",
-    "body": "[{\"index\":0,\"methodname\":\"{methodname}\",\"args\":{args}}]",
-    "readOnlyAllowlist": ["core_course_get_enrolled_courses_by_timeline_classification", "core_calendar_get_action_events_by_timesort"],
-    "decision": "нужно ли разрешать POST только для allowlist — решает ADR-0005"
-  },
-  "endpoints": {
-    "courses": {
-      "methodname": "core_course_get_enrolled_courses_by_timeline_classification",
-      "args": { "classification": "all", "limit": 100, "offset": 0, "sort": "fullname asc" },
-      "map": { "items": "[0].data.courses[]", "id": "id", "title": "fullname", "url": "viewurl" }
+  "endpoints": [
+    {
+      "id": "courses",
+      "kind": "courses",
+      "request": { "method": "GET", "path": "/api/micro-lms/courses/student", "query": { "state": "published" } },
+      "pagination": { "type": "offset", "param": "offset", "limit": 50, "maxPages": 3 },
+      "response": {
+        "itemsPath": "/items",
+        "fields": { "id": { "path": "/id" }, "title": { "path": "/name" }, "description": { "path": "/category" } }
+      }
     },
-    "deadlines": {
-      "methodname": "core_calendar_get_action_events_by_timesort",
-      "args": { "timesortfrom": "{nowUnix}", "timesortto": "{nowUnix+8w}", "limitnum": 50, "limittononsuspendedevents": true },
-      "map": { "items": "[0].data.events[]", "externalId": "id", "title": "name", "dueAt": "timesort (unix)",
-               "courseId": "course.id", "courseTitle": "course.fullname", "url": "url" }
+    {
+      "id": "deadlines",
+      "kind": "deadlines",
+      "request": { "method": "GET", "path": "/api/micro-lms/deadlines" },
+      "response": {
+        "itemsPath": "",
+        "fields": {
+          "id": { "path": "/id" },
+          "title": { "path": "/exercise/name" },
+          "dueAt": { "path": "/deadline", "transform": "iso" },
+          "courseId": { "path": "/course/id" },
+          "description": { "path": "/course/name" }
+        }
+      }
     }
-  },
-  "errorSignals": { "expired": "[0].error == true и errorcode servicerequireslogin / редирект на /login/", "status": "inferred" },
-  "status": "все методы и пути ответов — из исходников Moodle 4.x; на edu.hse.ru не проверялись"
+  ],
+  "validation": { "requireKinds": ["courses", "deadlines"], "minItems": 1 }
 }
 ```
 
-### 4.3 ВШЭ — ЕЛК (расписание вне сети ВШЭ)
+Замечания: `bootstrap` нужен только для `identityDigest` (смена аккаунта); `limit` пагинации — значение параметра `limit` (проверено: `limit` и `offset`,
+ответ `paging.totalCount`); `itemsPath: ""` — корень ответа является массивом (проверить, что линтер контракта допускает пустой указатель, иначе нужен корневой `/`);
+`url` не задан: ссылка на задание в UI ЦУ не снималась (страница курса — `/learn/courses/view/actual/{courseId}`, это шаблон по `courseId`, а поле `url` берёт только значение из ответа);
+`/api/micro-lms/students/me` годится для отображаемого имени, но не нужен синку; `/api/student-hub/students/me` — **запрещён** (ИНН, СНИЛС, дата рождения).
+
+### 4.2 ЦУ — расписание (черновик, пока не выразим)
 
 ```json
 {
-  "draft": "recipe/v0",
-  "university": "hse",
-  "source": "https://lk.hse.ru",
-  "auth": { "kind": "browser-session-cookies", "origin": "https://lk.hse.ru" },
-  "check": { "method": "GET", "urlTemplate": "https://lk.hse.ru/api/get-user", "ok": 200, "expired": 401 },
-  "endpoints": {
-    "schedule": {
-      "method": "GET",
-      "urlTemplate": "https://lk.hse.ru/api/get-myschedule",
-      "params": "unknown: снять схему и параметры (период?) в авторизованной сессии",
-      "fallbackProbe": "https://lk.hse.ru/api/get-myschedule-soon",
-      "map": "unknown"
+  "id": "schedule",
+  "kind": "schedule",
+  "request": { "method": "GET", "path": "/api/micro-lms/students/me/timetables" },
+  "source": {
+    "itemsPath": "/*/eventRows/*/calendarEvent",
+    "fields": {
+      "id": "/calendarEventId", "title": "(courseName из родителя)", "location": ["/location/title", "/location/building"],
+      "recurrence": { "startDate": "/schedule/startDate", "endDate": "/schedule/endDate", "startTime": "/schedule/startTime",
+                      "endTime": "/schedule/endTime", "weekday": "/schedule/dayOfWeek", "intervalWeeks": "/schedule/interval" }
     }
   },
-  "status": "эндпоинты найдены в публичном бандле; анонимно 401; схему ответа ещё нужно снять"
+  "timeZone": "Europe/Moscow (предположение; в ответе не передаётся)"
 }
 ```
+
+Это не валидный `LearnedEndpoint`: нужны вложенные массивы, поля родителя, склейка даты и времени и разворот недельного правила (см. 4.4).
+Не сохранять `hosts[].email` и вообще `hosts`.
+
+### 4.3 ВШЭ
+
+**Smart LMS** (`https://edu.hse.ru`, `auth: cookie`; Moodle AJAX; *предположение*, на `edu.hse.ru` не проверено): POST разрешён контрактом только для двух методов из allowlist в коде —
+они совпадают с найденными здесь.
+
+```json
+{
+  "version": 2,
+  "type": "learned",
+  "origin": "https://edu.hse.ru",
+  "revision": 1,
+  "learnedAt": "2026-10-25T00:00:00.000Z",
+  "auth": { "type": "cookie" },
+  "endpoints": [
+    {
+      "id": "courses",
+      "kind": "courses",
+      "request": {
+        "method": "POST",
+        "path": "/lib/ajax/service.php",
+        "query": { "sesskey": "{sesskey}", "info": "core_course_get_enrolled_courses_by_timeline_classification" },
+        "body": [{ "index": 0, "methodname": "core_course_get_enrolled_courses_by_timeline_classification",
+                   "args": { "classification": "all", "limit": 100, "offset": 0, "sort": "fullname asc", "customfieldname": "", "customfieldvalue": "" } }]
+      },
+      "response": {
+        "itemsPath": "/0/data/courses",
+        "fields": { "id": { "path": "/id" }, "title": { "path": "/fullname" }, "url": { "path": "/viewurl" } }
+      }
+    },
+    {
+      "id": "deadlines",
+      "kind": "deadlines",
+      "request": {
+        "method": "POST",
+        "path": "/lib/ajax/service.php",
+        "query": { "sesskey": "{sesskey}", "info": "core_calendar_get_action_events_by_timesort" },
+        "body": [{ "index": 0, "methodname": "core_calendar_get_action_events_by_timesort",
+                   "args": { "timesortfrom": "{nowUnix}", "timesortto": "{plusDaysUnix:56}", "limitnum": 50, "limittononsuspendedevents": true } }]
+      },
+      "response": {
+        "itemsPath": "/0/data/events",
+        "fields": { "id": { "path": "/id" }, "title": { "path": "/name" }, "dueAt": { "path": "/timesort", "transform": "unixSeconds" },
+                    "url": { "path": "/url" }, "courseId": { "path": "/course/id" }, "description": { "path": "/course/fullname" } }
+      }
+    }
+  ],
+  "validation": { "requireKinds": ["courses", "deadlines"], "minItems": 1 }
+}
+```
+
+Блокер: `{sesskey}` не получить из JSON (4.4, пробел G5). Пока годится только Moodle-календарь-экспорт из ADR-0004 (`calendar_url`).
+
+**ЕЛК** (`https://lk.hse.ru`, отдельный origin ⇒ отдельный рецепт и, скорее всего, отдельное подключение; `auth: cookie`):
+`GET /api/get-myschedule` и `GET /api/get-myschedule-soon` — **схема и параметры не сняты**, поэтому валидный рецепт составить нельзя. Проверка сессии — `GET /api/get-user` (200/401).
+Первое действие после получения сессии владельца: снять ключи и типы ответа `get-myschedule*` (значения не сохранять) и дополнить этот раздел.
+
+### 4.4 Пробелы между наблюдённым API и форматом v2 (для сессии B)
+
+| # | Что нужно | Где | Предложение |
+|---|---|---|---|
+| G1 | Обход по курсам (`{courseId}` из списка): `…/student/progress`, `…/overview`, `…/longreads/{id}/materials` | ЦУ: баллы, материалы, документы | `bootstrap` извлекает одно значение; нужен цикл по элементам предыдущего эндпоинта, либо оставить это agent retrieval |
+| G2 | Вложенные массивы и поля родителя в одном элементе | ЦУ `timetables` (`[].eventRows[].calendarEvent` + `courseName`) | указатель с `*` и ссылка на родителя, либо допустимый `flatten` |
+| G3 | Недельное правило вместо списка занятий; склейка `startDate`+`startTime`; часовой пояс | ЦУ расписание | поле `recurrence` с `{startDate,startTime,endTime,weekday,intervalWeeks}` или разворот в sync по пресету `timeZone` |
+| G4 | Корневой массив как `itemsPath` | ЦУ `deadlines` | допустить `""`/`"/"` |
+| G5 | Значение из страницы (`M.cfg.sesskey`), а не из JSON | Moodle AJAX | `bootstrap` типа `page-js` (GET HTML + фиксированное выражение из allowlist) или чтение в браузере при входе и хранение в `StoredSession` |
+| G6 | Шаблон URL для `url` (`/learn/courses/view/actual/{id}`) | ЦУ | поле `url` как шаблон с `{id}` или `urlTemplate` |
+| G7 | Два origin одного вуза (`edu.hse.ru`, `lk.hse.ru`) с общей SSO-сессией | ВШЭ | пресет входа с allowlist хостов `edu.hse.ru`, `lk.hse.ru`, `saml.hse.ru`; два подключения/рецепта |
+| G8 | Срок жизни cookie-сессии неизвестен | ЦУ, ВШЭ | `maxAgeHours` пресета по умолчанию 12 ч (контракт §4) — достаточно как стартовое значение; уточнить после живого наблюдения |
+
+Подтверждается контракт: ЦУ — `auth: cookie` (браузер не отправляет `Authorization`, CU-5), поэтому правило выбора bearer из §4 контракта к ЦУ не применяется.
+Признаки протухания из §6 контракта совпадают с наблюдённым (401 `problem+json` у ЦУ; редирект на `/login/…` у Moodle).
 
 ## 5. Расхождения с исходным заданием и документами репозитория
 
@@ -368,5 +394,5 @@
 2. Подтвердить на `edu.hse.ru` методы Moodle AJAX и признак входа (`M.cfg.userId`, `sesskey`) — нужна сессия владельца.
 3. Узнать, есть ли MFA после пароля на `saml.hse.ru` и в какой момент в ЦУ включается reCAPTCHA/SmartCaptcha.
 4. Имена и срок жизни cookies шлюза ЦУ и `MoodleSession`; привязка к IP/устройству; поведение при смене IP сервера.
-5. Решение для ADR-0005: допустимы ли read-only POST (Moodle AJAX) в декларативных рецептах и как это ограничить allowlist.
+5. Закрыто контрактом: read-only POST допустим по allowlist в коде (оба метода Moodle из 2.2 уже в списке). Остаётся G5 — получение `sesskey` для рецепта.
 6. Снять схему `overview.themes[].longreads[]`/`exercises[]` и `tasks/{id}` без ПДн для рецепта `documents` ЦУ.
