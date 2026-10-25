@@ -21,8 +21,9 @@
 
 Следствия:
 
-- **SSO/MFA ВШЭ не автоматизируется.** Backend не проходит Keycloak/OIDC, MFA и CAPTCHA и не принимает
-  cookies браузера. Это границы безопасности, а не недоработка.
+- **SSO/MFA ВШЭ backend сам не обходит.** Он не проходит Keycloak (`saml.hse.ru`), MFA и CAPTCHA без человека и не принимает
+  cookies браузера. Планируемый вход через удалённый браузер ([ADR-0005](adr/0005-remote-browser-login-and-learned-recipes.md)) оставляет
+  прохождение SSO человеку; пока он не реализован, действуют способы из таблицы ниже.
 - **РУЗ не проверен вживую:** из внешней сети формат ответа недоступен. Адаптер написан по публичным
   сторонним описаниям API (`/api/search?term=…&type=student`, `/api/schedule/student/{id}?start=YYYY.MM.DD&finish=YYYY.MM.DD&lng=1`,
   поля `date`, `beginLesson`, `endLesson`, `discipline`, `auditorium`, `building`, `kindOfWork`, `lecturer`, `lessonOid`)
