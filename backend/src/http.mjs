@@ -188,7 +188,8 @@ export function createApp({store, config, createSources, model = null, retrieveW
     } catch (error) {
       const code = error instanceof AppError ? error.code : 'INTERNAL_ERROR';
       const status = error instanceof AppError ? error.status : 500;
-      onLog({requestId,code,status});
+      let route = ''; try { route = new URL(req.url,'http://localhost').pathname.slice(0,200); } catch {}
+      onLog({requestId,method:req.method,route,code,status});
       if (!res.headersSent) send(res,status,{error:{code,requestId}},requestId);
       else res.end();
     }

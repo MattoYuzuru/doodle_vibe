@@ -76,7 +76,7 @@ Object.assign(env, {
 });
 const backend = spawn(process.execPath, ['src/main.mjs'], { cwd: join(root, 'backend'), env, stdio: ['ignore', 'pipe', 'inherit'] });
 // Backend log lines are JSON events without bodies; show only the ones that matter locally.
-backend.stdout.on('data', chunk => { for (const line of String(chunk).split('\n')) if (/"event":"(started|job_error)"|"status":5\d\d/.test(line)) console.log(line); });
+backend.stdout.on('data', chunk => { for (const line of String(chunk).split('\n')) if (/"event":"(started|job_error)"|"status":[45]\d\d/.test(line)) console.log(line); });
 let stopping = false;
 const stop = () => { if (!stopping) { stopping = true; backend.kill('SIGTERM'); } };
 process.on('SIGINT', stop); process.on('SIGTERM', stop);

@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ApiV1Error, createApiV1Client, type LoginSession } from "../../api/v1";
 import { MascotLoader } from "../../components/assistant/MascotCard";
 import { useScheme } from "../../hooks/useScheme";
 import { useMascotMotion } from "../../hooks/useSpace";
 import { connectionsOf, characterFor } from "../../lib/space-adapter";
 import { AUTH_NOTES, type AuthField, type AuthMethod, FIELD_LABEL, SOURCE_PRESETS, authBody, authReady, sourceError, sourceProblem } from "../../lib/sources";
 import { type Connection, PlatformError, type SourceKind, type UniversitySpace, usePlatform } from "../../store/platform";
-import { haptic } from "../../telegram/webapp";
+import { apiBase } from "../../store/api";
+import { haptic, tg } from "../../telegram/webapp";
+import { LoginFlow } from "../../universities/LoginFlow";
+import { sayError } from "../../universities/messages";
 import { openSource } from "./SpaceTabs";
 
 /*
@@ -51,6 +55,9 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  // Вход паролем вуза (SSO) и через удалённый браузер — отдельная сессия входа, не /auth.
+  const [login, setLogin] = useState<LoginSession | null>(null);
+  const client = useMemo(() => createApiV1Client({ baseUrl: apiBase().replace(/\/$/, ""), initData: () => tg?.initData ?? "" }), []);
   const dark = useScheme() === "dark";
   const motion = useMascotMotion();
   const st = usePlatform.getState;
@@ -76,6 +83,9 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
   const settle = async (connectionId: string, jobId: string) => {
     setBusy("Проверяю сайт");
     try { await st().waitJob(jobId); } catch (e) { setError(say(e)); }
+    await apply(connectionId);
+  };
+  const apply = async (connectionId: string) => {
     const { connection, authMethods } = await st().getConnection(connectionId);
     setConn(connection);
     setMethods(authMethods);
@@ -91,7 +101,7 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
 
   const addSource = async (sourceUrl: string, sourceKind: SourceKind, label?: string) => {
     if (!space) return;
-    setError(null); setDone(null); setConn(null); setMethods([]); setValues({});
+    setError(null); setDone(null); setConn(null); setMethods([]); setValues({}); setLogin(null);
     let u: URL;
     try { u = new URL(sourceUrl.trim()); } catch { setError(ERRORS.INVALID_URL); return; }
     if (u.protocol !== "https:" || u.username || u.password || u.search || u.hash) { setError(ERRORS.INVALID_URL); return; }
@@ -115,10 +125,36 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
         setDone("Открыла страницу входа. После входа вернись в Telegram и обнови данные на Главной.");
         return;
       }
+      if (method.type === "remote_login" || method.type === "sso_password") {
+        const request = method.type === "remote_login" ? { mode: "interactive" as const }
+          : { mode: "password" as const, username: (values.username ?? "").trim(), password: values.password ?? "" };
+        setValues({}); // пароль уходит одним запросом и в форме не остаётся
+        setLogin((await client.startLogin(conn.id, request)).login);
+        return;
+      }
       const { job } = await st().saveAuth(conn.id, authBody(origin, method, values));
       setValues({}); // секреты не держим в форме дольше отправки
       await settle(conn.id, job.id);
+    } catch (e) { setError(e instanceof ApiV1Error ? sayError(e) : say(e)); } finally { setBusy(null); }
+  };
+
+  // Сессия сохранена — сервер сам ставит синхронизацию; ждём, пока источник выйдет из «Проверяется».
+  const loginSucceeded = useCallback(async () => {
+    if (!conn) return;
+    setBusy("Загружаю данные");
+    try {
+      for (let i = 0; i < 20; i++) {
+        const { connection } = await st().getConnection(conn.id);
+        if (connection.status !== "pending") break;
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      setLogin(null);
+      await apply(conn.id);
     } catch (e) { setError(say(e)); } finally { setBusy(null); }
+  }, [conn]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loginManually = async () => {
+    if (!conn) return;
+    try { setLogin((await client.startLogin(conn.id, { mode: "interactive" })).login); } catch (e) { setError(sayError(e)); }
   };
 
   const field = "min-h-11 w-full rounded-2xl bg-raised px-3 text-m text-text outline-none";
@@ -179,7 +215,15 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
         </section>
       )}
 
-      {conn && method && conn.status !== "ready" && (
+      {conn && login && (
+        <section className="flex flex-col gap-2 rounded-[22px] bg-card p-4" aria-label="Вход на сайт вуза" data-connect-login>
+          <p className="text-m font-bold">3. Вход на {host(conn.sourceUrl)}</p>
+          <LoginFlow client={client} login={login} onChange={setLogin} onSucceeded={() => void loginSucceeded()}
+            onRestart={() => setLogin(null)} onManual={() => void loginManually()} />
+        </section>
+      )}
+
+      {conn && method && !login && conn.status !== "ready" && (
         <form ref={authRef} className="flex scroll-mt-4 flex-col gap-2 rounded-[22px] bg-card p-4" aria-label="Вход" data-auth-method={method.id}
           onSubmit={(e) => { e.preventDefault(); void signIn(); }}>
           <p className="text-m font-bold">3. Вход на {host(conn.sourceUrl)}</p>
@@ -204,8 +248,12 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
                     autoComplete={f === "password" ? "current-password" : f === "username" ? "username" : "off"} spellCheck={false} />
                 </div>
               ))}
-              <p className="text-s text-hint">Данные уходят только на сервер Doodle, чтобы войти в этот сайт. В приложении они не сохраняются.</p>
-              <button type="submit" className={primary} disabled={!!busy || !authReady(method, values)}>Подключить</button>
+              <p className="text-s text-hint">
+                {method.type === "remote_login" ? "Откроется страница входа вуза в браузере на сервере Doodle: входишь сам любым способом — SSO, код, капча. Пароль не сохраняется."
+                  : method.type === "sso_password" ? "Почта и пароль уходят на сервер Doodle один раз, чтобы заполнить форму вуза, и не хранятся. Код подтверждения введёшь на следующем шаге."
+                  : "Данные уходят только на сервер Doodle, чтобы войти в этот сайт. В приложении они не сохраняются."}
+              </p>
+              <button type="submit" className={primary} disabled={!!busy || !authReady(method, values)}>{method.type === "remote_login" ? "Открыть браузер для входа" : "Подключить"}</button>
             </>
           )}
         </form>
