@@ -129,6 +129,7 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
   return (
     <div className="space-ui flex flex-col gap-4 px-1 pt-2 pb-8" data-connect>
       <h1 className="font-display text-l font-extrabold tracking-[-0.03em]">Подключить учёбу</h1>
+      <a href="#/universities" className="min-h-11 rounded-2xl bg-raised px-4 py-2.5 text-center text-m font-bold text-accent" data-universities-link>Вузы: ВШЭ, МИСИС, ЦУ, свой вуз — вход и данные</a>
 
       <section className="flex flex-col gap-2 rounded-[22px] bg-card p-4" aria-label="Вуз">
         <p className="text-m font-bold">1. Вуз</p>
