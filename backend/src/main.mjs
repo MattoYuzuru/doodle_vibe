@@ -24,7 +24,7 @@ async function main() {
   catch { throw new Error('INVALID_OAUTH_CONFIGURATION'); }
   const oauth=createOAuthService({store,providers,publicBaseUrl:config.publicBaseUrl,createTokenRequest:createBoundTokenRequest});
   const createSources=guardedStore=>{
-    const service=createSourceService({store:guardedStore,proposeRecipe:model?.proposeRecipe});
+    const service=createSourceService({store:guardedStore,proposeRecipe:model?.proposeRecipe,proposeLearnedRecipe:model?.proposeLearnedRecipe,agentModel:model});
     return {...service,sync:async args=>{ await oauth?.refresh(args.userId,args.connectionId,{storage:guardedStore}); return service.sync(args); }};
   };
   const login=createLoginSessionManager({store,config});
