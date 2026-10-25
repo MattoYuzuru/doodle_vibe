@@ -113,19 +113,17 @@ test('late OAuth refresh cannot overwrite a new login or mark it revoked',async 
     assert.equal(store.readSecret('101',ca.id).token,'new-login-token');assert.equal(store.getConnection('101',ca.id).status,'pending');
   }
 });
-test('Telegram deduplicates concurrent deliveries, retries failed send and never replies into groups',async()=>{
-  let calls=0,release;const wait=new Promise(resolve=>release=resolve);
-  const handler=createTelegramHandler({botToken:'synthetic',publicBaseUrl:'https://doodle.example.edu',fetchImpl:async()=>{calls++;await wait;return new Response('{}');}});
+test('Telegram welcome is an inline webhook method, deduplicated and restricted to private starts',async()=>{
+  let time=0;
+  const handler=createTelegramHandler({publicBaseUrl:'https://doodle.example.edu',now:()=>time});
   const update={update_id:1,message:{text:'/start',from:{id:101},chat:{type:'private',id:101}}};
-  const a=handler(update),b=handler(update);release();await Promise.all([a,b]);assert.equal(calls,1);
-  await handler({update_id:2,message:{...update.message,chat:{type:'group',id:-101}}});assert.equal(calls,1);
-  let attempts=0;
-  const retry=createTelegramHandler({botToken:'synthetic',publicBaseUrl:'https://doodle.example.edu',fetchImpl:async()=>new Response('{}',{status:++attempts===1?503:200})});
-  await assert.rejects(retry(update),{code:'TELEGRAM_UNAVAILABLE'});await retry(update);assert.equal(attempts,2);
-  let failRelease;
-  const failed=createTelegramHandler({botToken:'synthetic',publicBaseUrl:'https://doodle.example.edu',fetchImpl:()=>new Promise(resolve=>failRelease=()=>resolve(new Response('{}',{status:503})))});
-  const first=failed(update),second=failed(update);failRelease();
-  const outcomes=await Promise.allSettled([first,second]);assert.ok(outcomes.every(x=>x.status==='rejected'));
+  const [first,duplicate]=await Promise.all([handler(update),handler(update)]);
+  assert.equal(first.method,'sendMessage');assert.equal(first.chat_id,101);
+  assert.equal(first.reply_markup.inline_keyboard[0][0].web_app.url,'https://doodle.example.edu');assert.equal(duplicate,null);
+  assert.equal(handler({update_id:2,message:{...update.message,chat:{type:'group',id:-101}}}),null);
+  assert.equal(handler({update_id:3,message:{...update.message,text:'unrelated'}}),null);
+  assert.equal(handler({update_id:4,message:{...update.message,from:{id:202}}}),null);
+  time+=24*3600_000;assert.equal(handler(update).method,'sendMessage');
 });
 test('configuration fails closed without encryption key and requires public HTTPS',()=>{
   assert.throws(()=>loadConfig({}),{code:'INVALID_ENCRYPTION_KEY'});

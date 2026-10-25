@@ -26,7 +26,7 @@ async function main() {
   };
   const server=createApp({store,config,createSources,model,oauth,onLog:log,retrieveWeb:createWebRetriever({store}),
     staticDir:resolve(dirname(fileURLToPath(import.meta.url)),'../..','jarvis-app/web/dist'),
-    onTelegram:config.botToken&&config.webhookSecret?createTelegramHandler({botToken:config.botToken,publicBaseUrl:config.publicBaseUrl}):null});
+    onTelegram:config.botToken&&config.webhookSecret?createTelegramHandler({publicBaseUrl:config.publicBaseUrl}):null});
   const worker=createWorker({store,createSources,onError:log});
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(config.port,config.host,resolve);});
   worker.start(); log({event:'started',version:config.version,ready:Boolean(config.botToken)});
