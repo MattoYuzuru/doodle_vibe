@@ -29,6 +29,10 @@ export interface Profile {
   courseOverrides: Record<string, boolean>;
   /** Делится ли замечаниями преподавателя к своим работам (обезличенно) — для проверки отчётов агентом. */
   shareRemarks: boolean;
+  /** Новый backend (DES-010): "/api/v1" — данные вузов идут через него; у старого сервера МИСИС поля нет. */
+  platformApi?: string;
+  /** Вузы пользователя в новом backend. */
+  spaces?: import("./platform").UniversitySpace[];
   /** Какие сообщения бота включены: news — объявления и новые материалы курсов, journal — пропуски и посещаемость. */
   notify?: { news: boolean; journal: boolean };
   /** Месячный лимит отчётов с агентом: сколько процентов израсходовано; null — лимита нет. */

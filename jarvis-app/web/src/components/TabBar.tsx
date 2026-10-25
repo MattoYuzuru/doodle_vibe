@@ -3,6 +3,7 @@ import { CalendarDays, GraduationCap, House, ListChecks } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLiquidGlass } from "../hooks/useLiquidGlass";
 import { useNav, type Tab } from "../hooks/useNav";
+import { usePlatformMode } from "../hooks/useSpace";
 import { lensDrag, lensProgress } from "../hooks/useTabLens";
 import { useUi } from "../hooks/useUi";
 import { SWIPE_SLOP } from "../lib/edge";
@@ -29,6 +30,7 @@ const lensSpring = spring(420, 42, 1);
  * линзой, а вкладка меняется при отпускании.
  */
 export function TabBar() {
+  const platform = usePlatformMode();
   // Только нужные поля (проверка 15 окт): подписка на весь стор перерисовывала панель на каждое открытие экрана.
   const tab = useNav((s) => s.tab);
   const setTab = useNav((s) => s.setTab);
@@ -145,7 +147,8 @@ export function TabBar() {
             // Мягкая синяя подсветка активной вкладки вместо серой линзы (18 окт 2026).
             style={{ inset: "6px auto 6px 6px", width: cell, x: xs, scaleX: stretch, scaleY: squash, background: "color-mix(in srgb, var(--c-accent) 16%, transparent)" }}
           />
-          {TABS.map(({ id, label, Icon }, i) => {
+          {TABS.map(({ id, label: tabLabel, Icon }, i) => {
+            const label = platform && id === "journal" ? "Курсы" : tabLabel;
             const active = shownIdx === i;
             return (
               <button

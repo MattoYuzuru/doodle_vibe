@@ -5,6 +5,7 @@ import { nextSubjectColor } from "../theme/subjects";
 import { API_TIMEOUT_MS, apiHeaders } from "./api";
 import { useAuth } from "./auth";
 import { CHECKED, createCloudRepository } from "./cloudRepo";
+import { usePlatform } from "./platform";
 import { useJournal } from "./journal";
 import type { Repository } from "./repository";
 import { useSchedule } from "./schedule";
@@ -192,11 +193,17 @@ export const useAppStore = create<State>((set, get) => {
       pre?.catch(() => {}); // ошибку разберёт syncMoodle
       const [prof, data] = await Promise.all([useAuth.getState().load(), loadAll()]);
       set({ ...data, status: "ready" });
-      if (prof?.loggedIn) { if (!known) void useSchedule.getState().load(false); void get().syncMoodle(false, pre); }
+      // С новым backend (DES-010) данные вузов грузит store/platform: старых маршрутов Moodle там нет.
+      if (prof?.loggedIn && !prof.platformApi) { if (!known) void useSchedule.getState().load(false); void get().syncMoodle(false, pre); }
     },
     async refresh() {
       // Повторный рывок «потянуть вниз», пока обновление ещё идёт, второго не запускает (проверка 15 окт).
       if (get().refreshing) return;
+      if (useAuth.getState().profile?.platformApi) {
+        set({ refreshing: true });
+        try { await usePlatform.getState().reload(); } finally { set({ refreshing: false }); }
+        return;
+      }
       set({ refreshing: true });
       // Журнал и «Сессия» — только когда открыта их вкладка: журнал с ?refresh ходит в ej.misis.ru, и дёргать его
       // каждым рывком на Главной незачем. Не ждём: у них свой значок обновления в шапке вкладки.
