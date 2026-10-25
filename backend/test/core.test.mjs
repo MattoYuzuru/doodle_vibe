@@ -206,3 +206,12 @@ test('unsupported newer schema is rejected without deleting persisted records', 
   assert.equal(preserved.prepare('SELECT id FROM connections WHERE id=?').get(c[0].id).id, c[0].id);
   preserved.close();
 });
+
+test('stable source error codes persist without allowing arbitrary exception text', t => {
+  const { store: s, connections: c } = fixture(t);
+  assert.equal(s.updateConnection('1', c[0].id, { status: 'user_action_required', errorCode: 'source_auth_required' }).errorCode, 'source_auth_required');
+  code(() => s.updateConnection('1', c[0].id, { errorCode: 'credential=synthetic' }), 'INVALID_INPUT');
+  const job = s.enqueueJob('1', c[0].id, { type: 'sync' });
+  const claim = s.claimJob('fixture');
+  assert.equal(s.finishJob(job.id, claim.claimToken, { status: 'failed', errorCode: 'source_timeout' }).errorCode, 'source_timeout');
+});

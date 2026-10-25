@@ -103,7 +103,7 @@ export function createStore({ dbPath, masterKey, now = Date.now }) {
       const c = connection(id, cid);
       const status = own(changes, 'status') ? string(changes.status, 100) : c.status;
       const error = own(changes, 'errorCode') ? changes.errorCode : c.error_code;
-      if (error !== null && (typeof error !== 'string' || !/^[A-Z0-9_]{1,100}$/.test(error))) fail();
+      if (error !== null && (typeof error !== 'string' || !/^[A-Za-z0-9_]{1,100}$/.test(error))) fail();
       const aid = own(changes, 'adapterId') ? changes.adapterId : c.adapter_id;
       if (aid !== null && !get('SELECT id FROM adapters WHERE id=?', aid)) fail('INVALID_ADAPTER');
       run('UPDATE connections SET status=?,error_code=?,adapter_id=?,updated_at=? WHERE id=? AND user_id=?', status, error, aid, at(), cid, String(id));
@@ -198,7 +198,7 @@ export function createStore({ dbPath, masterKey, now = Date.now }) {
       api.assertClaim(jid, token);
       const r = get('SELECT * FROM jobs WHERE id=?', jid);
       if (!['succeeded', 'failed'].includes(status)) fail();
-      if (errorCode !== null && (typeof errorCode !== 'string' || !/^[A-Z0-9_]{1,100}$/.test(errorCode))) fail();
+      if (errorCode !== null && (typeof errorCode !== 'string' || !/^[A-Za-z0-9_]{1,100}$/.test(errorCode))) fail();
       const encoded = result === null ? null : json(publicData(result));
       const updated = run("UPDATE jobs SET status=?,error_code=?,result=?,claim_token=NULL,lease_until=NULL,updated_at=? WHERE id=? AND claim_token=? AND status='running' AND lease_until>?", status, errorCode, encoded, at(), jid, token, now());
       if (updated.changes !== 1) fail('STALE_CLAIM', 409);
