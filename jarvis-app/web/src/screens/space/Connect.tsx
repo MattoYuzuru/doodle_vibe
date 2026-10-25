@@ -6,6 +6,8 @@ import { connectionsOf, characterFor } from "../../lib/space-adapter";
 import { AUTH_NOTES, type AuthField, type AuthMethod, FIELD_LABEL, SOURCE_PRESETS, authBody, authReady, sourceError, sourceProblem } from "../../lib/sources";
 import { type Connection, PlatformError, type SourceKind, type UniversitySpace, usePlatform } from "../../store/platform";
 import { haptic } from "../../telegram/webapp";
+import { type LoginSession } from "../../lib/remote-login";
+import { LoginPanel } from "./LoginPanel";
 import { openSource } from "./SpaceTabs";
 
 /*
@@ -40,7 +42,8 @@ const STATUS: Record<Connection["status"], string> = { ready: "Подключе�
 export function ConnectScreen({ spaceId }: { spaceId?: string }) {
   const spaces = usePlatform((s) => s.spaces);
   const data = usePlatform((s) => s.data);
-  const [space, setSpace] = useState<UniversitySpace | null>(() => spaces.find((s) => s.id === spaceId) ?? null);
+  // По умолчанию — вуз, открытый на Главной: там видно, что уже подключено и куда нужно войти заново.
+  const [space, setSpace] = useState<UniversitySpace | null>(() => spaces.find((s) => s.id === (spaceId ?? usePlatform.getState().activeId)) ?? null);
   const [otherName, setOtherName] = useState("");
   const [url, setUrl] = useState("");
   const [kind, setKind] = useState<SourceKind>("lms");
@@ -48,6 +51,7 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
   const [methods, setMethods] = useState<AuthMethod[]>([]);
   const [methodId, setMethodId] = useState<string | null>(null);
   const [values, setValues] = useState<Partial<Record<AuthField, string>>>({});
+  const [activeLogin, setActiveLogin] = useState<LoginSession | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -58,7 +62,7 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
   const presets = space ? SOURCE_PRESETS[space.universityId] ?? [] : [];
   const method = methods.find((m) => m.id === methodId) ?? methods[0] ?? null;
   // Форма входа появляется ниже готовых сайтов — подводим к ней, чтобы шаг 3 не остался за краем экрана.
-  const authRef = useRef<HTMLFormElement>(null);
+  const authRef = useRef<HTMLElement>(null);
   const authKey = conn && method && conn.status !== "ready" ? conn.id : null;
   useEffect(() => {
     if (authKey) authRef.current?.scrollIntoView({ behavior: motion === "full" ? "smooth" : "auto", block: "start" });
@@ -76,8 +80,14 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
   const settle = async (connectionId: string, jobId: string) => {
     setBusy("Проверяю сайт");
     try { await st().waitJob(jobId); } catch (e) { setError(say(e)); }
-    const { connection, authMethods } = await st().getConnection(connectionId);
+    await apply(connectionId);
+  };
+
+  // Чем закончилось подключение: готово, нужен вход (и каким способом) или ошибка с кодом.
+  const apply = async (connectionId: string) => {
+    const { connection, authMethods, login } = await st().getConnection(connectionId);
     setConn(connection);
+    setActiveLogin(login ?? null);
     setMethods(authMethods);
     setMethodId((cur) => (authMethods.some((m) => m.id === cur) ? cur : authMethods[0]?.id ?? null));
     if (connection.status === "ready") {
@@ -100,6 +110,20 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
       const { connection, job } = await st().addSource(space.id, u.origin + u.pathname, sourceKind, label);
       setConn(connection);
       await settle(connection.id, job.id);
+    } catch (e) { setError(say(e)); } finally { setBusy(null); }
+  };
+
+  // Вход через браузер сохранён: сервер ставит sync и держит подключение в pending — ждём, пока оно определится.
+  const afterLogin = async () => {
+    if (!conn) return;
+    setBusy("Загружаю данные");
+    try {
+      for (let i = 0; i < 40; i++) {
+        const { connection } = await st().getConnection(conn.id);
+        if (connection.status !== "pending") break;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      await apply(conn.id);
     } catch (e) { setError(say(e)); } finally { setBusy(null); }
   };
 
@@ -179,8 +203,7 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
       )}
 
       {conn && method && conn.status !== "ready" && (
-        <form ref={authRef} className="flex scroll-mt-4 flex-col gap-2 rounded-[22px] bg-card p-4" aria-label="Вход" data-auth-method={method.id}
-          onSubmit={(e) => { e.preventDefault(); void signIn(); }}>
+        <section ref={authRef} className="flex scroll-mt-4 flex-col gap-2 rounded-[22px] bg-card p-4" aria-label="Вход" data-auth-method={method.id}>
           <p className="text-m font-bold">3. Вход на {host(conn.sourceUrl)}</p>
           {methods.length > 1 && (
             <div className="flex flex-wrap gap-2" role="group" aria-label="Способ входа">
@@ -191,10 +214,12 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
             </div>
           )}
           {notes.map((n) => <p key={n} className="rounded-2xl bg-raised px-3 py-2 text-s" data-note={n}>{AUTH_NOTES[n]}</p>)}
-          {method.type === "oauth" ? (
-            <button type="submit" className={primary} disabled={!!busy}>Войти: {method.label}</button>
+          {method.type === "remote_login" || method.type === "sso_password" ? (
+            <LoginPanel key={method.id} connection={conn} method={method} initial={activeLogin} onSucceeded={() => void afterLogin()} />
+          ) : method.type === "oauth" ? (
+            <button type="button" className={primary} disabled={!!busy} onClick={() => void signIn()}>Войти: {method.label}</button>
           ) : (
-            <>
+            <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); void signIn(); }}>
               {(method.fields ?? []).filter((f) => f !== "service").map((f) => (
                 <div key={f} className="flex flex-col gap-1">
                   <label className="text-s font-bold text-hint" htmlFor={`connect-${f}`}>{FIELD_LABEL[f]}</label>
@@ -205,9 +230,9 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
               ))}
               <p className="text-s text-hint">Данные уходят только на сервер Doodle, чтобы войти в этот сайт. В приложении они не сохраняются.</p>
               <button type="submit" className={primary} disabled={!!busy || !authReady(method, values)}>Подключить</button>
-            </>
+            </form>
           )}
-        </form>
+        </section>
       )}
 
       {busy && <MascotLoader character={space ? characterFor(space) : "dusya"} label={busy} dark={dark} motion={motion} size={56} />}
@@ -221,6 +246,11 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
             <p key={c.id} className="flex min-h-11 items-center gap-2 border-t border-separator text-m">
               <span className="min-w-0 flex-1 truncate">{c.label || host(c.sourceUrl)}</span>
               <span className="shrink-0 text-s font-bold text-hint">{sourceProblem(c.errorCode) ?? STATUS[c.status]}</span>
+              {/* Вход истёк или не удался — войти заново тем же подключением; прежние данные пока остаются. */}
+              {(c.status === "user_action_required" || c.status === "error") && c.id !== conn?.id && (
+                <button type="button" disabled={!!busy} onClick={() => { setError(null); setDone(null); void apply(c.id); }}
+                  className="min-h-9 shrink-0 rounded-full bg-accent px-3 text-s font-bold text-on-accent disabled:opacity-50">Войти</button>
+              )}
             </p>
           ))}
         </section>

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { LoginSession, LoginTicket } from "../lib/remote-login";
 import type { AuthMethod } from "../lib/sources";
 import { API_TIMEOUT_MS, apiBase, apiHeaders } from "./api";
 
@@ -86,7 +87,15 @@ interface PlatformState {
   /** Ровно одна форма входа: {origin, token} | {origin, username, password} | {origin, calendarUrl} | {origin, identifier}. */
   saveAuth(connectionId: string, auth: Record<string, string>): Promise<{ job: Job }>;
   /** Подключение и способы входа, которые предлагает сервер (порядок — рекомендуемый). */
-  getConnection(connectionId: string): Promise<{ connection: Connection; authMethods: AuthMethod[] }>;
+  getConnection(connectionId: string): Promise<{ connection: Connection; authMethods: AuthMethod[]; login?: LoginSession | null }>;
+  /** Вход через удалённый браузер (ADR-0005): interactive — входит человек; password — сервер вводит логин и пароль. */
+  startLogin(connectionId: string, body: { mode: "interactive" } | { mode: "password"; username: string; password: string }): Promise<{ login: LoginSession }>;
+  getLogin(loginId: string): Promise<{ login: LoginSession }>;
+  sendMfa(loginId: string, code: string): Promise<{ login: LoginSession }>;
+  handoff(loginId: string): Promise<{ login: LoginSession }>;
+  cancelLogin(loginId: string): Promise<{ login: LoginSession }>;
+  /** Одноразовый тикет WebSocket потока кадров (30 с). */
+  loginTicket(loginId: string): Promise<LoginTicket>;
   /** Вход через OAuth-провайдера: сервер отдаёт адрес страницы входа. */
   startOAuth(connectionId: string, providerId: string): Promise<{ authorizationUrl: string }>;
   sync(connectionId: string): Promise<Job>;
@@ -160,6 +169,14 @@ export const usePlatform = create<PlatformState>((set, get) => {
     getConnection(connectionId) {
       return v1(`connections/${encodeURIComponent(connectionId)}`);
     },
+    startLogin(connectionId, body) {
+      return v1(`connections/${encodeURIComponent(connectionId)}/login`, { body });
+    },
+    getLogin(loginId) { return v1(`login/${encodeURIComponent(loginId)}`); },
+    sendMfa(loginId, code) { return v1(`login/${encodeURIComponent(loginId)}/mfa`, { body: { code } }); },
+    handoff(loginId) { return v1(`login/${encodeURIComponent(loginId)}/handoff`, { body: {} }); },
+    cancelLogin(loginId) { return v1(`login/${encodeURIComponent(loginId)}/cancel`, { body: {} }); },
+    loginTicket(loginId) { return v1(`login/${encodeURIComponent(loginId)}/ticket`, { body: {} }); },
     startOAuth(connectionId, providerId) {
       return v1(`connections/${encodeURIComponent(connectionId)}/oauth`, { body: { providerId } });
     },

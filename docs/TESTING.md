@@ -71,6 +71,10 @@ platform fixtures для пространств, discovery, auth, jobs и retrie
 `tests/e2e/connect-hse.spec.mjs` — подключение ВШЭ на синтетическом `/api/v1`: Smart LMS ссылкой
 календаря и логином (с пометкой про SSO), РУЗ по идентификатору и отказ вне сети ВШЭ.
 
+`tests/e2e/remote-login.spec.mjs` — вход через удалённый браузер на синтетическом `/api/v1` и поддельном
+WebSocket (`page.routeWebSocket`): кадр и ввод (координаты, текст, Enter), password + MFA, handoff и отмена,
+повторный вход после `source_session_expired`, отказ `LOGIN_UNAVAILABLE`. Настоящий Chromium здесь не участвует.
+
 Web unit-тесты лежат в `jarvis-app/web/tests/*.test.mjs` и запускаются через
 `node --test` с загрузчиком `scripts/web-ts-hooks.mjs` (Node сам убирает типы;
 допустим только стираемый синтаксис TypeScript). В CI они идут в задаче

@@ -62,18 +62,18 @@ async function openConnect(page) {
   await expect(page.locator('[data-space-home="s-hse"]')).toBeVisible();
   await page.getByRole("button", { name: "Подключить вуз или сайт" }).click();
   await expect(page.getByRole("heading", { name: "Подключить учёбу" })).toBeVisible();
-  // Первые 350 мс экран гасит нажатия (защита от двойного тапа) — повторяем, пока выбор не сработает.
-  await expect(async () => {
-    await page.getByRole("region", { name: "Вуз" }).getByRole("button", { name: "ВШЭ", exact: true }).click();
-    await expect(page.getByText("Выбран: ВШЭ")).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: 10_000 });
+  // Первые 350 мс после открытия экрана App гасит нажатия (защита от двойного тапа). Активный вуз выбран сразу,
+  // поэтому выжидаем это окно, а не повторяем нажатия: повторное нажатие на сайт добавило бы второе подключение.
+  await page.waitForTimeout(400);
+  await page.getByRole("region", { name: "Вуз" }).getByRole("button", { name: "ВШЭ", exact: true }).click();
+  await expect(page.getByText("Выбран: ВШЭ")).toBeVisible();
 }
 
 test("Smart LMS: calendar link is offered first with instructions and connects", async ({ page }) => {
   const api = await hseApi(page);
   await openConnect(page);
   await page.locator('[data-preset="edu.hse.ru"]').click();
-  const form = page.getByRole("form", { name: "Вход" });
+  const form = page.getByRole("region", { name: "Вход" });
   await expect(form).toHaveAttribute("data-auth-method", "calendar_url");
   await expect(form.getByRole("button", { name: "Ссылка экспорта календаря (iCal)" })).toBeInViewport();
   await expect(form.locator('[data-note="sso_login_only"]')).toContainText("единый вход ВШЭ");
@@ -92,7 +92,7 @@ test("Smart LMS: the password form warns that the HSE single sign-on password wi
   const api = await hseApi(page);
   await openConnect(page);
   await page.locator('[data-preset="edu.hse.ru"]').click();
-  const form = page.getByRole("form", { name: "Вход" });
+  const form = page.getByRole("region", { name: "Вход" });
   await form.getByRole("button", { name: "Логин и пароль Moodle" }).click();
   await expect(form).toHaveAttribute("data-auth-method", "moodle_password");
   await expect(form.locator('[data-note="local_accounts_only"]')).toContainText("локальная учётная запись");
@@ -107,7 +107,7 @@ test("RUZ: identifier form, and outside the HSE network the reason is explained"
   const api = await hseApi(page);
   await openConnect(page);
   await page.locator('[data-preset="ruz.hse.ru"]').click();
-  const form = page.getByRole("form", { name: "Вход" });
+  const form = page.getByRole("region", { name: "Вход" });
   await expect(form).toHaveAttribute("data-auth-method", "ruz_identifier");
   await expect(form.locator('[data-note="university_network_only"]')).toContainText("HSE.Student");
   await form.getByLabel("Почта вуза, ФИО или номер в РУЗ").fill("student@edu.hse.ru");
