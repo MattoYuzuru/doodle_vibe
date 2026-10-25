@@ -36,10 +36,15 @@ test("error and overdue are labelled without fire; the deadline stays as a badge
 });
 
 test("completion reacts once and can be replayed only explicitly", async ({ page }) => {
+  // Реакция живёт REACTION_WINDOW_MS (1,5 с): на медленном раннере она успевала доиграть до первой проверки.
+  // Часы стоят, пока тест сам их не сдвинет.
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now() + 1000);
   await open(page);
   const status = card(page, "completed").locator("[data-status]");
   await expect(status).toHaveAttribute("data-status", "completed");
-  await expect(status).toHaveAttribute("data-status", "ready", { timeout: 5000 });
+  await page.clock.runFor(2000);
+  await expect(status).toHaveAttribute("data-status", "ready");
   await page.getByRole("button", { name: "Проиграть реакции заново" }).click();
   await expect(card(page, "completed").locator("[data-status]")).toHaveAttribute("data-status", "completed");
 });

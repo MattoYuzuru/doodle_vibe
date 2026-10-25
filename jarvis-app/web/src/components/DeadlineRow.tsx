@@ -13,9 +13,10 @@ export function DeadlineRow({ deadline, subject, now, onOpen }: {
     <button onClick={onOpen} className="flex min-h-14 w-full items-start gap-3 py-3 text-left">
       <SubjectDot color={subject?.color} className="mt-[7px]" />
       <span className="min-w-0 flex-1">
-        <span className="flex items-start gap-3">
-          <span className="line-clamp-2 min-w-0 flex-1 text-m font-semibold">{deadline.title}</span>
-          <span className="flex shrink-0 flex-col items-end gap-1">
+        {/* На узком экране (195 px — телефон при 200 % масштабе) срок уходит под название, а не сжимает его до нуля. */}
+        <span className="flex flex-wrap items-start gap-x-3 gap-y-1">
+          <span className="line-clamp-2 min-w-[min(6rem,100%)] flex-1 basis-0 text-m font-semibold">{deadline.title}</span>
+          <span className="ml-auto flex max-w-full flex-col items-end gap-1 text-right">
             <span className="text-s text-hint tabular">{formatDue(deadline.due)}</span>
             <UrgencyBadge deadline={deadline} now={now} />
           </span>

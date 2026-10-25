@@ -7,6 +7,12 @@ const LONG = "Индивидуальное домашнее задание по 
 const fireAnimation = (page) => page.locator(".owl-fire-a").first().evaluate((el) => getComputedStyle(el).animationName);
 const spriteClass = (page) => page.locator('[data-space-home] [data-character]').first().getAttribute("class");
 
+// Приложение само включает облегчённый режим (статичный маскот) при ≤ 4 ядрах — как у раннера GitHub Actions.
+// Здесь проверяется полное движение и его выключатели, поэтому автоопределение отключаем, как ?lite=0.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("jarvis.lite", "off"));
+});
+
 test("reduced motion: the fire stays as a still sign, the mascot does not move", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await platformApi(page);
