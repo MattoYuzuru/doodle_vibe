@@ -16,8 +16,10 @@ import { acceptWebSocket } from './websocket.mjs';
  */
 const START_FIELDS = ['mode', 'username', 'password', 'keepCalendar'];
 
-export function createLoginRoutes({ login, config = {}, origins = [] } = {}) {
+export function createLoginRoutes({ login, config = {}, origins = [], devAuth = null } = {}) {
   const allowedOrigins = () => new Set([config.publicBaseUrl, ...origins].filter(Boolean));
+  // The dev identity (src/dev-auth.mjs) accepts loopback origins only, and only when it is enabled.
+  const originAllowed = origin => allowedOrigins().has(origin) || Boolean(devAuth?.allowsOrigin?.(origin));
   const emptyBody = async ctx => {
     const body = await ctx.readBody();
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) throw new AppError('INVALID_INPUT');
@@ -57,7 +59,7 @@ export function createLoginRoutes({ login, config = {}, origins = [] } = {}) {
       let url; try { url = new URL(req.url, 'http://localhost'); } catch { return reject('400 Bad Request'); }
       const match = /^\/api\/v1\/login\/([^/]+)\/stream$/.exec(url.pathname);
       if (!login || !match) return reject('404 Not Found');
-      if (!allowedOrigins().has(req.headers.origin)) return reject('403 Forbidden');
+      if (!originAllowed(req.headers.origin)) return reject('403 Forbidden');
       const identity = login.consumeTicket(url.searchParams.get('ticket'), match[1]);
       if (!identity) return reject('401 Unauthorized');
       let controller = null; let socketApi = null;
