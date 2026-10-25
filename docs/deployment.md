@@ -86,7 +86,8 @@ backend source, installed runtime dependency files and built web assets. Release
 are root-owned and never overwritten. Application code runs only as `doodle`.
 The handler serializes operations, saves a consistent DB backup when present,
 atomically switches `current`, restarts this service only, and requires
-`GET http://127.0.0.1:18110/healthz` to return exactly the expected SHA and `ok`.
+`GET http://127.0.0.1:18110/healthz` to return `status: ok` and the expected SHA. Additional readiness fields are
+allowed and reported independently from process health.
 On startup/health failure it restores the previous pointer and verifies that
 release; a failed first deployment stops the new service. Backups and old releases
 are retained: there is no automated cleanup or database restore.

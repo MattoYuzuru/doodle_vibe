@@ -23,6 +23,10 @@ with tarfile.open(a.output, 'w:gz') as archive:
             if path.is_symlink():
                 p.error('symlinks are forbidden')
             if path.is_file():
+                if any(part.startswith('.env') or part == 'users.key' for part in path.parts):
+                    p.error('secret filenames are forbidden')
+                if root == Path('backend/src') and path.suffix != '.mjs':
+                    p.error('backend source release accepts .mjs files only')
                 info = archive.gettarinfo(str(path))
                 info.uid = info.gid = 0
                 info.uname = info.gname = ''

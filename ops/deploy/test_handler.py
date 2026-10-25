@@ -55,6 +55,23 @@ class HandlerTests(unittest.TestCase):
             handler.install(A, hashlib.sha256(data).hexdigest())
             return activate
 
+    def health(self, data):
+        class Opener:
+            def open(self, *_args, **_kwargs):
+                response = io.BytesIO(data)
+                response.status = 200
+                return response
+        with patch.object(handler.urllib.request, 'build_opener', return_value=Opener()), patch.object(handler.time, 'sleep'):
+            return handler.healthy(A)
+
+    def test_health_allows_additional_readiness_fields(self):
+        self.assertTrue(self.health(json.dumps({'status': 'ok', 'version': A, 'ready': False, 'components': {'telegram': False}}).encode()))
+
+    def test_health_rejects_wrong_version_and_malformed_responses(self):
+        for data in [json.dumps({'status': 'ok', 'version': B}).encode(), b'{malformed', b'[]', b'null', b'{"version":"' + A.encode() + b'"}']:
+            with self.subTest(data=data):
+                self.assertFalse(self.health(data))
+
     def test_valid_archive_is_immutable_and_generates_version(self):
         activate = self.install(bundle())
         activate.assert_called_once_with(A)
@@ -64,7 +81,7 @@ class HandlerTests(unittest.TestCase):
             self.install(bundle())
 
     def test_traversal_and_unexpected_paths_rejected_before_activation(self):
-        for name in ['backend/src/../../../escape', '/etc/shadow', 'backend/.env', 'release.env']:
+        for name in ['backend/src/../../../escape', '/etc/shadow', 'backend/.env', 'backend/src/.env', 'backend/src/key.txt', 'jarvis-app/web/dist/.env.local', 'release.env']:
             with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'unsafe'):
                 self.install(bundle({name: b'bad'}))
         self.assertFalse((self.base / 'releases' / A).exists())

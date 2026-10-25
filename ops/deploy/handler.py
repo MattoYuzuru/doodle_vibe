@@ -52,7 +52,7 @@ def healthy(sha):
         try:
             with urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:18110/healthz', timeout=2) as response:
                 result = json.load(response)
-                if response.status == 200 and result == {'status': 'ok', 'version': sha}:
+                if response.status == 200 and isinstance(result, dict) and result.get('status') == 'ok' and result.get('version') == sha:
                     return True
         except (OSError, ValueError):
             pass
@@ -143,7 +143,9 @@ def install(sha, digest):
                     raise RuntimeError('too many archive members')
                 name = member.name
                 parts = PurePosixPath(name).parts
-                allowed = name == 'release.json' or name.startswith('backend/src/') or name.startswith('backend/node_modules/') or name.startswith('jarvis-app/web/dist/')
+                allowed = name == 'release.json' or (name.startswith('backend/src/') and name.endswith('.mjs')) or name.startswith('backend/node_modules/') or name.startswith('jarvis-app/web/dist/')
+                if any(part.startswith('.env') or part == 'users.key' for part in parts):
+                    allowed = False
                 if member.size < 0 or not allowed or not parts or name.startswith('/') or '..' in parts or name in seen or not member.isfile():
                     raise RuntimeError('unsafe archive member')
                 seen.add(name)
