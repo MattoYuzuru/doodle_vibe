@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { UNIVERSITY_PRESETS, describeAuthMethods } from "../../../backend/src/sources/presets.mjs";
-import { AUTH_NOTES, SOURCE_PRESETS, authBody, authReady, sourceError, sourceProblem } from "../src/lib/sources.ts";
+import { AUTH_NOTES, SOURCE_PRESETS, authBody, authReady, isBrowserLogin, sourceError, sourceProblem, universitiesLink } from "../src/lib/sources.ts";
 
 describe("готовые источники вузов", () => {
   it("адреса frontend совпадают с пресетами backend (presets.mjs)", () => {
@@ -48,5 +48,20 @@ describe("коды ошибок источников", () => {
     assert.match(sourceError("source_something_new"), /source_something_new/);
     assert.equal(sourceProblem("source_network_restricted"), "Только из сети вуза");
     assert.equal(sourceProblem(null), null);
+  });
+});
+
+describe("вход через браузер (ADR-0005)", () => {
+  it("remote_login и sso_password ведут на экран «Вузы», остальные — нет", () => {
+    assert.equal(isBrowserLogin({ type: "remote_login" }), true);
+    assert.equal(isBrowserLogin({ type: "sso_password" }), true);
+    assert.equal(isBrowserLogin({ type: "calendar_url" }), false);
+    assert.deepEqual(["hse", "misis", "cu", "my-uni"].map(universitiesLink), ["#/universities/hse", "#/universities/misis", "#/universities/cu", "#/universities/custom"]);
+  });
+  it("новые коды входа и источников — словами, без кода в скобках", () => {
+    for (const c of ["source_session_expired", "source_login_failed", "source_bot_protection", "source_login_unrecognized", "source_login_form_ambiguous", "mfa_failed", "mfa_expired", "login_credentials_lost", "source_unavailable", "source_timeout", "source_rate_limited", "source_format_changed", "source_recipe_invalid", "source_response_invalid"]) {
+      assert.doesNotMatch(sourceError(c), /\(/, c);
+    }
+    assert.equal(sourceProblem("source_session_expired"), "Нужен вход заново");
   });
 });

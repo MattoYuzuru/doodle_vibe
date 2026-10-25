@@ -3,7 +3,7 @@ import { MascotLoader } from "../../components/assistant/MascotCard";
 import { useScheme } from "../../hooks/useScheme";
 import { useMascotMotion } from "../../hooks/useSpace";
 import { connectionsOf, characterFor } from "../../lib/space-adapter";
-import { AUTH_NOTES, type AuthField, type AuthMethod, FIELD_LABEL, SOURCE_PRESETS, authBody, authReady, sourceError, sourceProblem } from "../../lib/sources";
+import { AUTH_NOTES, type AuthField, type AuthMethod, FIELD_LABEL, SOURCE_PRESETS, authBody, authReady, isBrowserLogin, sourceError, sourceProblem, universitiesLink } from "../../lib/sources";
 import { type Connection, PlatformError, type SourceKind, type UniversitySpace, usePlatform } from "../../store/platform";
 import { haptic } from "../../telegram/webapp";
 import { openSource } from "./SpaceTabs";
@@ -40,7 +40,8 @@ const STATUS: Record<Connection["status"], string> = { ready: "Подключе�
 export function ConnectScreen({ spaceId }: { spaceId?: string }) {
   const spaces = usePlatform((s) => s.spaces);
   const data = usePlatform((s) => s.data);
-  const [space, setSpace] = useState<UniversitySpace | null>(() => spaces.find((s) => s.id === spaceId) ?? null);
+  // По умолчанию — вуз, открытый на Главной: там видно, что уже подключено и куда нужно войти заново.
+  const [space, setSpace] = useState<UniversitySpace | null>(() => spaces.find((s) => s.id === (spaceId ?? usePlatform.getState().activeId)) ?? null);
   const [otherName, setOtherName] = useState("");
   const [url, setUrl] = useState("");
   const [kind, setKind] = useState<SourceKind>("lms");
@@ -192,7 +193,12 @@ export function ConnectScreen({ spaceId }: { spaceId?: string }) {
             </div>
           )}
           {notes.map((n) => <p key={n} className="rounded-2xl bg-raised px-3 py-2 text-s" data-note={n}>{AUTH_NOTES[n]}</p>)}
-          {method.type === "oauth" ? (
+          {isBrowserLogin(method) ? (
+            // Вход через удалённый браузер и с кодом MFA сделан на экране «Вузы» (задача C, #22) — ведём туда.
+            <a href={universitiesLink(space?.universityId ?? "")} className={`${primary} grid place-items-center`} data-browser-login>
+              {method.type === "remote_login" ? "Войти через браузер на экране «Вузы»" : "Войти с паролем и кодом на экране «Вузы»"}
+            </a>
+          ) : method.type === "oauth" ? (
             <button type="submit" className={primary} disabled={!!busy}>Войти: {method.label}</button>
           ) : (
             <>

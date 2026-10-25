@@ -16,9 +16,9 @@ const METHODS = {
   ],
 };
 
-async function hseApi(page) {
+async function hseApi(page, { methods = METHODS, existing = [] } = {}) {
   const origin = new URL(test.info().project.use.baseURL).origin;
-  const conns = new Map(), auth = [], added = [];
+  const conns = new Map(existing.map((c) => [c.id, { connection: c }])), auth = [], added = [];
   let jobs = 0;
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
@@ -45,7 +45,7 @@ async function hseApi(page) {
     m = p.match(/^\/api\/v1\/connections\/([^/]+)(\/auth)?$/);
     if (m && conns.has(m[1])) {
       const c = conns.get(m[1]).connection, o = new URL(c.sourceUrl).origin;
-      if (!m[2]) return send({ connection: c, authMethods: c.status === "ready" ? [] : METHODS[o] ?? [] });
+      if (!m[2]) return send({ connection: c, authMethods: c.status === "ready" ? [] : methods[o] ?? [] });
       const body = route.request().postDataJSON(); auth.push(body);
       if (o === "https://ruz.hse.ru") Object.assign(c, { status: "error", errorCode: "source_network_restricted" });
       else Object.assign(c, { status: "ready", errorCode: null });
@@ -62,11 +62,11 @@ async function openConnect(page) {
   await expect(page.locator('[data-space-home="s-hse"]')).toBeVisible();
   await page.getByRole("button", { name: "Подключить вуз или сайт" }).click();
   await expect(page.getByRole("heading", { name: "Подключить учёбу" })).toBeVisible();
-  // Первые 350 мс экран гасит нажатия (защита от двойного тапа) — повторяем, пока выбор не сработает.
-  await expect(async () => {
-    await page.getByRole("region", { name: "Вуз" }).getByRole("button", { name: "ВШЭ", exact: true }).click();
-    await expect(page.getByText("Выбран: ВШЭ")).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: 10_000 });
+  // Первые 350 мс после открытия экрана App гасит нажатия (защита от двойного тапа). Активный вуз выбран сразу,
+  // поэтому выжидаем это окно, а не повторяем нажатия: повторное нажатие на сайт добавило бы второе подключение.
+  await page.waitForTimeout(400);
+  await page.getByRole("region", { name: "Вуз" }).getByRole("button", { name: "ВШЭ", exact: true }).click();
+  await expect(page.getByText("Выбран: ВШЭ")).toBeVisible();
 }
 
 test("Smart LMS: calendar link is offered first with instructions and connects", async ({ page }) => {
@@ -115,4 +115,22 @@ test("RUZ: identifier form, and outside the HSE network the reason is explained"
   await expect(page.getByRole("alert")).toContainText("только из сети вуза");
   expect(api.auth).toEqual([{ origin: "https://ruz.hse.ru", identifier: "student@edu.hse.ru" }]);
   await expect(page.getByRole("region", { name: "Подключённые сайты" })).toContainText("Только из сети вуза");
+});
+
+test("browser sign-in methods lead to the «Вузы» screen instead of an empty form", async ({ page }) => {
+  await hseApi(page, { methods: { "https://edu.hse.ru": [{ id: "remote_login", type: "remote_login", label: "Войти через браузер" }, METHODS["https://edu.hse.ru"][0]] } });
+  await openConnect(page);
+  await page.locator('[data-preset="edu.hse.ru"]').click();
+  const link = page.getByRole("link", { name: "Войти через браузер на экране «Вузы»" });
+  await expect(link).toHaveAttribute("href", "#/universities/hse");
+  await expect(page.getByRole("form", { name: "Вход" }).getByRole("button", { name: "Подключить" })).toHaveCount(0);
+});
+
+test("an expired session on Home says so and links straight to signing in again", async ({ page }) => {
+  const expired = { id: "c9", spaceId: "s-hse", sourceUrl: "https://edu.hse.ru/", kind: "lms", label: "Smart LMS", status: "user_action_required", errorCode: "source_session_expired", adapterId: "learned:x:1", createdAt: iso(), updatedAt: iso() };
+  await hseApi(page, { existing: [expired] });
+  await page.goto("/");
+  const home = page.locator('[data-space-home="s-hse"]');
+  await expect(home.getByText("Нужен вход заново")).toBeVisible();
+  await expect(home.getByRole("link", { name: "Войти" })).toHaveAttribute("href", "#/universities/hse");
 });

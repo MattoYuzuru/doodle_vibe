@@ -2,7 +2,7 @@ import { BookOpen, ExternalLink, Flag, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { MascotCard, MascotLoader } from "../../components/assistant/MascotCard";
 import { characterFor, connectionsOf, freshness } from "../../lib/space-adapter";
-import { sourceProblem } from "../../lib/sources";
+import { sourceProblem, universitiesLink } from "../../lib/sources";
 import { DeadlineRow } from "../../components/DeadlineRow";
 import { HeroDeadlineCard } from "../../components/HeroDeadlineCard";
 import { LessonRow } from "../../components/LessonRow";
@@ -83,7 +83,7 @@ function SpaceStatus() {
 }
 
 function SourcesTile() {
-  const { data } = useSpace();
+  const { data, space } = useSpace();
   const push = useNav((s) => s.push);
   const spaceId = usePlatform((s) => s.activeId);
   const connections = connectionsOf(data);
@@ -102,6 +102,10 @@ function SourcesTile() {
               <span className="block truncate text-s text-hint">{new URL(c.sourceUrl).host}</span>
             </span>
             <span className={`shrink-0 rounded-full px-2 py-0.5 text-s font-bold ${STATUS_LABEL[c.status][1]}`}>{sourceProblem(c.errorCode) ?? STATUS_LABEL[c.status][0]}</span>
+            {/* Нужен вход (в том числе истёкший) — сразу к входу на экране «Вузы»: удалённый браузер или пароль с MFA. */}
+            {c.status === "user_action_required" && space && (
+              <a href={universitiesLink(space.universityId)} className="grid min-h-9 shrink-0 place-items-center rounded-full bg-accent px-3 text-s font-bold text-on-accent" data-relogin={c.id}>Войти</a>
+            )}
           </li>
         ))}
       </ul>
