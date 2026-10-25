@@ -8,6 +8,7 @@
 | [Требования FR/NFR](product/requirements.md) | Область MVP и проверяемый результат продуктовой задачи |
 | [Backend API v1](backend-api.md) | Маршруты, авторизация, подключение, ограничения и передача frontend |
 | [Деплой](deployment.md) | mnema, main после CI, секреты, health и откат |
+| [Telegram delivery](deployment-telegram.md) | Отдельный webhook-host, Cloudflare Strict, проверка доставки и откат |
 | [ADR-0002](adr/0002-isolated-sqlite-backend.md) | SQLite, ограниченные исполнители и отдельный сервис |
 | [Задачи по дизайну](design/README.md) | Вход для вопроса «Какие у нас задачи по дизайну?», зоны A/B и порядок старта |
 | [Дизайн-требования](design/requirements.md) | Токены, компоненты, маскот, события, движение и доступность |
