@@ -1,7 +1,7 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../index.css";
-import { MascotCard } from "../components/assistant/MascotCard";
+import { MascotCard, MascotLoader } from "../components/assistant/MascotCard";
 import { type AssistantContext, type AssistantDeadline, resolveAssistantPresentation } from "../theme/assistant-state";
 
 /*
@@ -25,6 +25,8 @@ const FIXTURES: Fixture[] = [
   { id: "completed", label: "Только что сдано", over: { recentEvent: { id: "ev", spaceId: "", kind: "deadline-completed", at: NOW - 300 } }, deadlines: [dl("a", "Курсовая", 9 * DAY)] },
   { id: "clear", label: "Открытых работ нет", over: {}, deadlines: [dl("a", "Отчёт", -DAY, true)] },
   { id: "undated", label: "Срок неизвестен", over: {}, deadlines: [dl("a", "Проект без срока", null)] },
+  { id: "urgent-sync", label: "Обновление + срочная работа (срок бейджем)", over: { activity: "syncing" }, deadlines: [dl("a", "Отчёт по лабе 3", 5 * HOUR)] },
+  { id: "urgent-completed", label: "Сдала одну, другая ещё горит", over: { recentEvent: { id: "ev2", spaceId: "", kind: "deadline-completed", at: NOW - 300 } }, deadlines: [dl("a", "Отчёт по лабе 3", 5 * HOUR)] },
   { id: "stale", label: "Срочно, данные устарели", over: {}, deadlines: [dl("a", "Отчёт по лабе 3", 5 * HOUR)], stale: true },
   { id: "reauth", label: "Нужно войти снова + срочная работа", over: { availability: "reauth" }, deadlines: [dl("a", "Отчёт по лабе 3", 5 * HOUR)], stale: true },
   { id: "error", label: "Ошибка обновления", over: { availability: "error" }, deadlines: [], stale: true },
@@ -37,7 +39,7 @@ const FIXTURES: Fixture[] = [
   { id: "switch", label: "Сменили вуз, снимок ещё старый", over: {}, deadlines: [dl("a", "Работа другого вуза", HOUR)], foreignSnapshot: true },
 ];
 
-function contextFor(f: Fixture, character: string, motion: "full" | "static"): AssistantContext {
+function contextFor(f: Fixture, character: string, motion: "full" | "static", reduced: boolean, acknowledged: readonly string[]): AssistantContext {
   const spaceId = SPACE[character];
   const snapshotSpace = f.foreignSnapshot ? (spaceId === "hse" ? "misis" : "hse") : spaceId;
   const recentEvent = f.over.recentEvent ? { ...f.over.recentEvent, spaceId } : null;
@@ -45,7 +47,7 @@ function contextFor(f: Fixture, character: string, motion: "full" | "static"): A
     spaceId, nowMs: NOW, timeZone: "Europe/Moscow", availability: "ready", activity: "idle",
     snapshot: f.noSnapshot ? null : { spaceId: snapshotSpace, updatedAt: NOW - 5 * MIN, stale: !!f.stale, deadlines: f.deadlines ?? [] },
     preferences: { seasonal: true, motion: motion === "static" ? "calm" : "system" },
-    reducedMotion: false, lite: false, visible: true,
+    reducedMotion: reduced, lite: false, visible: true, acknowledgedEventIds: acknowledged,
     ...f.over, recentEvent,
   };
 }
@@ -63,6 +65,9 @@ function Catalog() {
   const [size, setSize] = useState(Number(pickParam("size", ["46", "72", "120"] as const, "72")));
   const [nightcap, setNightcap] = useState(q.get("nightcap") === "1");
   const [replay, setReplay] = useState(0);
+  // Показанные реакции на сдачу: после показа карточка сообщает о них, и они не повторяются, пока не нажата «Проиграть заново».
+  const [acknowledged, setAcknowledged] = useState<string[]>([]);
+  const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
   useEffect(() => { document.documentElement.dataset.scheme = theme; }, [theme]);
 
   const seg = <T extends string | number>(label: string, value: T, options: readonly [T, string][], set: (v: T) => void) => (
@@ -88,15 +93,21 @@ function Catalog() {
         {seg("Движение", motion, [["full", "Обычное"], ["static", "Спокойное"]], setMotion)}
         {seg("Размер", size, [[46, "46"], [72, "72"], [120, "120"]], setSize)}
         {seg("Колпак", nightcap ? "on" : "off", [["off", "Нет"], ["on", "Ночной"]], (v) => setNightcap(v === "on"))}
-        <div><button type="button" onClick={() => setReplay((n) => n + 1)} className="min-h-11 rounded-2xl bg-raised px-3 text-s font-bold">Проиграть реакции заново</button></div>
+        <div><button type="button" onClick={() => { setAcknowledged([]); setReplay((n) => n + 1); }} className="min-h-11 rounded-2xl bg-raised px-3 text-s font-bold">Проиграть реакции заново</button></div>
       </div>
+      <section className="flex flex-col gap-3 rounded-[20px] bg-card p-3.5" aria-label="Заставки загрузки" data-fixture="loaders">
+        <p className="text-s font-bold text-hint">Заставка загрузки · бег на месте и полоска без процентов</p>
+        <MascotLoader character="varya" label="Тащу в гнездо сроки из LMS" dark={theme === "dark"} motion={motion === "static" || reduced ? "static" : "full"} size={size} />
+        <MascotLoader character="dusya" label="Собираю расписание" dark={theme === "dark"} motion={motion === "static" || reduced ? "static" : "full"} size={size} />
+      </section>
       <div className="grid gap-3 sm:grid-cols-2">
         {FIXTURES.map((f) => {
-          const p = resolveAssistantPresentation(contextFor(f, character, motion));
+          const p = resolveAssistantPresentation(contextFor(f, character, motion, reduced, acknowledged));
           return (
-            <div key={`${f.id}:${replay}`} className="flex min-w-0 flex-col gap-1.5">
+            <div key={`${f.id}:${replay}`} className="flex min-w-0 flex-col gap-1.5" data-fixture={f.id}>
               <p className="text-s font-bold text-hint">{f.label} · <code>{p.status}</code></p>
-              <MascotCard presentation={p} dark={theme === "dark"} size={size} nightcap={nightcap} />
+              <MascotCard presentation={p} nowMs={NOW} dark={theme === "dark"} size={size} nightcap={nightcap}
+                onReactionShown={(id) => setAcknowledged((a) => (a.includes(id) ? a : [...a, id]))} />
             </div>
           );
         })}
