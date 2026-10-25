@@ -24,7 +24,7 @@ const DATA = {
   },
 };
 
-export async function platformApi(page, { spaces = SPACES, misisDelay = 0, failDeadlines = () => false, extraDeadlines = [] } = {}) {
+export async function platformApi(page, { spaces = SPACES, misisDelay = 0, failDeadlines = () => false, extraDeadlines = [], hseConnection = {} } = {}) {
   const origin = new URL(test.info().project.use.baseURL).origin;
   const created = [];
   let list = [...spaces];
@@ -49,7 +49,9 @@ export async function platformApi(page, { spaces = SPACES, misisDelay = 0, failD
       if (kind === "deadlines" && failDeadlines(id)) return send({ error: { code: "INTERNAL_ERROR", requestId: "r" } }, 500);
       const d = DATA[id];
       const extra = kind === "deadlines" && id === "s-hse" ? extraDeadlines : [];
-      return send(d ? section(id, [...d[kind], ...extra]) : { spaceId: id, items: [], sources: [], connections: [] });
+      const body = d ? section(id, [...d[kind], ...extra]) : { spaceId: id, items: [], sources: [], connections: [] };
+      if (id === "s-hse") body.connections = body.connections.map((c) => ({ ...c, ...hseConnection }));
+      return send(body);
     }
     if (p === "/api/cloud") return send(null);
     return send({ error: { code: "NOT_FOUND", requestId: "r" } }, 404);

@@ -51,20 +51,23 @@ test("a failed refresh keeps the last data visible and says so", async ({ page }
   await expect(home.getByRole("button", { name: "Повторить" })).toBeVisible();
 });
 
-test("a new user connects a university from the empty home screen", async ({ page }) => {
-  const created = await platformApi(page, { spaces: [] });
+test("a new user goes from the empty home screen to the «Вузы» screen to connect", async ({ page }) => {
+  await platformApi(page, { spaces: [] });
   await page.goto("/");
-  await page.getByRole("button", { name: "Подключить учёбу" }).click();
-  await expect(page.getByRole("heading", { name: "Подключить учёбу" })).toBeVisible();
-  // Первые 350 мс после открытия экрана приложение нарочно гасит нажатия (защита от двойного тапа, App.tsx):
-  // на быстрой машине тест успевает нажать раньше, поэтому нажимаем, пока выбор не сработает.
-  await expect(async () => {
-    await page.getByRole("button", { name: "ВШЭ", exact: true }).click();
-    await expect(page.getByText("Выбран: ВШЭ")).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: 10_000 });
-  await expect(page.getByLabel("Адрес сайта")).toBeVisible();
-  expect(created).toEqual([{ universityId: "hse", name: "ВШЭ" }]);
-  await page.getByLabel("Адрес сайта").fill("http://lms.example.test/?token=1");
-  await page.getByRole("button", { name: "Добавить" }).click();
-  await expect(page.getByRole("alert")).toContainText("https://");
+  await page.getByRole("link", { name: "Подключить учёбу" }).click();
+  await expect(page.locator("[data-universities]")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Вузы" })).toBeVisible();
+  expect(new URL(page.url()).hash).toBe("#/universities");
+});
+
+test("«+» and an expired source lead to the right section of the «Вузы» screen", async ({ page }) => {
+  await platformApi(page, { hseConnection: { status: "user_action_required", errorCode: "source_session_expired" } });
+  await page.goto("/");
+  const home = page.locator('[data-space-home="s-hse"]');
+  await expect(home.getByText("Нужен вход заново")).toBeVisible();
+  await expect(home.getByRole("link", { name: "Войти" })).toHaveAttribute("href", "#/universities/hse");
+  await expect(home.getByRole("link", { name: "Подключить вуз или сайт" })).toHaveAttribute("href", "#/universities/hse");
+  await home.getByRole("link", { name: "Войти" }).click();
+  await expect(page.locator("[data-universities]")).toBeVisible();
+  expect(new URL(page.url()).hash).toBe("#/universities/hse");
 });

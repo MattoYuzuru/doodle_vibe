@@ -2,7 +2,7 @@ import { BookOpen, ExternalLink, Flag, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { MascotCard, MascotLoader } from "../../components/assistant/MascotCard";
 import { characterFor, connectionsOf, freshness } from "../../lib/space-adapter";
-import { sourceProblem } from "../../lib/sources";
+import { sourceProblem, universitiesLink } from "../../lib/sources";
 import { DeadlineRow } from "../../components/DeadlineRow";
 import { HeroDeadlineCard } from "../../components/HeroDeadlineCard";
 import { LessonRow } from "../../components/LessonRow";
@@ -49,12 +49,12 @@ async function refreshSpace(connections: Connection[]) {
 }
 
 function useIntentHandler(deadlineUrl: (id: string) => string | undefined) {
-  const push = useNav((s) => s.push);
-  const spaceId = usePlatform((s) => s.activeId);
+  const universityId = usePlatform((s) => s.spaces.find((x) => x.id === s.activeId)?.universityId);
   return (intent: AssistantIntent, deadlineId?: string) => {
     haptic.tap();
     if (intent === "open-deadline" && deadlineId) { const u = deadlineUrl(deadlineId); if (u) openSource(u); }
-    else if (intent === "reauth" || intent === "connect") push({ name: "connect", spaceId: spaceId ?? undefined });
+    // Подключение и вход — на экране «Вузы» (удалённый браузер, пароль с MFA, токен, календарь).
+    else if (intent === "reauth" || intent === "connect") location.hash = universitiesLink(universityId);
     else if (intent === "retry") void usePlatform.getState().reload();
   };
 }
@@ -83,16 +83,14 @@ function SpaceStatus() {
 }
 
 function SourcesTile() {
-  const { data } = useSpace();
-  const push = useNav((s) => s.push);
-  const spaceId = usePlatform((s) => s.activeId);
+  const { data, space } = useSpace();
   const connections = connectionsOf(data);
   if (!connections.length) return null;
   return (
     <Tile span={2} index={3} className="min-h-0 pb-2">
       <div className="flex flex-wrap items-center justify-between gap-x-2">
         <TileTitle>Источники</TileTitle>
-        <button type="button" onClick={() => push({ name: "connect", spaceId: spaceId ?? undefined })} className="-my-1 min-h-8 px-1 text-s font-bold text-accent">Добавить</button>
+        <a href={universitiesLink(space?.universityId)} className="-my-1 grid min-h-8 place-items-center px-1 text-s font-bold text-accent">Добавить</a>
       </div>
       <ul className="mt-1">
         {connections.map((c) => (
@@ -102,6 +100,10 @@ function SourcesTile() {
               <span className="block truncate text-s text-hint">{new URL(c.sourceUrl).host}</span>
             </span>
             <span className={`shrink-0 rounded-full px-2 py-0.5 text-s font-bold ${STATUS_LABEL[c.status][1]}`}>{sourceProblem(c.errorCode) ?? STATUS_LABEL[c.status][0]}</span>
+            {/* Нужен вход (в том числе истёкший) — сразу к входу на экране «Вузы». */}
+            {c.status === "user_action_required" && space && (
+              <a href={universitiesLink(space.universityId)} className="grid min-h-9 shrink-0 place-items-center rounded-full bg-accent px-3 text-s font-bold text-on-accent" data-relogin={c.id}>Войти</a>
+            )}
           </li>
         ))}
       </ul>
@@ -111,14 +113,13 @@ function SourcesTile() {
 
 /** Пустой экран без вузов: маскот зовёт подключить учёбу. */
 function NoSpaces() {
-  const push = useNav((s) => s.push);
   const motion = useMascotMotion();
   const dark = useScheme() === "dark";
   return (
     <div className="flex flex-col items-start gap-3 rounded-[22px] bg-card p-4" data-space-empty>
       <MascotLoader character="varya" label="Гнездо пока пустое" dark={dark} motion={motion} />
       <p className="text-m">Выбери свой вуз и скинь ссылки на учебные сайты: LMS, расписание, таблицы. Я соберу сроки и пары в одно место.</p>
-      <button type="button" onClick={() => push({ name: "connect" })} className="min-h-11 rounded-2xl bg-accent px-4 text-m font-bold text-on-accent">Подключить учёбу</button>
+      <a href={universitiesLink(null)} className="grid min-h-11 place-items-center rounded-2xl bg-accent px-4 text-m font-bold text-on-accent">Подключить учёбу</a>
     </div>
   );
 }
