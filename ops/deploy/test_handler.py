@@ -4,6 +4,7 @@ from contextlib import closing
 import hashlib
 import importlib.util
 import io
+import shutil
 import json
 from pathlib import Path
 import subprocess
@@ -139,6 +140,46 @@ class HandlerTests(unittest.TestCase):
             handler.activate(A)
         self.assertEqual(handler.current_sha(), A)
         self.assertEqual(handler.current_sha('previous'), B)
+
+    def test_scripts_directory_accepts_only_mjs(self):
+        self.install(bundle({'backend/scripts/chromium-smoke.mjs': b''}))
+        shutil.rmtree(self.base / 'releases', ignore_errors=True)
+        (self.base / 'releases').mkdir()
+        with self.assertRaisesRegex(RuntimeError, 'unsafe'):
+            self.install(bundle({'backend/scripts/run.sh': b''}))
+
+    def test_smoke_requires_current_release_with_script(self):
+        for sha in (A, B):
+            (self.base / 'releases' / sha).mkdir()
+        handler.point('current', A)
+        with patch.object(handler, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'current release'):
+                handler.smoke(B)
+            with self.assertRaisesRegex(RuntimeError, 'no chromium smoke'):
+                handler.smoke(A)
+            run.assert_not_called()
+
+    def test_smoke_reports_unit_failure_without_success(self):
+        script = self.base / 'releases' / A / 'backend/scripts'
+        script.mkdir(parents=True)
+        (script / 'chromium-smoke.mjs').write_text('')
+        handler.point('current', A)
+        done = subprocess.CompletedProcess([], 0, stdout='{"ok":false}\n')
+        with patch.object(handler, 'run', side_effect=subprocess.CalledProcessError(1, 'systemctl')), patch.object(handler.subprocess, 'run', return_value=done):
+            with self.assertRaisesRegex(RuntimeError, 'smoke failed'):
+                handler.smoke(A)
+
+    def test_smoke_unit_keeps_the_backend_sandbox_and_bounded_limits(self):
+        def directives(name):
+            lines = (Path(__file__).with_name(name)).read_text().splitlines()
+            return {line for line in lines if '=' in line and not line.startswith(('#', '[', 'Exec', 'Environment', 'Description', 'Type', 'Timeout', 'Restart', 'Kill', 'Working', 'After', 'Wants', 'StandardOutput', 'StandardError', 'WantedBy'))}
+        backend, smoke = directives('doodle-backend.service'), directives('doodle-chromium-smoke.service')
+        hardening = {line for line in backend if line.split('=')[0] not in ('MemoryMax', 'TasksMax', 'RestartSec')}
+        self.assertLessEqual(hardening, smoke)
+        self.assertIn('CapabilityBoundingSet=', smoke)
+        self.assertIn('NoNewPrivileges=true', smoke)
+        self.assertTrue(any(line.startswith('MemoryMax=') for line in smoke))
+        self.assertIn('chromiumSandbox: true', (Path(__file__).parents[2] / 'backend/scripts/chromium-smoke.mjs').read_text())
 
 
 if __name__ == '__main__':

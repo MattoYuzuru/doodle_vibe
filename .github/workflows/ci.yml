@@ -88,6 +88,39 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  chromium:
+    name: Backend Chromium runtime smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci --prefix backend --ignore-scripts
+      - name: Resolve pinned playwright-core version
+        id: playwright
+        run: echo "version=$(node backend/node_modules/playwright-core/cli.js --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
+      - name: Cache Chromium for the pinned playwright-core
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: chromium-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - name: Install Chromium and system libraries
+        run: node backend/node_modules/playwright-core/cli.js install --with-deps chromium
+      - name: Require the OS sandbox (no --no-sandbox fallback)
+        run: |
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = 1 ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - run: npm run chromium:smoke --prefix backend
+
   web:
     name: Web build and browser fixtures
     runs-on: ubuntu-24.04

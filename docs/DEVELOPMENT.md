@@ -24,6 +24,20 @@ npx playwright install chromium
 `npx playwright install --with-deps chromium`. GitHub Actions выполняет это в
 своём disposable runner; это не инструкция менять общий сервер.
 
+Chromium для backend (удалённый браузер входа в вуз) использует запиненный
+`playwright-core` из `backend/package.json`; он не скачивает браузеры при `npm ci`.
+Версия браузера привязана к версии пакета (сейчас 1.63.0, как и у `@playwright/test`
+в корне, поэтому локальный кэш общий). Установка и проверка:
+
+```bash
+node backend/node_modules/playwright-core/cli.js install chromium   # Linux runner: добавь --with-deps
+npm run test:chromium
+```
+
+Smoke запускает Chromium с включённым OS-sandbox (без `--no-sandbox`), открывает `data:`-страницу,
+проверяет рендер и получение кадра CDP `Page.startScreencast`; внешняя сеть заблокирована.
+Версию `playwright-core` обновляй только вместе с lockfile и документацией; не берите релиз младше двух недель.
+
 В Windows используй установленный Python 3.14, `py -3.14 -m venv .venv`,
 `.venv\Scripts\python.exe -m pip install -r requirements-test.txt` и переменную
 `PYTHON` с абсолютным путём к `.venv\Scripts\python.exe`. Команды npm те же.
@@ -43,8 +57,9 @@ npx playwright install chromium
 | `npm run test:platform` | SQLite, HTTP, auth, источники и retrieval на синтетических данных |
 | `npm run test:deploy` | Python-фикстуры release/backup/rollback без SSH |
 | `npm run test:e2e` | Браузерные smoke-сценарии собранного UI с синтетическим API |
+| `npm run test:chromium` | Smoke рантайма Chromium для backend: sandbox, рендер `data:`-страницы, CDP screencast |
 | `npm test` | Unit, web unit, integration и platform; не включает browser smoke и сборку |
-| `npm run ci` | Check, typecheck, test, build и browser smoke последовательно |
+| `npm run ci` | Check, typecheck, test, deploy, build, browser smoke и Chromium smoke последовательно |
 
 После изменения зависимостей обновляй соответствующий lockfile. Наличие
 `node_modules` с чужого компьютера не заменяет установку по lockfile.
