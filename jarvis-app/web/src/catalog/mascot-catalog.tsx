@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../index.css";
 import { MascotCard, MascotLoader } from "../components/assistant/MascotCard";
@@ -50,6 +50,14 @@ function contextFor(f: Fixture, character: string, motion: "full" | "static", re
     reducedMotion: reduced, lite: false, visible: true, acknowledgedEventIds: acknowledged,
     ...f.over, recentEvent,
   };
+}
+
+/** История статусов карточки (для проверок): «completed ready» — реакция показана и ушла, независимо от скорости машины. */
+function Seen({ status, children }: { status: string; children: React.ReactNode }) {
+  const seen = useRef<string[]>([]);
+  const [, bump] = useState(0);
+  useEffect(() => { if (seen.current[seen.current.length - 1] !== status) { seen.current.push(status); bump((n) => n + 1); } }, [status]);
+  return <div className="contents" data-seen={seen.current.join(" ")}>{children}</div>;
 }
 
 const q = new URLSearchParams(location.search);
@@ -106,8 +114,10 @@ function Catalog() {
           return (
             <div key={`${f.id}:${replay}`} className="flex min-w-0 flex-col gap-1.5" data-fixture={f.id}>
               <p className="text-s font-bold text-hint">{f.label} · <code>{p.status}</code></p>
-              <MascotCard presentation={p} nowMs={NOW} dark={theme === "dark"} size={size} nightcap={nightcap}
-                onReactionShown={(id) => setAcknowledged((a) => (a.includes(id) ? a : [...a, id]))} />
+              <Seen status={p.status}>
+                <MascotCard presentation={p} nowMs={NOW} dark={theme === "dark"} size={size} nightcap={nightcap}
+                  onReactionShown={(id) => setAcknowledged((a) => (a.includes(id) ? a : [...a, id]))} />
+              </Seen>
             </div>
           );
         })}
