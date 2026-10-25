@@ -8,6 +8,7 @@
 | [Требования FR/NFR](product/requirements.md) | Область MVP и проверяемый результат продуктовой задачи |
 | [Backend API v1](backend-api.md) | Маршруты, авторизация, подключение, ограничения и передача frontend |
 | [Вузы: ВШЭ, МИСИС, любой вуз](universities.md) | Подтверждённые способы входа, пресеты, универсальное определение источника, живая проверка владельцем |
+| [ЦУ и ВШЭ: вход и read-only API](research/cu-hse-auth-endpoints.md) | Исследование от 2026-10-25: IdP, куда ложится сессия, эндпоинты, черновики пресетов входа и рецептов |
 | [Деплой](deployment.md) | mnema, main после CI, секреты, health и откат |
 | [Telegram delivery](deployment-telegram.md) | Отдельный webhook-host, Cloudflare Strict, проверка доставки и откат |
 | [ADR-0002](adr/0002-isolated-sqlite-backend.md) | SQLite, ограниченные исполнители и отдельный сервис |
