@@ -37,7 +37,7 @@ function sameSecret(a,b) {
   return left.length > 0 && left.length === right.length && timingSafeEqual(left,right);
 }
 
-export function createApp({store, config, createSources, model = null, retrieveWeb, staticDir, oauth = null, onLog = () => {}, onTelegram = null, now = Date.now}) {
+export function createApp({store, config, createSources, model = null, retrieveWeb, staticDir, oauth = null, login = null, loginRoutes = null, devAuth = null, onLog = () => {}, onTelegram = null, now = Date.now}) {
   const chat = createChatService({store,model,retrieveWeb,now});
   const counters = new Map();
   function limit(userId, bucket, maximum) {
@@ -53,7 +53,7 @@ export function createApp({store, config, createSources, model = null, retrieveW
     res.end(JSON.stringify(value));
   };
   // Credential forms the executor supports for this origin, then operator OAuth providers.
-  const authMethods = connection => [...authMethodsFor(store,connection),...(oauth?.methods(connection)||[])];
+  const authMethods = connection => [...authMethodsFor(store,connection),...(login?.authMethods(connection)||[]),...(oauth?.methods(connection)||[])];
   async function handler(req,res) {
     const requestId = randomUUID();
     try {
@@ -92,7 +92,8 @@ export function createApp({store, config, createSources, model = null, retrieveW
         return res.end(req.method === 'HEAD' ? undefined : content);
       }
       if (req.headers.origin && req.headers.origin !== config.publicBaseUrl) throw new AppError('ORIGIN_REJECTED',403);
-      const identity = verifyTelegramInitData(req.headers['x-telegram-init-data'],config.botToken,{now});
+      // Dev identity (contract: src/dev-auth.mjs) only answers requests without Telegram init data.
+      const identity = (!req.headers['x-telegram-init-data'] && devAuth?.identify(req)) || verifyTelegramInitData(req.headers['x-telegram-init-data'],config.botToken,{now});
       store.ensureUser(identity);
       const userId = identity.id;
       limit(userId,'api',120);
@@ -105,6 +106,7 @@ export function createApp({store, config, createSources, model = null, retrieveW
           return send(res,201,{space:store.createSpace(userId,{universityId:text(body.universityId),name:text(body.name)})},requestId);
         }
       }
+      if (loginRoutes && await loginRoutes.handle({req,res,url,userId,requestId,send,readBody:()=>readBody(req)})) return;
       let match = path.match(/^\/api\/v1\/spaces\/([^/]+)(?:\/(connections|schedule|deadlines|courses|documents|faq|chat))?$/);
       if (match) {
         const [,spaceId,resource] = match;
@@ -150,8 +152,8 @@ export function createApp({store, config, createSources, model = null, retrieveW
       if (match) {
         const [,connectionId,action] = match;
         const connection = store.getConnection(userId,connectionId);
-        if (!action && req.method === 'GET') return send(res,200,{connection:publicConnection(connection),authMethods:authMethods(connection)},requestId);
-        if (!action && req.method === 'DELETE') return send(res,200,store.deleteConnection(userId,connectionId),requestId);
+        if (!action && req.method === 'GET') return send(res,200,{connection:publicConnection(connection),authMethods:authMethods(connection),login:login?.active(userId,connectionId)??null},requestId);
+        if (!action && req.method === 'DELETE') { await login?.cancelForConnection(connectionId); return send(res,200,store.deleteConnection(userId,connectionId),requestId); }
         if (action === 'auth' && req.method === 'POST') {
           limit(userId,'jobs',15);
           const secret = buildSecret(fields(await readBody(req),AUTH_FIELDS),connection.sourceUrl);
@@ -192,6 +194,8 @@ export function createApp({store, config, createSources, model = null, retrieveW
     }
   }
   const server = createServer((req,res) => void handler(req,res));
+  // WebSocket stream of the login sessions: ticket, Origin and ownership are checked by the routes.
+  server.on('upgrade',(req,socket,head)=>{ if (loginRoutes) loginRoutes.upgrade(req,socket,head); else socket.destroy(); });
   server.requestTimeout = 35_000; server.headersTimeout = 10_000; server.keepAliveTimeout = 5000;
   return server;
 }

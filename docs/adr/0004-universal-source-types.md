@@ -28,7 +28,7 @@
 5. **`authMethods`** в `GET /connections/:id` теперь содержит формы входа исполнителя (`id`, `type`, `label`, `fields`, `note?`, `notes?`),
    затем OAuth-провайдеры оператора. Новые коды `errorCode`: `source_network_restricted`, `source_identifier_not_found`,
    `source_identifier_ambiguous`, `source_lms_unsupported`.
-6. **Границы**: SSO/MFA/CAPTCHA не обходятся; токены и cookies браузера не принимаются; человек в РУЗ не угадывается;
+6. **Границы**: SSO/MFA/CAPTCHA не обходятся (пункт уточнён [ADR-0005](0005-remote-browser-login-and-learned-recipes.md): SSO проходит человек в удалённом браузере); токены и cookies браузера не принимаются; человек в РУЗ не угадывается;
    неполный ответ не заменяет прежний снимок.
 
 ## Альтернативы

@@ -9,6 +9,9 @@ import { createWorker } from './worker.mjs';
 import { createOAuthService } from './oauth.mjs';
 import { createTelegramHandler } from './telegram.mjs';
 import { createWebRetriever } from './web-retrieval.mjs';
+import { createLoginSessionManager } from './login/session-manager.mjs';
+import { createLoginRoutes } from './login/routes.mjs';
+import { createDevAuth } from './dev-auth.mjs';
 
 async function main() {
   process.umask(0o077);
@@ -24,7 +27,9 @@ async function main() {
     const service=createSourceService({store:guardedStore,proposeRecipe:model?.proposeRecipe});
     return {...service,sync:async args=>{ await oauth?.refresh(args.userId,args.connectionId,{storage:guardedStore}); return service.sync(args); }};
   };
-  const server=createApp({store,config,createSources,model,oauth,onLog:log,retrieveWeb:createWebRetriever({store}),
+  const login=createLoginSessionManager({store,config});
+  const loginRoutes=createLoginRoutes({store,login,config});
+  const server=createApp({store,config,createSources,model,oauth,login,loginRoutes,devAuth:createDevAuth(),onLog:log,retrieveWeb:createWebRetriever({store}),
     staticDir:resolve(dirname(fileURLToPath(import.meta.url)),'../..','jarvis-app/web/dist'),
     onTelegram:config.botToken&&config.webhookSecret?createTelegramHandler({publicBaseUrl:config.publicBaseUrl}):null});
   const worker=createWorker({store,createSources,onError:log});
@@ -34,7 +39,7 @@ async function main() {
   const shutdown=async()=>{
     if(shuttingDown) return; shuttingDown=true;
     const deadline=setTimeout(()=>process.exit(1),40_000); deadline.unref();
-    await Promise.all([worker.stop(),new Promise(resolve=>server.close(resolve))]);
+    await Promise.all([worker.stop(),login.close(),new Promise(resolve=>server.close(resolve))]);
     store.close(); clearTimeout(deadline);
   };
   process.on('SIGTERM',()=>void shutdown());process.on('SIGINT',()=>void shutdown());
