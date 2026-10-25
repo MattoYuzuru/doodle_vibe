@@ -1,4 +1,5 @@
 import { AppError } from './errors.mjs';
+import { createHash } from 'node:crypto';
 
 const cleanText = (text, max) => String(text ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, max);
 export function createChatService({store, model, retrieveWeb, now = Date.now}) {
@@ -9,9 +10,11 @@ export function createChatService({store, model, retrieveWeb, now = Date.now}) {
       const question = text.trim();
       const kind = /пар[аыуе]?(?!\p{L})|расписан|заняти|schedule|lesson/iu.test(question) ? 'schedule'
         : /дедлайн|задани|сдать|deadline|assignment/iu.test(question) ? 'deadlines' : null;
-      const evidence = [];
+      const evidence = [], references=[];
       if (kind) {
         for (const snapshot of store.listSnapshots(userId, spaceId, {kind})) {
+          if(snapshot.items.length) references.push({type:'snapshot',id:snapshot.id,connectionId:snapshot.connectionId,
+            digest:createHash('sha256').update(JSON.stringify(snapshot.items)).digest('hex')});
           for (const item of snapshot.items.slice(0, 100)) {
             evidence.push({id:`item:${item.id}`, title:cleanText(item.title, 200), url:item.url,
               fetchedAt:snapshot.fetchedAt, kind, startsAt:item.startsAt, endsAt:item.endsAt,
@@ -40,8 +43,12 @@ export function createChatService({store, model, retrieveWeb, now = Date.now}) {
           }
         } catch { retrieval={errorCodes:['web_source_unavailable'],documents:[]}; }
       }
-      for (const doc of documents) evidence.push({id:`doc:${doc.id}`, title:cleanText(doc.title, 200),
-        url:doc.url, fetchedAt:doc.fetchedAt, kind:'document', text:cleanText(doc.text, 3000)});
+      for (const doc of documents) {
+        references.push({type:'document',id:doc.id,connectionId:doc.connectionId,
+          digest:createHash('sha256').update(JSON.stringify([doc.url,doc.title,doc.text,doc.fetchedAt])).digest('hex')});
+        evidence.push({id:`doc:${doc.id}`, title:cleanText(doc.title, 200),url:doc.url,
+          fetchedAt:doc.fetchedAt,kind:'document',text:cleanText(doc.text, 3000)});
+      }
       const sources = evidence.slice(0, 50);
       let answer, mode = 'retrieval', errorCode = null;
       if (!sources.length) {
@@ -64,10 +71,12 @@ export function createChatService({store, model, retrieveWeb, now = Date.now}) {
       }
       const citations = sources.map(({id,title,url,fetchedAt}) => ({id,title,url,fetchedAt,
         stale: !Number.isFinite(Date.parse(fetchedAt)) || now() - Date.parse(fetchedAt) > 24*3600_000}));
-      store.appendMessage(userId, spaceId, {role:'user',text:question});
-      store.appendMessage(userId, spaceId, {role:'assistant',text:answer,sources:citations});
-      return {answer, sources:citations, mode, errorCode, spaceId, generatedAt:new Date(now()).toISOString(),
-        retrieval:retrieval?{fetched:retrieval.fetched||0,cached:retrieval.cached||0,errorCodes:retrieval.errorCodes||[],limitations:retrieval.limitations||[]}:null};
+      return store.withEvidenceCurrent(userId,spaceId,references,()=>{
+        store.appendMessage(userId, spaceId, {role:'user',text:question});
+        store.appendMessage(userId, spaceId, {role:'assistant',text:answer,sources:citations});
+        return {answer, sources:citations, mode, errorCode, spaceId, generatedAt:new Date(now()).toISOString(),
+          retrieval:retrieval?{fetched:retrieval.fetched||0,cached:retrieval.cached||0,errorCodes:retrieval.errorCodes||[],limitations:retrieval.limitations||[]}:null};
+      });
     },
   };
 }

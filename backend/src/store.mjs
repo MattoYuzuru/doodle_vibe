@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { AppError } from './errors.mjs';
@@ -194,6 +194,25 @@ export function createStore({ dbPath, masterKey, now = Date.now }) {
       return { id: mid, userId: String(id), spaceId: sid, role, text, sources, createdAt: at() };
     },
     listMessages(id, sid, { limit = 50 } = {}) { space(id, sid); return all('SELECT * FROM (SELECT rowid AS sequence,* FROM messages WHERE user_id=? AND space_id=? ORDER BY rowid DESC LIMIT ?) ORDER BY sequence', String(id), sid, limitValue(limit)).map(r => ({ id: r.id, userId: r.user_id, spaceId: r.space_id, role: r.role, text: r.text, sources: parse(r.sources), createdAt: r.created_at })); },
+    withEvidenceCurrent(id,sid,references,operation) {
+      return tx(()=>{
+        space(id,sid);
+        for(const reference of references) {
+          let row,value;
+          if(reference.type==='snapshot') {
+            row=get('SELECT s.items FROM snapshots s JOIN connections c ON c.id=s.connection_id WHERE s.id=? AND c.id=? AND c.user_id=? AND c.space_id=?',reference.id,reference.connectionId,String(id),sid);
+            value=row?.items;
+          } else if(reference.type==='document') {
+            row=get('SELECT url,title,text,fetched_at FROM documents WHERE id=? AND connection_id=? AND user_id=? AND space_id=?',reference.id,reference.connectionId,String(id),sid);
+            if(row) value=JSON.stringify([row.url,row.title,row.text,row.fetched_at]);
+          }
+          if(!row || createHash('sha256').update(value).digest('hex')!==reference.digest) fail('EVIDENCE_CHANGED',409);
+        }
+        const result=operation();
+        if(result&&typeof result.then==='function') { Promise.resolve(result).catch(()=>{}); fail('ASYNC_EVIDENCE_CALLBACK'); }
+        return result;
+      });
+    },
     enqueueJob(id, cid, { type, payload = {}, dedupeKey }) {
       const c = connection(id, cid); string(type, 100); const dk = dedupeKey === undefined ? type : string(dedupeKey, 200); const encoded = json(publicData(payload));
       return tx(() => {

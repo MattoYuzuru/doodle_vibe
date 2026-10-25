@@ -55,6 +55,20 @@ test('DeepSeek sends key only to fixed endpoint and validates bounded JSON respo
   await assert.rejects(huge.answer({}),{code:'MODEL_RESPONSE_TOO_LARGE'});
   assert.equal(createDeepSeek({apiKey:''}),null);
 });
+test('removed or reconnected evidence during a model call is neither returned nor saved as memory',async t=>{
+  const {store,a,ca}=fixture(t);
+  for(const action of ['reset','delete']) {
+    const connection=action==='reset'?ca:store.createConnection('101',a.id,{sourceUrl:'https://hse.example.edu/new',kind:'lms'});
+    store.putSnapshot('101',connection.id,{kind:'schedule',complete:true,fetchedAt:new Date(time).toISOString(),items:[{id:'old',title:'Former account private fact',url:'https://hse.example.edu/schedule'}]});
+    let release;
+    const chat=createChatService({store,now:()=>time,model:{answer:()=>new Promise(resolve=>release=resolve)}});
+    const pending=chat.ask('101',a.id,'Какие у меня пары?');
+    if(action==='reset') store.resetConnectionAuth('101',connection.id,{origin:'https://hse.example.edu',token:'new-login-token'});
+    else store.deleteConnection('101',connection.id);
+    release({answer:'Former account private fact',sourceIds:['item:old']});
+    await assert.rejects(pending,{code:'EVIDENCE_CHANGED'});assert.equal(store.listMessages('101',a.id).length,0);
+  }
+});
 test('OAuth binds PKCE, browser, Telegram owner, one-time state and refresh rotation',async t=>{
   const {store,a,ca}=fixture(t);let clock=time;const calls=[];
   const provider={id:'hse',origin:'https://hse.example.edu',clientId:'fixture-client',scope:'schedule.read',
