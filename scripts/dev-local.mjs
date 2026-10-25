@@ -14,8 +14,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const web = join(root, 'jarvis-app/web');
 const args = new Set(process.argv.slice(2));
 const port = Number(process.env.DEV_LOCAL_PORT || 18190);
-// 18180 is the owner's temporary panel and 4173 is `vite preview`; never take either.
-if (!Number.isInteger(port) || port < 1024 || port > 65535 || port === 18180 || port === 4173) throw new Error('DEV_LOCAL_PORT must be a free unprivileged port other than 18180 and 4173');
+// 4173 is `vite preview`; never take it.
+if (!Number.isInteger(port) || port < 1024 || port > 65535 || port === 4173) throw new Error('DEV_LOCAL_PORT must be a free unprivileged port other than 4173');
 const url = `http://127.0.0.1:${port}/#/universities`;
 const state = process.env.DEV_LOCAL_STATE || join(process.env.XDG_STATE_HOME || join(homedir(), '.local/state'), 'doodle-dev-local');
 
@@ -59,7 +59,7 @@ if (!existsSync(join(web, 'node_modules')) || !existsSync(join(root, 'backend/no
   run('npm', ['run', 'bootstrap']);
 }
 if (!args.has('--no-build') && needsBuild()) { console.log('Building the Mini App…'); run('npm', ['run', 'build']); }
-if (!(await portFree())) { console.error(`Port ${port} is busy. Set DEV_LOCAL_PORT to another free port (not 18180 or 4173).`); process.exit(1); }
+if (!(await portFree())) { console.error(`Port ${port} is busy. Set DEV_LOCAL_PORT to another free port (not 4173).`); process.exit(1); }
 
 mkdirSync(join(state, 'keys'), { recursive: true, mode: 0o700 });
 mkdirSync(join(state, 'data'), { recursive: true, mode: 0o700 });

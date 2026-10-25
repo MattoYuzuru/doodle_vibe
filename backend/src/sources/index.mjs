@@ -8,7 +8,8 @@ import { describeAuthMethods } from './presets.mjs';
 import { typedRecipe, resolveTyped, probeMoodle, identifyOtherLms } from './detect.mjs';
 import { storedSessionOf, syncWithSession } from './session-sync.mjs';
 import { createAgentRetriever } from './agent.mjs';
-import { learnAndActivate } from './learned.mjs';
+import { learnAndActivate, findLearnedAdapter } from './learned.mjs';
+import { SEED_RECIPES } from './learned-seeds.mjs';
 
 export { safeRequest, validateSourceUrl, createBoundTokenRequest } from './network.mjs';
 export { describeAuthMethods } from './presets.mjs';
@@ -65,6 +66,9 @@ export function createSourceService({ store, request = safeRequest, proposeRecip
       if (adapter && adapter.origin !== origin) throw new AppError('source_recipe_invalid', 400);
       const typed = resolveTyped(origin, adapter);
       if (typed) return persist(connection, userId, await runTyped(typed.type, mode, { userId, connection, origin, fetchedAt }));
+      // An origin read through a browser session (seed or learned recipe) has no public data: its HTML shell is
+      // not a document, so without a session the connection waits for a login instead of looking connected.
+      if (SEED_RECIPES[origin] || findLearnedAdapter(store, origin)) return persist(connection, userId, { status: 'user_action_required', capabilities: [], errorCode: 'source_auth_required' });
       const adoptMoodle = () => {
         const adapterId = `moodle:${digest(origin)}`;
         store.putAdapter({ id: adapterId, origin, version: 1, recipe: typedRecipe('moodle'), capabilities: [...MOODLE_CAPABILITIES] });

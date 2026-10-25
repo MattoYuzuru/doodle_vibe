@@ -186,3 +186,31 @@ test('session transport (network.mjs): cookie scoping, bearer, no redirects, POS
   assert.deepEqual([redirect.status, redirect.headers.location, server.requests.at(-1).url], [302, 'https://evil.example/steal', '/go']);
   assert.equal(server.requests.filter(r => r.url === '/steal').length, 0, 'the redirect is reported, never followed with the session');
 });
+
+test('without a session, a seed or learned origin waits for a login and never stores its HTML shell', async t => {
+  resetRecipeHealth();
+  const server = await startServer(lmsHandler());
+  const e = environment(['u1', 'u2']);
+  t.after(async () => { e.store.close(); await server.close(); });
+  const requests = [];
+  const shell = async url => { requests.push(url); return { status: 200, url, headers: { 'content-type': 'text/html' }, body: '<html><title>ЦУ</title><body>app shell</body></html>' }; };
+  const seedService = createSourceService({ store: e.store, request: shell, now: () => NOW });
+  const cu = e.store.createConnection('u1', e.spaces.u1.id, { sourceUrl: 'https://my.centraluniversity.ru/', kind: 'lms' });
+  for (const mode of ['discover', 'sync']) {
+    const result = await seedService[mode]({ userId: 'u1', connectionId: cu.id });
+    assert.equal(result.status, 'user_action_required', mode);
+    assert.equal(result.errorCode, 'source_auth_required', mode);
+  }
+  assert.deepEqual(requests, []);
+  assert.deepEqual(e.store.listDocuments('u1', e.spaces.u1.id), []);
+  assert.equal(e.store.getConnection('u1', cu.id).status, 'user_action_required');
+
+  const service = createSourceService({ store: e.store, request: fixtureRequest(server.port), now: () => NOW });
+  const a = e.connect('u1', PEOPLE.A);
+  await service.learn({ userId: 'u1', connectionId: a.id, observations: await observe(server.port, PEOPLE.A) });
+  const b = e.store.createConnection('u2', e.spaces.u2.id, { sourceUrl: `${ORIGIN}/`, kind: 'lms' });
+  const result = await service.discover({ userId: 'u2', connectionId: b.id });
+  assert.equal(result.status, 'user_action_required');
+  assert.equal(result.errorCode, 'source_auth_required');
+  assert.deepEqual(e.store.listDocuments('u2', e.spaces.u2.id), []);
+});
