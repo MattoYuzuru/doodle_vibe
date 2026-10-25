@@ -117,7 +117,7 @@ export async function runLiveCheck({ store, io, universities = [], urls = [], do
 }
 
 // Hidden input without echo; the value never touches argv, env, history or logs.
-function terminalIo() {
+export function terminalIo() {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return {
     print: line => process.stdout.write(`${line}\n`),
