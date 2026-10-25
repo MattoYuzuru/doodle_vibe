@@ -51,12 +51,49 @@ export async function resolvePublicAddress(hostname, resolver = lookup) {
   return addresses[0];
 }
 
+// Session mode (contract §4): a stored browser session is applied by the executor only. The Cookie / Authorization
+// header is built from the secret for the bound origin, redirects are never followed (3xx is returned as is so the
+// caller can recognise a login redirect) and POST is limited to paths the caller names (the code-level read-only allowlist).
+const cookieName = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/;
+const cookieValue = /^[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]{0,4096}$/;
+function cookieApplies(cookie, url, nowSeconds) {
+  if (!cookie || typeof cookie.name !== 'string' || typeof cookie.value !== 'string' || typeof cookie.domain !== 'string' || !cookieName.test(cookie.name) || !cookieValue.test(cookie.value)) return false;
+  if (typeof cookie.expires === 'number' && cookie.expires > 0 && cookie.expires <= nowSeconds) return false;
+  const domain = cookie.domain.toLowerCase();
+  const host = url.hostname.toLowerCase();
+  if (!domain.replace(/^\./, '').includes('.')) return false; // a bare public suffix (`.edu`) is never a valid cookie domain
+  if (!(domain.startsWith('.') ? host === domain.slice(1) || host.endsWith(domain) : host === domain)) return false;
+  const path = typeof cookie.path === 'string' && cookie.path.startsWith('/') ? cookie.path : '/';
+  return url.pathname === path || url.pathname.startsWith(path.endsWith('/') ? path : `${path}/`);
+}
+function sessionHeaders(url, method, body, session) {
+  if (!session || typeof session !== 'object' || typeof session.origin !== 'string' || validateSourceUrl(session.origin).origin !== session.origin || url.origin !== session.origin) throw fail('source_auth_origin_unsafe');
+  if (method === 'POST') {
+    if (!Array.isArray(session.postPaths) || !session.postPaths.includes(url.pathname) || typeof body !== 'string' || Buffer.byteLength(body) > 16_384) throw fail('source_method_unsafe');
+  } else if (body !== undefined) throw fail('source_method_unsafe');
+  const headers = { accept: 'application/json,text/html;q=0.8', 'x-requested-with': 'XMLHttpRequest' };
+  if (session.auth === 'bearer') {
+    const bearer = session.bearer;
+    if (!bearer || typeof bearer.token !== 'string' || !/^[A-Za-z0-9._~+\/=-]{8,8192}$/.test(bearer.token) || bearer.host !== url.hostname) throw new AppError('source_session_expired', 401);
+    headers.authorization = `Bearer ${bearer.token}`;
+  } else if (session.auth === 'cookie') {
+    const nowSeconds = Math.floor((session.now ?? Date.now()) / 1000);
+    const cookies = (Array.isArray(session.cookies) ? session.cookies : []).filter(cookie => cookieApplies(cookie, url, nowSeconds));
+    if (!cookies.length) throw new AppError('source_session_expired', 401);
+    headers.cookie = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
+  } else throw fail('source_auth_origin_unsafe');
+  if (method === 'POST') headers['content-type'] = 'application/json';
+  return headers;
+}
+
 // Per-hop DNS validation and pinned socket lookup prevent DNS rebinding. No
 // global dispatcher, ambient proxy, cookies or credentials are inherited.
 export function createSafeRequest({ resolver = lookup, boundAuthEndpoint, clientFactory = (origin, options) => new Client(origin, options) } = {}) {
-  return async function request(value, { method = 'GET', headers = {}, body, authenticated = false, secretUrl = false, boundOrigin, signal: callerSignal } = {}) {
-    if (!['GET', 'POST'].includes(method) || (method === 'POST' && !authenticated) || (secretUrl && (method !== 'GET' || authenticated))) throw fail('source_method_unsafe');
-    let url = validateSourceUrl(value, { allowSecretQuery: secretUrl });
+  return async function request(value, { method = 'GET', headers = {}, body, authenticated = false, secretUrl = false, boundOrigin, session, signal: callerSignal } = {}) {
+    if (!['GET', 'POST'].includes(method) || (method === 'POST' && !authenticated && !session) || (secretUrl && (method !== 'GET' || authenticated)) || (session && (authenticated || secretUrl))) throw fail('source_method_unsafe');
+    // Session URLs come from lint-checked recipes (templated query values may be long method names), not from source content.
+    let url = validateSourceUrl(value, { allowSecretQuery: secretUrl || !!session });
+    const stored = session ? sessionHeaders(url, method, body, session) : null;
     if (secretUrl && (typeof boundOrigin !== 'string' || url.origin !== boundOrigin)) throw fail('source_auth_origin_unsafe');
     if (authenticated && method === 'GET') {
       if (typeof boundOrigin !== 'string' || validateSourceUrl(boundOrigin).origin !== boundOrigin || url.origin !== boundOrigin ||
@@ -77,12 +114,16 @@ export function createSafeRequest({ resolver = lookup, boundAuthEndpoint, client
             ? callback(null, [address]) : callback(null, address.address, address.family) },
           headersTimeout: TIMEOUT_MS, bodyTimeout: TIMEOUT_MS, maxResponseSize: MAX_BYTES
         });
-        const allowedHeaders = { accept: 'application/json,text/csv,text/calendar,text/html;q=0.9' };
+        const allowedHeaders = stored ?? { accept: 'application/json,text/csv,text/calendar,text/html;q=0.9' };
         // Only executor-created form bodies carry credentials, never caller headers.
         if (authenticated && method === 'GET') allowedHeaders.authorization = headers.authorization;
-        if (method === 'POST') allowedHeaders['content-type'] = 'application/x-www-form-urlencoded';
+        if (method === 'POST' && !stored) allowedHeaders['content-type'] = 'application/x-www-form-urlencoded';
         const response = await client.request({ path: url.pathname + url.search, method, headers: allowedHeaders, body, signal, maxRedirections: 0 });
         if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
+          if (stored) {
+            await response.body.dump().catch(() => {}); // a session redirect is reported to the caller, never followed
+            return { status: response.statusCode, headers: { location: String(response.headers.location ?? '') }, body: '', url: url.href };
+          }
           response.body.destroy();
           if (authenticated || secretUrl) throw fail('source_auth_redirect');
           if (hop === 3 || !response.headers.location) throw fail('source_redirect_limit');
