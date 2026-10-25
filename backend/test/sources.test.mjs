@@ -227,3 +227,50 @@ test('configured OAuth transport binds one exact form endpoint and refuses crede
   assert.equal(response.status, 200); assert.equal(sent.headers['content-type'], 'application/x-www-form-urlencoded'); assert.equal(sent.headers.authorization, undefined);
   await assert.rejects(request('https://other.example/oauth/token', { method: 'POST', authenticated: true, body: 'code=SYNTHETIC' }), { code: 'source_auth_endpoint_unsafe' });
 });
+
+test('bound bearer GET sends token only to exact authorized origin and never follows redirects', async () => {
+  let sent, statusCode = 200;
+  const request = createSafeRequest({ resolver: async () => [{ address: '8.8.8.8', family: 4 }], clientFactory: () => ({ request: async options => {
+    sent = options; return { statusCode, headers: statusCode === 200 ? {} : { location: 'https://other.example/private' }, body: Readable.from(['{}']) };
+  }, destroy: async () => {} }) });
+  const options = { authenticated: true, boundOrigin: origin, headers: { authorization: 'Bearer SYNTHETIC-TOKEN', cookie: 'NEVER' } };
+  await request(`${origin}/private`, options); assert.equal(sent.headers.authorization, 'Bearer SYNTHETIC-TOKEN'); assert.equal(sent.headers.cookie, undefined);
+  await assert.rejects(request('https://other.example/private', options), { code: 'source_auth_origin_unsafe' });
+  await assert.rejects(request(`${origin}/private`, { ...options, boundOrigin: undefined }), { code: 'source_auth_origin_unsafe' });
+  statusCode = 302;
+  await assert.rejects(request(`${origin}/private`, options), { code: 'source_auth_redirect' });
+});
+
+test('private OAuth sync never sends observations to proposer or publishes privately inferred recipes', async () => {
+  const f = fixture(); const token = 'SYNTHETIC-TOKEN'; let sent;
+  f.secrets.set('con-a', { origin, token });
+  const result = await createSourceService({ store: f.store, request: async (url, options) => { sent = { url, options }; return json({ events: [{ ...event, title: `Algebra ${token}` }] }); }, proposeRecipe: async () => { throw new Error('private observation leaked to proposer'); } }).sync(args);
+  assert.equal(result.status, 'ready'); assert.equal(sent.options.headers.authorization, `Bearer ${token}`); assert.equal(sent.options.boundOrigin, origin);
+  assert.equal(f.adapters.size, 0); assert.equal(result.adapterId, undefined); assert(!JSON.stringify([...f.snapshots.values()]).includes(token));
+  f.secrets.set('con-a', { origin: 'https://other.example', token });
+  sent = null;
+  assert.equal((await createSourceService({ store: f.store, request: async () => { sent = true; } }).sync(args)).status, 'user_action_required'); assert.equal(sent, null);
+});
+
+test('Moodle redacts both exchanged password and token when upstream reflects them in course/assignment names', async () => {
+  const f = fixture('https://newlms.misis.ru/');
+  f.secrets.set('con-a', { origin: 'https://newlms.misis.ru', username: 'synthetic', password: 'shortpw' });
+  const result = await createSourceService({ store: f.store, request: async (url, options) => {
+    if (url.endsWith('/login/token.php')) return json({ token: 'SYNTHETIC-TOKEN' });
+    const fn = new URLSearchParams(options.body).get('wsfunction');
+    if (fn === 'core_webservice_get_site_info') return json({ userid: 1 });
+    if (fn === 'core_enrol_get_users_courses') return json([{ id: 8, fullname: 'shortpw course SYNTHETIC-TOKEN' }]);
+    return json({ courses: [{ id: 8, assignments: [{ id: 9, cmid: 11, name: 'shortpw assignment SYNTHETIC-TOKEN', duedate: 1793000000 }] }] });
+  } }).sync(args);
+  assert.equal(result.status, 'ready');
+  const persisted = JSON.stringify([...f.snapshots.values()]); assert(!persisted.includes('shortpw')); assert(!persisted.includes('SYNTHETIC-TOKEN'));
+});
+
+test('nested pagination ancestors preserve previous complete snapshots', async () => {
+  const f = fixture(); let response = json({ data: { events: [event] } });
+  const candidate = { ...recipe, itemsPath: 'data.events' };
+  const service = createSourceService({ store: f.store, request: async () => response, proposeRecipe: async () => candidate });
+  assert.equal((await service.discover(args)).status, 'ready'); const previous = f.snapshots.get('schedule');
+  response = json({ data: { events: [{ ...event, title: 'Partial' }], next: 'page-2' } });
+  assert.equal((await service.sync(args)).status, 'user_action_required'); assert.deepEqual(f.snapshots.get('schedule'), previous);
+});

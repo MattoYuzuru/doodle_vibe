@@ -1,6 +1,6 @@
 import { AppError } from '../errors.mjs';
 import { safeRequest, validateSourceUrl, TIMEOUT_MS } from './network.mjs';
-import { digest, validateRecipe, parseResponse, publicObservation, normalizeRecipe, inferPublicRecipe } from './recipes.mjs';
+import { digest, validateRecipe, parseResponse, publicObservation, normalizeRecipe, inferPublicRecipe, redactSecrets } from './recipes.mjs';
 import { syncMoodle, MOODLE_CAPABILITIES } from './moodle.mjs';
 
 export { safeRequest, validateSourceUrl, createBoundTokenRequest } from './network.mjs';
@@ -56,14 +56,22 @@ export function createSourceService({ store, request = safeRequest, proposeRecip
         const result = await syncMoodle({ store, request: read, userId, connection, fetchedAt });
         return persist(connection, userId, result);
       }
-      const response = await read(url.href);
+      let privateToken;
+      if (mode === 'sync') {
+        const secret = store.readSecret(userId, connection.id);
+        if (secret) {
+          if (secret.origin !== origin || typeof secret.token !== 'string' || !/^[A-Za-z0-9._~+\/=-]{8,8192}$/.test(secret.token)) throw new AppError('source_auth_required', 401);
+          privateToken = secret.token;
+        }
+      }
+      const response = await read(url.href, privateToken ? { authenticated: true, boundOrigin: origin, headers: { authorization: `Bearer ${privateToken}` } } : undefined);
       const finalUrl = response.url ? validateSourceUrl(response.url).href : url.href;
       if (new URL(finalUrl).origin !== origin) {
         return persist(connection, userId, { status: 'user_action_required', capabilities: [], errorCode: 'source_auth_required' });
       }
       const parsed = parseResponse(response);
-      if (adapter && !connection.adapterId && adapter.recipe?.format !== parsed.format) adapter = null;
-      if (parsed.format === 'html' && /(?:name=["']?moodle|moodle\.org|M\.cfg\s*=)/i.test(parsed.text)) {
+      if (adapter && (privateToken || !connection.adapterId) && adapter.recipe?.format !== parsed.format) adapter = null;
+      if (!privateToken && parsed.format === 'html' && /(?:name=["']?moodle|moodle\.org|M\.cfg\s*=)/i.test(parsed.text)) {
         const recipe = { version: 1, type: 'moodle' };
         const adapterId = `moodle:${digest(origin)}`;
         store.putAdapter({ id: adapterId, origin, version: 1, recipe, capabilities: [...MOODLE_CAPABILITIES] });
@@ -71,7 +79,7 @@ export function createSourceService({ store, request = safeRequest, proposeRecip
       }
       let recipe;
       if (adapter) recipe = validateRecipe(adapter.recipe);
-      else if (proposeRecipe) {
+      else if (proposeRecipe && !privateToken) {
         let timer;
         try {
           const candidate = await Promise.race([proposeRecipe(publicObservation(origin, parsed)), new Promise((_, reject) => {
@@ -83,13 +91,14 @@ export function createSourceService({ store, request = safeRequest, proposeRecip
       if (!recipe) recipe = inferPublicRecipe(parsed);
       if (!recipe && parsed.format === 'html') recipe = validateRecipe({ version: 1, format: 'html', path: '$source', kind: 'documents' });
       if (!recipe) throw new AppError('source_mapping_required', 400);
-      const normalized = normalizeRecipe(recipe, parsed, { connection, fetchedAt, url: finalUrl });
+      let normalized = normalizeRecipe(recipe, parsed, { connection, fetchedAt, url: finalUrl });
+      if (privateToken) normalized = redactSecrets(normalized, [privateToken]);
       if (!adapter && normalized.items?.length === 0) throw new AppError('source_mapping_required', 400);
       save(connection, userId, normalized, fetchedAt);
       // Activate only a deterministic recipe that successfully parsed observed data.
       const adapterId = `public:${digest(origin + JSON.stringify(recipe))}`;
-      if (!adapter) store.putAdapter({ id: adapterId, origin, version: 1, recipe, capabilities: [recipe.kind] });
-      return persist(connection, userId, { status: 'ready', capabilities: [recipe.kind], adapterId: adapter?.id ?? adapterId, counts: { [recipe.kind]: normalized.items?.length ?? normalized.documents.length } });
+      if (!adapter && !privateToken) store.putAdapter({ id: adapterId, origin, version: 1, recipe, capabilities: [recipe.kind] });
+      return persist(connection, userId, { status: 'ready', capabilities: [recipe.kind], ...((adapter || !privateToken) ? { adapterId: adapter?.id ?? adapterId } : {}), counts: { [recipe.kind]: normalized.items?.length ?? normalized.documents.length } });
     } catch (error) {
       if (error instanceof AppError && error.status === 404) throw error;
       const errorCode = error instanceof AppError ? error.code : 'source_unavailable';

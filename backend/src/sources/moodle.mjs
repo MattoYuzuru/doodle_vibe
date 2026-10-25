@@ -10,6 +10,7 @@ export async function syncMoodle({ store, request, userId, connection, fetchedAt
   const origin = new URL(connection.sourceUrl).origin;
   let secret = store.readSecret(userId, connection.id);
   if (!secret || secret.origin !== origin) throw new AppError('source_auth_required', 401);
+  const knownSecrets = [secret.password, secret.token].filter(value => typeof value === 'string' && value);
   let token = secret.token;
   if (!token && typeof secret.username === 'string' && typeof secret.password === 'string') {
     const body = new URLSearchParams({ username: secret.username, password: secret.password, service: secret.service || 'moodle_mobile_app' }).toString();
@@ -35,7 +36,8 @@ export async function syncMoodle({ store, request, userId, connection, fetchedAt
   if (!validId(site?.userid)) invalid();
   const rows = await call('core_enrol_get_users_courses', { userid: String(site.userid) });
   if (!Array.isArray(rows) || rows.length > 1000) invalid();
-  const clean = (value, limit) => sanitizeText(String(value).split(token).join('[redacted]'), limit);
+  knownSecrets.push(token);
+  const clean = (value, limit) => sanitizeText(knownSecrets.reduce((text, secret) => text.split(secret).join('[redacted]'), String(value)), limit);
   const seen = new Set();
   const courses = rows.map(row => {
     if (!validId(row.id) || typeof row.fullname !== 'string' || !row.fullname.trim() || seen.has(String(row.id))) invalid();

@@ -52,10 +52,13 @@ export async function resolvePublicAddress(hostname, resolver = lookup) {
 // Per-hop DNS validation and pinned socket lookup prevent DNS rebinding. No
 // global dispatcher, ambient proxy, cookies or credentials are inherited.
 export function createSafeRequest({ resolver = lookup, boundAuthEndpoint, clientFactory = (origin, options) => new Client(origin, options) } = {}) {
-  return async function request(value, { method = 'GET', headers = {}, body, authenticated = false } = {}) {
+  return async function request(value, { method = 'GET', headers = {}, body, authenticated = false, boundOrigin } = {}) {
     if (!['GET', 'POST'].includes(method) || (method === 'POST' && !authenticated)) throw fail('source_method_unsafe');
     let url = validateSourceUrl(value);
-    if (authenticated && !(boundAuthEndpoint ? url.href === boundAuthEndpoint : ['/login/token.php', '/webservice/rest/server.php'].includes(url.pathname))) throw fail('source_auth_endpoint_unsafe');
+    if (authenticated && method === 'GET') {
+      if (typeof boundOrigin !== 'string' || validateSourceUrl(boundOrigin).origin !== boundOrigin || url.origin !== boundOrigin ||
+          typeof headers.authorization !== 'string' || !/^Bearer [A-Za-z0-9._~+\/=-]{8,8192}$/.test(headers.authorization)) throw fail('source_auth_origin_unsafe');
+    } else if (authenticated && !(boundAuthEndpoint ? url.href === boundAuthEndpoint : ['/login/token.php', '/webservice/rest/server.php'].includes(url.pathname))) throw fail('source_auth_endpoint_unsafe');
     const signal = AbortSignal.timeout(TIMEOUT_MS);
     for (let hop = 0; hop <= 3; hop++) {
       let client;
@@ -73,6 +76,7 @@ export function createSafeRequest({ resolver = lookup, boundAuthEndpoint, client
         });
         const allowedHeaders = { accept: 'application/json,text/csv,text/html;q=0.9' };
         // Only executor-created form bodies carry credentials, never caller headers.
+        if (authenticated && method === 'GET') allowedHeaders.authorization = headers.authorization;
         if (method === 'POST') allowedHeaders['content-type'] = 'application/x-www-form-urlencoded';
         const response = await client.request({ path: url.pathname + url.search, method, headers: allowedHeaders, body, signal, maxRedirections: 0 });
         if ([301, 302, 303, 307, 308].includes(response.statusCode)) {

@@ -104,11 +104,15 @@ export function normalizeRecipe(recipe, parsed, { connection, fetchedAt, url }) 
   }
   let rows = parsed.format === 'csv' ? parsed.data.items : parsed.data;
   if (recipe.itemsPath) for (const key of recipe.itemsPath.split('.')) rows = rows?.[key];
-  if (parsed.format === 'json' && plain(parsed.data)) {
-    const envelope = parsed.data;
-    const partial = ['next', 'nextPage', 'next_page', 'nextPageToken', 'continuation', 'has_more', 'hasMore', 'partial', 'truncated', 'pagination'].some(key => !!envelope[key]);
-    const total = envelope.total ?? envelope.total_count ?? envelope.totalCount;
-    if (partial || envelope.complete === false || (typeof total === 'number' && total > (rows?.length ?? 0))) throw new AppError('source_mapping_required', 400);
+  if (parsed.format === 'json') {
+    let envelope = parsed.data;
+    const ancestors = [envelope];
+    for (const key of recipe.itemsPath?.split('.') ?? []) { envelope = envelope?.[key]; ancestors.push(envelope); }
+    for (const envelope of ancestors.filter(plain)) {
+      const partial = ['next', 'nextPage', 'next_page', 'nextPageToken', 'continuation', 'has_more', 'hasMore', 'partial', 'truncated', 'pagination'].some(key => !!envelope[key]);
+      const total = envelope.total ?? envelope.total_count ?? envelope.totalCount;
+      if (partial || envelope.complete === false || (typeof total === 'number' && total > (rows?.length ?? 0))) throw new AppError('source_mapping_required', 400);
+    }
   }
   if (!Array.isArray(rows) || rows.length > 1000) throw new AppError('source_mapping_required', 400);
   const seen = new Set();
@@ -169,4 +173,11 @@ export function inferPublicRecipe(parsed) {
     const key = pick(choices); if (key) fields[field] = key;
   }
   return validateRecipe({ version: 1, format: parsed.format, path: '$source', kind, ...(itemsPath ? { itemsPath } : {}), fields });
+}
+
+export function redactSecrets(value, secrets) {
+  if (typeof value === 'string') return secrets.reduce((text, secret) => text.split(secret).join('[redacted]'), value);
+  if (Array.isArray(value)) return value.map(item => redactSecrets(item, secrets));
+  if (plain(value)) return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactSecrets(child, secrets)]));
+  return value;
 }
