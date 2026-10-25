@@ -1,5 +1,8 @@
 # Backend deployment
 
+Telegram routing and its separate Cloudflare trust boundary:
+[production delivery](deployment-telegram.md), [ADR-0003](adr/0003-telegram-webhook-proxy.md).
+
 The new backend is deployed independently of the legacy application. Related
 requirements: NFR-001–012. This pipeline deploys only the tested `main` revision;
 it does not provide access to university accounts or prove live SSO support.
