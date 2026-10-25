@@ -134,6 +134,26 @@ export function createStore({ dbPath, masterKey, now = Date.now }) {
       return { saved: true };
     },
     readSecret(id, cid) { const c = connection(id, cid); const r = get('SELECT envelope FROM secrets WHERE connection_id=?', cid); return r ? decryptSecret(key, { userId: c.user_id, spaceId: c.space_id, connectionId: cid }, r.envelope) : null; },
+    withCurrentSecret(id, cid, expected, operation) {
+      return tx(()=>{
+        const current=api.readSecret(id,cid);
+        if(JSON.stringify(current)!==JSON.stringify(expected)) return false;
+        const result=operation();
+        if(result&&typeof result.then==='function') { Promise.resolve(result).catch(()=>{}); fail('ASYNC_SECRET_CALLBACK'); }
+        return true;
+      });
+    },
+    resetConnectionAuth(id,cid,value) {
+      return tx(()=>{
+        connection(id,cid);
+        // An explicit new login invalidates in-flight work and the former account's data.
+        run('DELETE FROM jobs WHERE connection_id=?',cid);
+        run('DELETE FROM snapshots WHERE connection_id=?',cid);
+        run('DELETE FROM documents WHERE connection_id=?',cid);
+        api.setSecret(id,cid,value);
+        return api.updateConnection(id,cid,{status:'pending',errorCode:null});
+      });
+    },
     putSnapshot(id, cid, { kind, items, fetchedAt, complete }) {
       const c = connection(id, cid); if (!['courses', 'schedule', 'deadlines'].includes(kind)) fail();
       if (complete !== true) return { saved: false };
@@ -185,6 +205,12 @@ export function createStore({ dbPath, masterKey, now = Date.now }) {
       });
     },
     getJob(id, jid) { const r = get('SELECT j.* FROM jobs j JOIN connections c ON c.id=j.connection_id AND c.user_id=j.user_id WHERE j.user_id=? AND j.id=?', String(id), jid); if (!r) fail('NOT_FOUND', 404); return jobRecord(r); },
+    // Internal scheduler only; never exposed by an HTTP/model tool.
+    listDueConnections({ olderThanMs = 900000, limit = 20 } = {}) {
+      if(!Number.isSafeInteger(olderThanMs) || olderThanMs<60000) fail(); limitValue(limit);
+      const cutoff=new Date(now()-olderThanMs).toISOString();
+      return all("SELECT c.* FROM connections c JOIN spaces s ON s.id=c.space_id AND s.user_id=c.user_id WHERE c.status IN ('ready','error') AND c.updated_at<=? AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.connection_id=c.id AND j.status IN ('queued','running')) ORDER BY c.updated_at,c.id LIMIT ?",cutoff,limit).map(connectionRecord);
+    },
     claimJob(workerId, { leaseMs = 60000 } = {}) {
       string(workerId, 200); if (!Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > 3_600_000) fail();
       return tx(() => {

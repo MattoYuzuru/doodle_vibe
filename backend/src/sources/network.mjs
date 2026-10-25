@@ -52,14 +52,14 @@ export async function resolvePublicAddress(hostname, resolver = lookup) {
 // Per-hop DNS validation and pinned socket lookup prevent DNS rebinding. No
 // global dispatcher, ambient proxy, cookies or credentials are inherited.
 export function createSafeRequest({ resolver = lookup, boundAuthEndpoint, clientFactory = (origin, options) => new Client(origin, options) } = {}) {
-  return async function request(value, { method = 'GET', headers = {}, body, authenticated = false, boundOrigin } = {}) {
+  return async function request(value, { method = 'GET', headers = {}, body, authenticated = false, boundOrigin, signal: callerSignal } = {}) {
     if (!['GET', 'POST'].includes(method) || (method === 'POST' && !authenticated)) throw fail('source_method_unsafe');
     let url = validateSourceUrl(value);
     if (authenticated && method === 'GET') {
       if (typeof boundOrigin !== 'string' || validateSourceUrl(boundOrigin).origin !== boundOrigin || url.origin !== boundOrigin ||
           typeof headers.authorization !== 'string' || !/^Bearer [A-Za-z0-9._~+\/=-]{8,8192}$/.test(headers.authorization)) throw fail('source_auth_origin_unsafe');
     } else if (authenticated && !(boundAuthEndpoint ? url.href === boundAuthEndpoint : ['/login/token.php', '/webservice/rest/server.php'].includes(url.pathname))) throw fail('source_auth_endpoint_unsafe');
-    const signal = AbortSignal.timeout(TIMEOUT_MS);
+    const signal = callerSignal ? AbortSignal.any([AbortSignal.timeout(TIMEOUT_MS),callerSignal]) : AbortSignal.timeout(TIMEOUT_MS);
     for (let hop = 0; hop <= 3; hop++) {
       let client;
       try {

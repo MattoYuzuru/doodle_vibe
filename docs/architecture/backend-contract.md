@@ -1,6 +1,7 @@
 # Backend implementation contract
 
-Implementation in progress. Node 24, native SQLite/FTS5, ESM. Related FR-001–014,
+Implementation exists with synthetic fixtures; frontend cutover and live SSO are pending.
+Node 24, native SQLite/FTS5, ESM. Related FR-001–014,
 NFR-001–012. New code lives in `backend/`; the legacy server remains available
 for rollback and is not imported into the new service.
 
@@ -30,6 +31,10 @@ Methods return public camelCase records without secret ciphertext:
   `deleteConnection(userId, connectionId)`
 - `setSecret(userId, connectionId, value)`, `readSecret(userId, connectionId)`
   are executor-only; no route exposes them. Secret includes bound `origin`.
+- `resetConnectionAuth(userId, connectionId, value)` invalidates old jobs and
+  former account snapshots/documents on explicit login.
+- `withCurrentSecret(userId, connectionId, expected, operation)` performs a
+  synchronous refresh write only if no newer login replaced the secret.
 - `putSnapshot(userId, connectionId, {kind, items, fetchedAt, complete})`,
   `listSnapshots(userId, spaceId, {kind} = {})`; failed/incomplete writes preserve
   the last complete snapshot. Kinds: courses, schedule, deadlines.
@@ -43,6 +48,11 @@ Methods return public camelCase records without secret ciphertext:
   `finishJob(jobId, claimToken, {status, errorCode, result})`.
   Claims return job with `claimToken`; statuses queued/running/succeeded/failed.
   Retries after expired leases are fenced; disconnect cancels jobs.
+- `withClaim(jobId, claimToken, operation)` combines fencing and synchronous writes
+  under BEGIN IMMEDIATE; nested operations use savepoints. `assertClaim` and
+  `renewClaim(jobId, claimToken, {leaseMs})` support expiry/heartbeat.
+- Internal `listDueConnections({olderThanMs,limit})` feeds periodic sync; it is
+  never exposed as an HTTP route or model tool.
 - `putAdapter({id, origin, version, recipe, capabilities})`, `getAdapter(id)`,
   `findAdapter(origin)`; shared metadata contains no personal observations.
 - `close()`.

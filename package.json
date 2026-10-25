@@ -5,15 +5,17 @@
   "type": "module",
   "engines": { "node": ">=24 <25" },
   "scripts": {
-    "bootstrap": "npm ci --prefix jarvis-app && npm ci --prefix jarvis-app/web",
+    "bootstrap": "npm ci --prefix jarvis-app && npm ci --prefix jarvis-app/web && npm ci --prefix backend",
     "check": "node scripts/check.mjs",
     "typecheck": "npm --prefix jarvis-app/web run typecheck",
     "build": "npm --prefix jarvis-app/web run build",
-    "test": "npm run test:unit && npm run test:integration",
+    "test": "npm run test:unit && npm run test:integration && npm run test:platform",
+    "test:platform": "node scripts/test-platform.mjs",
+    "test:deploy": "python3 -m unittest discover -s ops/deploy -p 'test_*.py'",
     "test:unit": "node scripts/test.mjs unit",
     "test:integration": "node scripts/test.mjs integration",
     "test:e2e": "playwright test && node scripts/check-e2e-report.mjs",
-    "ci": "npm run check && npm run typecheck && npm test && npm run build && npm run test:e2e"
+    "ci": "npm run check && npm run typecheck && npm test && npm run test:deploy && npm run build && npm run test:e2e"
   },
   "devDependencies": { "@playwright/test": "1.63.0" }
 }
