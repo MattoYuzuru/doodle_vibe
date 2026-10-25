@@ -67,7 +67,7 @@ export function createWebRetriever({ store, request = safeRequest, now = Date.no
     const keywords = words(question);
     const selected = connections.slice().sort((a, b) => score(`${b.label ?? ''} ${b.kind ?? ''}`, keywords) - score(`${a.label ?? ''} ${a.kind ?? ''}`, keywords) || a.id.localeCompare(b.id)).slice(0, 2);
     const result = { documents: [], errorCodes: [], fetched: 0, cached: 0, limitations: ['public_known_sources_only', 'no_browser_sso', 'cached_seed_links_refresh_after_15_minutes'] };
-    const errors = new Set(), seen = new Set(), returned = new Set();
+    const errors = new Set(), seen = new Set(), returned = new Set(), cacheKeys = new Set();
     if (!selected.length) errors.add('web_no_sources');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), BUDGET_MS);
@@ -75,7 +75,7 @@ export function createWebRetriever({ store, request = safeRequest, now = Date.no
     function addDocument(document, fromCache = false) {
       const key = `${document.connectionId}:${document.url}`;
       if (returned.has(key)) return;
-      returned.add(key); result.documents.push({ ...document, untrusted: true });
+      returned.add(key); if (fromCache) cacheKeys.add(key); result.documents.push({ ...document, untrusted: true });
       result[fromCache ? 'cached' : 'fetched']++;
     }
     async function readPage(connection, value) {
@@ -138,6 +138,21 @@ export function createWebRetriever({ store, request = safeRequest, now = Date.no
         }
       }
     } finally { clearTimeout(timer); }
+    // Another parallel page can remain in flight after a document was added.
+    // Reauthorize the complete output after all awaits so disconnect/deletion
+    // cannot return a document whose row was already removed by cascade.
+    store.getSpace(userId, spaceId);
+    result.documents = result.documents.filter(document => {
+      try {
+        const current = store.getConnection(userId, document.connectionId);
+        const expected = selected.find(connection => connection.id === document.connectionId);
+        if (!expected || current.spaceId !== spaceId || current.sourceUrl !== expected.sourceUrl) throw failure('web_source_changed');
+        pageUrl(document.url, new URL(current.sourceUrl).origin);
+        return true;
+      } catch { errors.add('web_source_changed'); return false; }
+    });
+    result.cached = result.documents.filter(document => cacheKeys.has(`${document.connectionId}:${document.url}`)).length;
+    result.fetched = result.documents.length - result.cached;
     result.errorCodes = [...errors].sort();
     return result;
   };

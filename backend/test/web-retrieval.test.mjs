@@ -97,3 +97,27 @@ test('absolute 15 second budget returns without late writes from stalled transpo
   const result = await pending; assert(result.errorCodes.includes('web_timeout')); assert.equal(result.fetched, 0);
   release(html('<title>Late</title>Late library')); await Promise.resolve(); assert.equal(f.documents.size, 0);
 });
+
+test('final output drops a fetched or cached document disconnected while another source is pending', async () => {
+  for (const fromCache of [false, true]) {
+    const f = fixture();
+    f.connections.push({ id: 'ca2', userId: 'alice', spaceId: 'a', sourceUrl: 'https://second-university.example/', kind: 'document' });
+    if (fromCache) f.documents.set('cached', { id: 'cached', connectionId: 'ca', userId: 'alice', spaceId: 'a', url: `${origin}/`, title: 'Library', text: 'Library existing', fetchedAt: new Date(at).toISOString() });
+    let releaseSecond, markReady;
+    const ready = new Promise(resolve => { markReady = resolve; });
+    const save = f.store.putDocument;
+    f.store.putDocument = (...args) => { const saved = save(...args); if (saved.connectionId === 'ca') markReady(); return saved; };
+    const pending = createWebRetriever({ store: f.store, request: async url => {
+      if (url === `${origin}/`) return html('<title>Library</title>Library first');
+      if (fromCache) markReady();
+      return new Promise(resolve => { releaseSecond = resolve; });
+    }, now: () => at })('alice', 'a', 'library');
+    await ready;
+    f.connections[0].deleted = true;
+    for (const [id, document] of f.documents) if (document.connectionId === 'ca') f.documents.delete(id);
+    releaseSecond(html('<title>Other</title>Other library'));
+    const result = await pending;
+    assert(!result.documents.some(document => document.connectionId === 'ca'));
+    assert.equal(result.documents.length, 1); assert.equal(result.fetched, 1); assert.equal(result.cached, 0); assert(result.errorCodes.includes('web_source_changed'));
+  }
+});
