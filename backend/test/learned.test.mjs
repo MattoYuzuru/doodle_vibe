@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from '../src/store.mjs';
-import { SEED_RECIPES } from '../src/sources/learned-seeds.mjs';
+import { SEED_RECIPES, SUPERSEDED_SEEDS } from '../src/sources/learned-seeds.mjs';
 import { validateLearnedRecipe, learnFromObservations, learnAndActivate, canaryLearnedRecipe, syncLearned, activateLearnedRecipe, findLearnedAdapter,
   rollbackLearnedRecipe, ensureSeedRecipe, learnedAdapterId, observationShapes, inspectSessionResponse, parseTemplate } from '../src/sources/learned.mjs';
 import { startServer, fixtureRequest, lmsHandler, observe, sessionOf, PEOPLE, ORIGIN, NOW } from './fixtures/session-sync/server.mjs';
@@ -140,6 +140,18 @@ test('revisions: newest wins, rollback is a new revision naming rollbackOf, old 
     const seeded = ensureSeedRecipe(store, 'https://edu.hse.ru', { now: NOW });
     assert.equal(seeded.recipe.revision, 1); assert.equal(ensureSeedRecipe(store, 'https://edu.hse.ru').adapter.id, seeded.adapter.id);
     assert.equal(ensureSeedRecipe(store, 'https://unknown.example'), null);
+    // a revision equal to an earlier seed follows the current seed once; a learned or rolled-back revision is kept
+    const HSE = 'https://edu.hse.ru'; const classification = recipe => recipe.endpoints[0].request.body[0].args.classification;
+    const legacy = createStore({ dbPath: ':memory:', masterKey: Buffer.alloc(32, 6) });
+    try {
+      activateLearnedRecipe(legacy, SUPERSEDED_SEEDS[HSE][0], { now: NOW });
+      const upgraded = ensureSeedRecipe(legacy, HSE, { now: NOW + 1 });
+      assert.deepEqual([upgraded.recipe.revision, classification(upgraded.recipe)], [2, 'inprogress']);
+      assert.equal(ensureSeedRecipe(legacy, HSE, { now: NOW + 2 }).adapter.id, upgraded.adapter.id);
+      const back = rollbackLearnedRecipe(legacy, HSE, { now: NOW + 3 });
+      assert.equal(classification(back.recipe), 'all');
+      assert.equal(ensureSeedRecipe(legacy, HSE, { now: NOW + 4 }).adapter.id, back.adapter.id, 'a rollback is not undone');
+    } finally { legacy.close(); }
   } finally { store.close(); }
 });
 

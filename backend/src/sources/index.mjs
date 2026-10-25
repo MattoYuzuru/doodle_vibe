@@ -1,5 +1,5 @@
 import { AppError } from '../errors.mjs';
-import { safeRequest, validateSourceUrl, TIMEOUT_MS } from './network.mjs';
+import { safeRequest, validateSourceUrl, TIMEOUT_MS, SESSION_TIMEOUT_MS } from './network.mjs';
 import { digest, validateRecipe, parseResponse, publicObservation, normalizeRecipe, inferPublicRecipe, redactSecrets } from './recipes.mjs';
 import { syncMoodle, MOODLE_CAPABILITIES } from './moodle.mjs';
 import { syncCalendar } from './ical.mjs';
@@ -23,13 +23,21 @@ export function createSourceService({ store, request = safeRequest, proposeRecip
   if (!locks.has(store)) locks.set(store, new Map());
   const active = locks.get(store);
   async function read(url, options) {
+    // A stored-session read is read-only by the recipe allowlist, so a timeout or a dropped connection is retried once.
+    if (!options?.session) return readOnce(url, options);
+    try { return await readOnce(url, options); } catch (error) {
+      if (!(error instanceof AppError) || !['source_timeout', 'source_unavailable'].includes(error.code)) throw error;
+      return readOnce(url, options);
+    }
+  }
+  async function readOnce(url, options) {
     // Fixtures bypass production sockets only. URL validation, bounded responses,
     // status handling, origin binding and all executor checks remain enabled.
     validateSourceUrl(url, { allowSecretQuery: options?.secretUrl || !!options?.session });
     let timer;
     try {
       const result = await Promise.race([request(url, options), new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new AppError('source_timeout', 504)), TIMEOUT_MS);
+        timer = setTimeout(() => reject(new AppError('source_timeout', 504)), options?.session ? SESSION_TIMEOUT_MS : TIMEOUT_MS);
       })]);
       if (result?.url) {
         const final = validateSourceUrl(result.url, { allowSecretQuery: options?.secretUrl || !!options?.session });
