@@ -8,7 +8,8 @@
 export type SourceKind = "lms" | "schedule" | "document" | "table" | "website";
 export type AuthField = "token" | "username" | "password" | "service" | "calendarUrl" | "identifier";
 export interface AuthMethod {
-  id: string; type: "token" | "password" | "calendar_url" | "identifier" | "oauth"; label: string; fields?: AuthField[];
+  // sso_password и remote_login идут не через /auth, а через сессию входа (/connections/:id/login, ADR-0005).
+  id: string; type: "token" | "password" | "calendar_url" | "identifier" | "oauth" | "sso_password" | "remote_login"; label: string; fields?: AuthField[];
   sourceType?: "moodle" | "ical" | "ruz"; note?: string; notes?: string[];
 }
 

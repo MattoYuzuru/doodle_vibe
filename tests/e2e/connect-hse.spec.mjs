@@ -10,6 +10,8 @@ const METHODS = {
     { id: "calendar_url", type: "calendar_url", label: "Ссылка экспорта календаря (iCal)", fields: ["calendarUrl"], sourceType: "moodle", note: "moodle_calendar_export", notes: ["sso_login_only"] },
     { id: "moodle_token", type: "token", label: "Токен Moodle", fields: ["token"], sourceType: "moodle", notes: ["sso_login_only"] },
     { id: "moodle_password", type: "password", label: "Логин и пароль Moodle", fields: ["username", "password"], sourceType: "moodle", note: "local_accounts_only", notes: ["sso_login_only"] },
+    { id: "sso_password", type: "sso_password", label: "Почта и пароль вуза (SSO)", fields: ["username", "password"], options: ["keepCalendar"] },
+    { id: "remote_login", type: "remote_login", label: "Войти в браузере вуза", fields: [] },
   ],
   "https://ruz.hse.ru": [
     { id: "ruz_identifier", type: "identifier", label: "Почта, ФИО или номер студента в РУЗ", fields: ["identifier"], sourceType: "ruz", notes: ["university_network_only"] },
@@ -18,7 +20,7 @@ const METHODS = {
 
 async function hseApi(page) {
   const origin = new URL(test.info().project.use.baseURL).origin;
-  const conns = new Map(), auth = [], added = [];
+  const conns = new Map(), auth = [], added = [], logins = [];
   let jobs = 0;
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
@@ -42,6 +44,24 @@ async function hseApi(page) {
     }
     let m = p.match(/^\/api\/v1\/jobs\/(.+)$/);
     if (m) return send({ job: { id: m[1], status: "succeeded", errorCode: null, attempts: 1 } });
+    // Сессия входа (ADR-0005): пароль SSO — сразу успех; удалённый браузер — ждёт человека.
+    m = p.match(/^\/api\/v1\/connections\/([^/]+)\/login$/);
+    if (m && conns.has(m[1]) && method === "POST") {
+      const body = route.request().postDataJSON(); logins.push(body);
+      const c = conns.get(m[1]).connection;
+      const login = { id: "L" + logins.length, connectionId: c.id, mode: body.mode, status: body.mode === "password" ? "succeeded" : "awaiting_user", errorCode: null,
+        createdAt: iso(), expiresAt: iso(), idleExpiresAt: null, viewport: { width: 390, height: 700 }, url: "https://saml.hse.ru/realms/hse/protocol/openid-connect/auth", mfa: null };
+      if (body.mode === "password") Object.assign(c, { status: "ready", errorCode: null });
+      conns.get(m[1]).login = login;
+      return send({ login }, 201);
+    }
+    m = p.match(/^\/api\/v1\/login\/([^/]+)(\/ticket)?$/);
+    if (m) {
+      const entry = [...conns.values()].find((e) => e.login?.id === m[1]);
+      if (!entry) return send({ error: { code: "NOT_FOUND", requestId: "r" } }, 404);
+      if (m[2]) return send({ error: { code: "LOGIN_UNAVAILABLE", requestId: "r" } }, 409);
+      return send({ login: entry.login });
+    }
     m = p.match(/^\/api\/v1\/connections\/([^/]+)(\/auth)?$/);
     if (m && conns.has(m[1])) {
       const c = conns.get(m[1]).connection, o = new URL(c.sourceUrl).origin;
@@ -54,7 +74,7 @@ async function hseApi(page) {
     if (p === "/api/cloud") return send(null);
     return send({ error: { code: "NOT_FOUND", requestId: "r" } }, 404);
   });
-  return { auth, added };
+  return { auth, added, logins };
 }
 
 async function openConnect(page) {
@@ -115,4 +135,32 @@ test("RUZ: identifier form, and outside the HSE network the reason is explained"
   await expect(page.getByRole("alert")).toContainText("только из сети вуза");
   expect(api.auth).toEqual([{ origin: "https://ruz.hse.ru", identifier: "student@edu.hse.ru" }]);
   await expect(page.getByRole("region", { name: "Подключённые сайты" })).toContainText("Только из сети вуза");
+});
+
+test("Smart LMS: HSE email and password go to a login session, never to the Moodle /auth form", async ({ page }) => {
+  const api = await hseApi(page);
+  await openConnect(page);
+  await page.locator('[data-preset="edu.hse.ru"]').click();
+  const form = page.getByRole("form", { name: "Вход" });
+  await form.getByRole("button", { name: "Почта и пароль вуза (SSO)" }).click();
+  await expect(form).toHaveAttribute("data-auth-method", "sso_password");
+  await form.getByLabel("Логин").fill("student@edu.hse.example");
+  await form.getByLabel("Пароль").fill("synthetic-password");
+  await form.getByRole("button", { name: "Подключить" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "подключён" })).toBeVisible();
+  expect(api.logins).toEqual([{ mode: "password", username: "student@edu.hse.example", password: "synthetic-password" }]);
+  expect(api.auth).toEqual([]);
+});
+
+test("Smart LMS: the university browser login opens the remote browser instead of posting an empty form", async ({ page }) => {
+  const api = await hseApi(page);
+  await openConnect(page);
+  await page.locator('[data-preset="edu.hse.ru"]').click();
+  const form = page.getByRole("form", { name: "Вход" });
+  await form.getByRole("button", { name: "Войти в браузере вуза" }).click();
+  await form.getByRole("button", { name: "Открыть браузер для входа" }).click();
+  await expect(page.locator("[data-connect-login] [data-login-status=awaiting_user]")).toBeVisible();
+  await expect(page.getByText("saml.hse.ru/realms/hse/protocol/openid-connect/auth")).toBeVisible();
+  expect(api.logins).toEqual([{ mode: "interactive" }]);
+  expect(api.auth).toEqual([]);
 });
