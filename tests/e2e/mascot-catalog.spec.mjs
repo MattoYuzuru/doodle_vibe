@@ -37,11 +37,13 @@ test("error and overdue are labelled without fire; the deadline stays as a badge
 
 test("completion reacts once and can be replayed only explicitly", async ({ page }) => {
   await open(page);
-  const status = card(page, "completed").locator("[data-status]");
-  await expect(status).toHaveAttribute("data-status", "completed");
-  await expect(status).toHaveAttribute("data-status", "ready", { timeout: 5000 });
+  // Реакция живёт 1,5 с: на медленной машине страница может нарисоваться позже. Проверяем не момент, а историю
+  // статусов карточки: сначала «completed», потом «ready» — и больше ничего.
+  const seen = card(page, "completed").locator("[data-seen]");
+  await expect(seen).toHaveAttribute("data-seen", "completed ready", { timeout: 10_000 });
   await page.getByRole("button", { name: "Проиграть реакции заново" }).click();
-  await expect(card(page, "completed").locator("[data-status]")).toHaveAttribute("data-status", "completed");
+  await expect(card(page, "completed").locator("[data-seen]")).toHaveAttribute("data-seen", /^completed/);
+  await expect(card(page, "completed").locator("[data-seen]")).toHaveAttribute("data-seen", "completed ready", { timeout: 10_000 });
 });
 
 test("reduced motion keeps a static fire sign and a still loading track", async ({ page }) => {

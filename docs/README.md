@@ -8,9 +8,12 @@
 | [Требования FR/NFR](product/requirements.md) | Область MVP и проверяемый результат продуктовой задачи |
 | [Backend API v1](backend-api.md) | Маршруты, авторизация, подключение, ограничения и передача frontend |
 | [Вузы: ВШЭ, МИСИС, любой вуз](universities.md) | Подтверждённые способы входа, пресеты, универсальное определение источника, живая проверка владельцем |
+| [ЦУ и ВШЭ: вход и read-only API](research/cu-hse-auth-endpoints.md) | Исследование от 2026-10-25: IdP, куда ложится сессия, эндпоинты, черновики пресетов входа и рецептов |
 | [Деплой](deployment.md) | mnema, main после CI, секреты, health и откат |
 | [Telegram delivery](deployment-telegram.md) | Отдельный webhook-host, Cloudflare Strict, проверка доставки и откат |
 | [ADR-0002](adr/0002-isolated-sqlite-backend.md) | SQLite, ограниченные исполнители и отдельный сервис |
+| [ADR-0005](adr/0005-remote-browser-login-and-learned-recipes.md) | Вход через удалённый браузер, зашифрованная сессия, выученные рецепты |
+| [Контракт login-сессий](architecture/auth-sessions-contract.md) | Жизненный цикл, API/WebSocket, формат сессии и рецепта v2, угрозы, владельцы файлов A/B/C |
 | [ADR-0004](adr/0004-universal-source-types.md) | Пресеты вузов, типизированные адаптеры, формы входа calendarUrl/identifier |
 | [Задачи по дизайну](design/README.md) | Вход для вопроса «Какие у нас задачи по дизайну?», зоны A/B и порядок старта |
 | [Дизайн-требования](design/requirements.md) | Токены, компоненты, маскот, события, движение и доступность |

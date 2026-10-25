@@ -2,6 +2,7 @@ import { BookOpen, ExternalLink, Flag, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { MascotCard, MascotLoader } from "../../components/assistant/MascotCard";
 import { characterFor, connectionsOf, freshness } from "../../lib/space-adapter";
+import { sourceProblem } from "../../lib/sources";
 import { DeadlineRow } from "../../components/DeadlineRow";
 import { HeroDeadlineCard } from "../../components/HeroDeadlineCard";
 import { LessonRow } from "../../components/LessonRow";
@@ -100,7 +101,7 @@ function SourcesTile() {
               <span className="block truncate text-m font-semibold">{c.label || new URL(c.sourceUrl).host}</span>
               <span className="block truncate text-s text-hint">{new URL(c.sourceUrl).host}</span>
             </span>
-            <span className={`shrink-0 rounded-full px-2 py-0.5 text-s font-bold ${STATUS_LABEL[c.status][1]}`}>{STATUS_LABEL[c.status][0]}</span>
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-s font-bold ${STATUS_LABEL[c.status][1]}`}>{sourceProblem(c.errorCode) ?? STATUS_LABEL[c.status][0]}</span>
           </li>
         ))}
       </ul>

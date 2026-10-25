@@ -43,8 +43,31 @@ connection status, старые данные не исчезают. UI пока�
 `store/platform.ts` (вузы, активный вуз, данные только активного; при переключении сразу
 сбрасываются), `lib/space-adapter.ts` (SourceItem → дедлайны, пары, курсы прежних экранов и
 контекст маскота) и `screens/space/` (Главная, Дедлайны, План, Курсы и «Подключить учёбу»).
-Маскот — Варя для ВШЭ, Дуся для остальных. Со старым сервером МИСИС (без `platformApi`)
+Маскот — Варя для ВШЭ, Дуся для остальных. «Подключить учёбу» предлагает готовые сайты вузов
+(`lib/sources.ts`: Smart LMS и РУЗ для ВШЭ, LMS МИСИС; список сверяется с `presets.mjs` тестом) и
+строит форму входа по `authMethods` подключения в порядке сервера: ссылка календаря, идентификатор
+РУЗ, токен, логин и пароль, OAuth. Коды `note`/`notes`/`errorCode` переводятся в слова там же. Со старым сервером МИСИС (без `platformApi`)
 работают прежние экраны. Данные вузов не пишутся в облачную копию прежнего хранилища.
+
+## Planned: login-сессии, удалённый браузер и выученные рецепты
+
+Статус **planned**: маршруты ниже не реализованы (в коде только заглушки `backend/src/login`), контракт — в
+[auth-sessions-contract.md](architecture/auth-sessions-contract.md), решение — [ADR-0005](adr/0005-remote-browser-login-and-learned-recipes.md),
+типы — `LoginSession`, `StoredSession`, `LearnedRecipe` в [contracts](../backend/contracts.d.ts). Вход любым способом (SSO, MFA, CAPTCHA) выполняет человек в
+удалённом браузере; пароль не хранится, хранится только зашифрованная сессия.
+
+| Метод и маршрут | Запрос / результат (planned) |
+|---|---|
+| POST `/api/v1/connections/:id/login` | `{mode:'interactive'}` либо `{mode:'password',username,password,keepCalendar?}` → 201 `{login}` |
+| GET `/api/v1/login/:id` | `{login}` — состояние, TTL, `mfa:{kind,attemptsLeft}` |
+| POST `/api/v1/login/:id/mfa` · `/handoff` · `/cancel` | `{code}` / `{}` / `{}` → `{login}` |
+| POST `/api/v1/login/:id/ticket` | `{ticket,expiresAt,path}` — одноразовый тикет WebSocket (30 с) |
+| GET `/api/v1/login/:id/stream?ticket=…` | WebSocket: JPEG-кадры сервер→клиент, мышь/клавиатура клиент→сервер |
+| GET `/api/v1/connections/:id` | дополнительно `login` (активная сессия или null); `authMethods` включает `remote_login` и `sso_password`, когда на сервере есть Chromium |
+
+Ошибки login-маршрутов: `LOGIN_UNAVAILABLE` 409, `LOGIN_COOLDOWN` 429, `LOGIN_BUSY` 429, `LOGIN_NOT_WAITING_MFA` 409.
+Коды источников: `source_session_expired`, `source_login_failed`, `source_bot_protection`, `source_login_unrecognized`, `source_login_form_ambiguous`, `mfa_failed`, `mfa_expired`, `login_credentials_lost`.
+Выученный рецепт (`recipe.version = 2`) — адаптер общий на origin без личных данных; sync по нему использует токены конкретного пользователя.
 
 ## Подключение
 
