@@ -55,11 +55,10 @@ Smoke запускает Chromium с включённым OS-sandbox (без `--
 | `npm run test:web` | Unit-тесты чистых модулей Mini App (логика маскота) в Node с фиксированными часами |
 | `npm run test:integration` | Изолированные проверки модулей с локальными поддельными сервисами |
 | `npm run test:platform` | SQLite, HTTP, auth, источники и retrieval на синтетических данных |
-| `npm run test:deploy` | Python-фикстуры release/backup/rollback без SSH |
 | `npm run test:e2e` | Браузерные smoke-сценарии собранного UI с синтетическим API |
 | `npm run test:chromium` | Smoke рантайма Chromium для backend: sandbox, рендер `data:`-страницы, CDP screencast |
 | `npm test` | Unit, web unit, integration и platform; не включает browser smoke и сборку |
-| `npm run ci` | Check, typecheck, test, deploy, build, browser smoke и Chromium smoke последовательно |
+| `npm run ci` | Check, typecheck, test, build, browser smoke и Chromium smoke последовательно |
 
 После изменения зависимостей обновляй соответствующий lockfile. Наличие
 `node_modules` с чужого компьютера не заменяет установку по lockfile.

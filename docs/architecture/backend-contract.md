@@ -8,7 +8,7 @@ for rollback and is not imported into the new service.
 ## Ownership and wire format
 
 Core owns store/auth/crypto; sources owns outbound reads/discovery/adapters;
-deployment owns deployment scripts, workflow and runbook; integration owns HTTP,
+integration owns HTTP,
 chat, worker, root CI and public API documentation. No shared browser or secret
 state. Every private operation accepts the verified Telegram user ID (string).
 

@@ -1,7 +1,7 @@
 # ADR-0003: отдельный Cloudflare-host для Telegram webhook
 
-Статус: Accepted — владелец разрешил настройку через свою панель Cloudflare
-2026-10-25. Процедура и приёмка: [Telegram runbook](../deployment-telegram.md).
+Статус: Superseded — деплой на mnema и webhook-host удалены по решению владельца
+2026-10-26. Ранее: Accepted 2026-10-25.
 
 На mnema прямой обмен с Telegram получил сетевые таймауты. HTTPS приложения
 доступен из другого соединения, firewall разрешает 443, исходящие пакеты покидают
