@@ -12,9 +12,8 @@ platform fixtures для пространств, discovery, auth, jobs и retrie
 | Unit | `npm run test:unit`, `npm run test:web` | Выбранные функции преобразования и локальные правила на синтетических входах; `test:web` — чистые TS-модули Mini App | Связку сервисов и живые данные |
 | Integration | `npm run test:integration` | Контракты выбранных модулей, файлы состояния, доступ и отказ поддельных сервисов | Живой SSO, реальное расписание и доставку Telegram |
 | Platform | `npm run test:platform` | SQLite, ACL 2×2, crypto, Telegram HMAC, jobs/fencing/restart, SSRF, OAuth/refresh и retrieval/chat | Живые вузовские аккаунты и ответы настоящей модели |
-| Deploy | `npm run test:deploy` | Release, health gate, backup и rollback в фикстурах | Работоспособность реального сервера |
 | Browser smoke | `npm run build`, `npm run test:e2e` | Запуск собранного UI и выбранные действия пользователя с fixture API | Полный production E2E или новую многовузовскую архитектуру |
-| Chromium runtime | `npm run test:chromium` | Запуск Chromium с sandbox, рендер `data:`-страницы и кадр CDP screencast без внешней сети; тот же скрипт после деплоя на mnema | Вход в вуз, SSO/MFA и стабильность долгих сессий |
+| Chromium runtime | `npm run test:chromium` | Запуск Chromium с sandbox, рендер `data:`-страницы и кадр CDP screencast без внешней сети | Вход в вуз, SSO/MFA и стабильность долгих сессий |
 | Live acceptance | Отдельный согласованный сценарий | Конкретный разрешённый аккаунт/источник в зафиксированное время | Все роли, факультеты, вузы и бессрочную работоспособность |
 
 `npm run ci` последовательно запускает обязательный автоматический набор.
@@ -115,8 +114,6 @@ GitHub Actions использует синтетические данные и �
 Telegram- или LLM-секретов. Pull request не получает production-доступа, не
 отправляет сообщения, не начинает тесты в LMS и не публикует приложение.
 Запуск модели и сетевой поиск не нужны для детерминированной проверки её tools.
-Отдельный [Deploy](../.github/workflows/deploy.yml) получает ограниченный доступ
-после успешного push-CI main и проверяет точный SHA; PR его не запускает.
 
 Фикстуры не содержат реальные имена, оценки, cookies, пароли, CSRF или подписанные
 ссылки. Захват реального ответа сначала очищается и сокращается; пользовательское

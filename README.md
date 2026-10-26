@@ -8,7 +8,6 @@ Telegram Mini App для учебных данных и помощника ст�
 Новый backend в `backend/` реализует пространства, SQLite, шифрованный доступ,
 discovery, фоновые sync и retrieval-чат. Fixture-проверки не подтверждают живой
 SSO; перевод frontend на v1 ещё нужен. Контракт: [Backend API](docs/backend-api.md).
-Сервер и CI: [deployment](docs/deployment.md).
 Первый приоритет — **ВШЭ и МИСИС**. ЦУ — возможный следующий вуз.
 
 ## Начало работы

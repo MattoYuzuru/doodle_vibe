@@ -29,7 +29,6 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - run: npm ci --prefix backend --ignore-scripts
       - run: npm run test:platform
-      - run: npm run test:deploy
       - name: Save platform fixture results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
